@@ -1,0 +1,157 @@
+==================================================================
+BUG: KASAN: use-after-free in __lock_acquire+0x3ab9/0x5660 kernel/locking/lockdep.c:4923
+Read of size 8 at addr ffff88807846c4a8 by task syz-executor329/3909
+
+CPU: 0 PID: 3909 Comm: syz-executor329 Not tainted 5.19.0-rc1-syzkaller-00003-ge71e60cd74df #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+Call Trace:
+ <TASK>
+ __dump_stack lib/dump_stack.c:88 [inline]
+ dump_stack_lvl+0xcd/0x134 lib/dump_stack.c:106
+ print_address_description.constprop.0.cold+0xeb/0x495 mm/kasan/report.c:313
+ print_report mm/kasan/report.c:429 [inline]
+ kasan_report.cold+0xf4/0x1c6 mm/kasan/report.c:491
+ __lock_acquire+0x3ab9/0x5660 kernel/locking/lockdep.c:4923
+ lock_acquire kernel/locking/lockdep.c:5665 [inline]
+ lock_acquire+0x1ab/0x570 kernel/locking/lockdep.c:5630
+ __raw_spin_lock_irq include/linux/spinlock_api_smp.h:119 [inline]
+ _raw_spin_lock_irq+0x32/0x50 kernel/locking/spinlock.c:170
+ spin_lock_irq include/linux/spinlock.h:374 [inline]
+ post_one_notification.isra.0+0x59/0x990 kernel/watch_queue.c:86
+ __post_watch_notification kernel/watch_queue.c:206 [inline]
+ __post_watch_notification+0x561/0x840 kernel/watch_queue.c:176
+ post_watch_notification include/linux/watch_queue.h:109 [inline]
+ notify_key security/keys/internal.h:199 [inline]
+ __key_update security/keys/key.c:775 [inline]
+ key_create_or_update+0xdbf/0xde0 security/keys/key.c:979
+ __do_sys_add_key+0x215/0x430 security/keys/keyctl.c:134
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x35/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x46/0xb0
+RIP: 0033:0x7f9ccf4c69f9
+Code: 28 00 00 00 75 05 48 83 c4 28 c3 e8 11 15 00 00 90 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b8 ff ff ff f7 d8 64 89 01 48
+RSP: 002b:00007f9ccf4782f8 EFLAGS: 00000246 ORIG_RAX: 00000000000000f8
+RAX: ffffffffffffffda RBX: 00007f9ccf54e408 RCX: 00007f9ccf4c69f9
+RDX: 00000000200000c0 RSI: 0000000020000080 RDI: 0000000020000040
+RBP: 0000000000000000 R08: 00000000fffffffc R09: 0000000000000000
+R10: 0000000000000048 R11: 0000000000000246 R12: 00007f9ccf54e400
+R13: 00007f9ccf54e40c R14: 00007f9ccf51c064 R15: 3a74707972637366
+ </TASK>
+
+Allocated by task 3906:
+ kasan_save_stack+0x1e/0x40 mm/kasan/common.c:38
+ kasan_set_track mm/kasan/common.c:45 [inline]
+ set_alloc_info mm/kasan/common.c:436 [inline]
+ ____kasan_kmalloc mm/kasan/common.c:515 [inline]
+ ____kasan_kmalloc mm/kasan/common.c:474 [inline]
+ __kasan_kmalloc+0xa9/0xd0 mm/kasan/common.c:524
+ kmalloc include/linux/slab.h:600 [inline]
+ kzalloc include/linux/slab.h:733 [inline]
+ alloc_pipe_info+0x105/0x590 fs/pipe.c:790
+ get_pipe_inode fs/pipe.c:881 [inline]
+ create_pipe_files+0x8d/0x880 fs/pipe.c:913
+ __do_pipe_flags fs/pipe.c:962 [inline]
+ do_pipe2+0x96/0x1b0 fs/pipe.c:1010
+ __do_sys_pipe2 fs/pipe.c:1028 [inline]
+ __se_sys_pipe2 fs/pipe.c:1026 [inline]
+ __x64_sys_pipe2+0x50/0x70 fs/pipe.c:1026
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x35/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x46/0xb0
+
+Freed by task 3907:
+ kasan_save_stack+0x1e/0x40 mm/kasan/common.c:38
+ kasan_set_track+0x21/0x30 mm/kasan/common.c:45
+ kasan_set_free_info+0x20/0x30 mm/kasan/generic.c:370
+ ____kasan_slab_free mm/kasan/common.c:366 [inline]
+ ____kasan_slab_free+0x166/0x1a0 mm/kasan/common.c:328
+ kasan_slab_free include/linux/kasan.h:200 [inline]
+ slab_free_hook mm/slub.c:1727 [inline]
+ slab_free_freelist_hook+0x8b/0x1c0 mm/slub.c:1753
+ slab_free mm/slub.c:3507 [inline]
+ kfree+0xd6/0x4d0 mm/slub.c:4555
+ put_pipe_info fs/pipe.c:711 [inline]
+ pipe_release+0x2b6/0x310 fs/pipe.c:734
+ __fput+0x277/0x9d0 fs/file_table.c:317
+ task_work_run+0xdd/0x1a0 kernel/task_work.c:177
+ ptrace_notify+0x114/0x140 kernel/signal.c:2353
+ ptrace_report_syscall include/linux/ptrace.h:420 [inline]
+ ptrace_report_syscall_exit include/linux/ptrace.h:482 [inline]
+ syscall_exit_work kernel/entry/common.c:249 [inline]
+ syscall_exit_to_user_mode_prepare+0xdb/0x230 kernel/entry/common.c:276
+ __syscall_exit_to_user_mode_work kernel/entry/common.c:281 [inline]
+ syscall_exit_to_user_mode+0x9/0x50 kernel/entry/common.c:294
+ do_syscall_64+0x42/0xb0 arch/x86/entry/common.c:86
+ entry_SYSCALL_64_after_hwframe+0x46/0xb0
+
+The buggy address belongs to the object at ffff88807846c400
+ which belongs to the cache kmalloc-cg-512 of size 512
+The buggy address is located 168 bytes inside of
+ 512-byte region [ffff88807846c400, ffff88807846c600)
+
+The buggy address belongs to the physical page:
+page:ffffea0001e11b00 refcount:1 mapcount:0 mapping:0000000000000000 index:0x0 pfn:0x7846c
+head:ffffea0001e11b00 order:2 compound_mapcount:0 compound_pincount:0
+flags: 0xfff00000010200(slab|head|node=0|zone=1|lastcpupid=0x7ff)
+raw: 00fff00000010200 ffffea0001f25a00 dead000000000002 ffff888011842dc0
+raw: 0000000000000000 0000000080100010 00000001ffffffff 0000000000000000
+page dumped because: kasan: bad access detected
+page_owner tracks the page as allocated
+page last allocated via order 2, migratetype Unmovable, gfp_mask 0xd20c0(__GFP_IO|__GFP_FS|__GFP_NOWARN|__GFP_NORETRY|__GFP_COMP|__GFP_NOMEMALLOC), pid 3189, tgid 3189 (dhcpcd), ts 22292505782, free_ts 22224338092
+ prep_new_page mm/page_alloc.c:2456 [inline]
+ get_page_from_freelist+0x1290/0x3b70 mm/page_alloc.c:4198
+ __alloc_pages+0x1c7/0x510 mm/page_alloc.c:5426
+ alloc_pages+0x1aa/0x310 mm/mempolicy.c:2272
+ alloc_slab_page mm/slub.c:1797 [inline]
+ allocate_slab+0x26c/0x3c0 mm/slub.c:1942
+ new_slab mm/slub.c:2002 [inline]
+ ___slab_alloc+0x985/0xd90 mm/slub.c:3002
+ __slab_alloc.constprop.0+0x4d/0xa0 mm/slub.c:3089
+ slab_alloc_node mm/slub.c:3180 [inline]
+ slab_alloc mm/slub.c:3222 [inline]
+ kmem_cache_alloc_trace+0x310/0x3f0 mm/slub.c:3253
+ kmalloc include/linux/slab.h:600 [inline]
+ kzalloc include/linux/slab.h:733 [inline]
+ ipv6_add_addr+0x352/0x1f00 net/ipv6/addrconf.c:1099
+ inet6_addr_add+0x412/0xae0 net/ipv6/addrconf.c:2973
+ inet6_rtm_newaddr+0xfa4/0x1a60 net/ipv6/addrconf.c:4923
+ rtnetlink_rcv_msg+0x43a/0xc90 net/core/rtnetlink.c:6089
+ netlink_rcv_skb+0x153/0x420 net/netlink/af_netlink.c:2501
+ netlink_unicast_kernel net/netlink/af_netlink.c:1319 [inline]
+ netlink_unicast+0x543/0x7f0 net/netlink/af_netlink.c:1345
+ netlink_sendmsg+0x917/0xe10 net/netlink/af_netlink.c:1921
+ sock_sendmsg_nosec net/socket.c:714 [inline]
+ sock_sendmsg+0xcf/0x120 net/socket.c:734
+ ____sys_sendmsg+0x6eb/0x810 net/socket.c:2492
+page last free stack trace:
+ reset_page_owner include/linux/page_owner.h:24 [inline]
+ free_pages_prepare mm/page_alloc.c:1371 [inline]
+ free_pcp_prepare+0x549/0xd20 mm/page_alloc.c:1421
+ free_unref_page_prepare mm/page_alloc.c:3343 [inline]
+ free_unref_page+0x19/0x6a0 mm/page_alloc.c:3438
+ qlink_free mm/kasan/quarantine.c:168 [inline]
+ qlist_free_all+0x6a/0x170 mm/kasan/quarantine.c:187
+ kasan_quarantine_reduce+0x180/0x200 mm/kasan/quarantine.c:294
+ __kasan_slab_alloc+0xa2/0xc0 mm/kasan/common.c:446
+ kasan_slab_alloc include/linux/kasan.h:224 [inline]
+ slab_post_alloc_hook mm/slab.h:750 [inline]
+ slab_alloc_node mm/slub.c:3214 [inline]
+ slab_alloc mm/slub.c:3222 [inline]
+ __kmem_cache_alloc_lru mm/slub.c:3229 [inline]
+ kmem_cache_alloc+0x204/0x3b0 mm/slub.c:3239
+ getname_flags.part.0+0x50/0x4f0 fs/namei.c:139
+ getname_flags+0x9a/0xe0 include/linux/audit.h:323
+ vfs_fstatat+0x73/0xb0 fs/stat.c:254
+ __do_sys_newfstatat+0x91/0x110 fs/stat.c:425
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x35/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x46/0xb0
+
+Memory state around the buggy address:
+ ffff88807846c380: fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+ ffff88807846c400: fa fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+>ffff88807846c480: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+                                  ^
+ ffff88807846c500: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+ ffff88807846c580: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+==================================================================

@@ -1,0 +1,51 @@
+------------[ cut here ]------------
+WARNING: CPU: 1 PID: 8400 at mm/page_alloc.c:5365 __alloc_pages+0x588/0x5f0 mm/page_alloc.c:5412
+Modules linked in:
+CPU: 1 PID: 8400 Comm: syz-executor916 Not tainted 5.14.0-syzkaller #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+RIP: 0010:__alloc_pages+0x588/0x5f0 mm/page_alloc.c:5412
+Code: 00 48 ba 00 00 00 00 00 fc ff df e9 5e fd ff ff 89 f9 80 e1 07 80 c1 03 38 c1 0f 8c 6d fd ff ff e8 8d 62 0a 00 e9 63 fd ff ff <0f> 0b 45 31 e4 e9 7a fd ff ff 48 8d 4c 24 50 80 e1 07 80 c1 03 38
+RSP: 0018:ffffc90000eef1a0 EFLAGS: 00010246
+RAX: dffffc0000000000 RBX: 0000000000000015 RCX: 0000000000000000
+RDX: 0000000000000028 RSI: 0000000000000000 RDI: ffffc90000eef228
+RBP: ffffc90000eef2b0 R08: dffffc0000000000 R09: ffffc90000eef200
+R10: fffff520001dde45 R11: 0000000000000000 R12: 0000000000040dc0
+R13: ffffc90000eef200 R14: 1ffff920001dde3c R15: 1ffff920001dde38
+FS:  0000000000a29300(0000) GS:ffff8880b9c00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: 00007faba68276c0 CR3: 0000000021292000 CR4: 00000000001506f0
+DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400
+Call Trace:
+ kmalloc_order+0x41/0x170 mm/slab_common.c:955
+ kmalloc_order_trace+0x15/0x70 mm/slab_common.c:971
+ kmalloc_large include/linux/slab.h:520 [inline]
+ __kmalloc+0x292/0x390 mm/slub.c:4104
+ kmalloc_array include/linux/slab.h:631 [inline]
+ kcalloc+0x2b/0x40 include/linux/slab.h:660
+ netlbl_cipsov4_add_std net/netlabel/netlabel_cipso_v4.c:188 [inline]
+ netlbl_cipsov4_add+0x1630/0x31a0 net/netlabel/netlabel_cipso_v4.c:416
+ genl_family_rcv_msg_doit net/netlink/genetlink.c:739 [inline]
+ genl_family_rcv_msg net/netlink/genetlink.c:783 [inline]
+ genl_rcv_msg+0xfb4/0x13c0 net/netlink/genetlink.c:800
+ netlink_rcv_skb+0x1f0/0x460 net/netlink/af_netlink.c:2504
+ genl_rcv+0x24/0x40 net/netlink/genetlink.c:811
+ netlink_unicast_kernel net/netlink/af_netlink.c:1314 [inline]
+ netlink_unicast+0x7de/0x9b0 net/netlink/af_netlink.c:1340
+ netlink_sendmsg+0x9e7/0xe00 net/netlink/af_netlink.c:1929
+ sock_sendmsg_nosec net/socket.c:703 [inline]
+ sock_sendmsg net/socket.c:723 [inline]
+ ____sys_sendmsg+0x5a2/0x900 net/socket.c:2395
+ ___sys_sendmsg net/socket.c:2449 [inline]
+ __sys_sendmsg+0x319/0x400 net/socket.c:2478
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x3d/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x44/0xae
+RIP: 0033:0x43fd49
+Code: 28 c3 e8 5a 14 00 00 66 2e 0f 1f 84 00 00 00 00 00 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 c0 ff ff ff f7 d8 64 89 01 48
+RSP: 002b:00007ffc90b0ad98 EFLAGS: 00000246 ORIG_RAX: 000000000000002e
+RAX: ffffffffffffffda RBX: 00000000004004a0 RCX: 000000000043fd49
+RDX: 0000000000004904 RSI: 0000000020000140 RDI: 0000000000000004
+RBP: 00000000004037b0 R08: 0000000000000005 R09: 00000000004004a0
+R10: 0000000000000003 R11: 0000000000000246 R12: 0000000000403840
+R13: 0000000000000000 R14: 00000000004ad018 R15: 00000000004004a0

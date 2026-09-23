@@ -1,0 +1,167 @@
+==================================================================
+BUG: KASAN: use-after-free in rxrpc_local_cmp_key net/rxrpc/local_object.c:53 [inline]
+BUG: KASAN: use-after-free in rxrpc_lookup_local+0xdcf/0xfb0 net/rxrpc/local_object.c:224
+Read of size 2 at addr ffff88807df55a1c by task syz-executor194/5471
+
+CPU: 0 PID: 5471 Comm: syz-executor194 Not tainted 6.1.0-syzkaller-13872-gb6bb9676f216 #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 10/26/2022
+Call Trace:
+ <TASK>
+ __dump_stack lib/dump_stack.c:88 [inline]
+ dump_stack_lvl+0xd1/0x138 lib/dump_stack.c:106
+ print_address_description mm/kasan/report.c:306 [inline]
+ print_report+0x15e/0x45d mm/kasan/report.c:417
+ kasan_report+0xbf/0x1f0 mm/kasan/report.c:517
+ rxrpc_local_cmp_key net/rxrpc/local_object.c:53 [inline]
+ rxrpc_lookup_local+0xdcf/0xfb0 net/rxrpc/local_object.c:224
+ rxrpc_sendmsg+0x4bc/0x650 net/rxrpc/af_rxrpc.c:543
+ sock_sendmsg_nosec net/socket.c:714 [inline]
+ sock_sendmsg+0xd3/0x120 net/socket.c:734
+ ____sys_sendmsg+0x334/0x8c0 net/socket.c:2476
+ ___sys_sendmsg+0x110/0x1b0 net/socket.c:2530
+ __sys_sendmmsg+0x18f/0x460 net/socket.c:2616
+ __do_sys_sendmmsg net/socket.c:2645 [inline]
+ __se_sys_sendmmsg net/socket.c:2642 [inline]
+ __x64_sys_sendmmsg+0x9d/0x100 net/socket.c:2642
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x39/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x63/0xcd
+RIP: 0033:0x7f2b4eee0d59
+Code: 28 00 00 00 75 05 48 83 c4 28 c3 e8 b1 14 00 00 90 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 c0 ff ff ff f7 d8 64 89 01 48
+RSP: 002b:00007ffe60551f68 EFLAGS: 00000246 ORIG_RAX: 0000000000000133
+RAX: ffffffffffffffda RBX: 000000000000f41b RCX: 00007f2b4eee0d59
+RDX: 0000000000000001 RSI: 0000000020000180 RDI: 0000000000000003
+RBP: 0000000000000000 R08: 00007ffe60552108 R09: 00007ffe60552108
+R10: 0000000000000000 R11: 0000000000000246 R12: 00007ffe60551f7c
+R13: 431bde82d7b634db R14: 0000000000000000 R15: 0000000000000000
+ </TASK>
+
+Allocated by task 5469:
+ kasan_save_stack+0x22/0x40 mm/kasan/common.c:45
+ kasan_set_track+0x25/0x30 mm/kasan/common.c:52
+ ____kasan_kmalloc mm/kasan/common.c:371 [inline]
+ ____kasan_kmalloc mm/kasan/common.c:330 [inline]
+ __kasan_kmalloc+0xa5/0xb0 mm/kasan/common.c:380
+ kmalloc include/linux/slab.h:580 [inline]
+ kzalloc include/linux/slab.h:720 [inline]
+ rxrpc_alloc_local net/rxrpc/local_object.c:93 [inline]
+ rxrpc_lookup_local+0x4d9/0xfb0 net/rxrpc/local_object.c:249
+ rxrpc_sendmsg+0x4bc/0x650 net/rxrpc/af_rxrpc.c:543
+ sock_sendmsg_nosec net/socket.c:714 [inline]
+ sock_sendmsg+0xd3/0x120 net/socket.c:734
+ ____sys_sendmsg+0x334/0x8c0 net/socket.c:2476
+ ___sys_sendmsg+0x110/0x1b0 net/socket.c:2530
+ __sys_sendmmsg+0x18f/0x460 net/socket.c:2616
+ __do_sys_sendmmsg net/socket.c:2645 [inline]
+ __se_sys_sendmmsg net/socket.c:2642 [inline]
+ __x64_sys_sendmmsg+0x9d/0x100 net/socket.c:2642
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x39/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x63/0xcd
+
+Freed by task 15:
+ kasan_save_stack+0x22/0x40 mm/kasan/common.c:45
+ kasan_set_track+0x25/0x30 mm/kasan/common.c:52
+ kasan_save_free_info+0x2e/0x40 mm/kasan/generic.c:518
+ ____kasan_slab_free mm/kasan/common.c:236 [inline]
+ ____kasan_slab_free+0x160/0x1c0 mm/kasan/common.c:200
+ kasan_slab_free include/linux/kasan.h:177 [inline]
+ slab_free_hook mm/slub.c:1781 [inline]
+ slab_free_freelist_hook+0x8b/0x1c0 mm/slub.c:1807
+ slab_free mm/slub.c:3787 [inline]
+ __kmem_cache_free+0xaf/0x3b0 mm/slub.c:3800
+ rcu_do_batch kernel/rcu/tree.c:2244 [inline]
+ rcu_core+0x81f/0x1980 kernel/rcu/tree.c:2504
+ __do_softirq+0x1fb/0xadc kernel/softirq.c:571
+
+Last potentially related work creation:
+ kasan_save_stack+0x22/0x40 mm/kasan/common.c:45
+ __kasan_record_aux_stack+0xbc/0xd0 mm/kasan/generic.c:488
+ __call_rcu_common.constprop.0+0x99/0x820 kernel/rcu/tree.c:2753
+ rxrpc_put_local.part.0+0x128/0x170 net/rxrpc/local_object.c:332
+ rxrpc_put_local+0x25/0x30 net/rxrpc/local_object.c:324
+ rxrpc_release_sock net/rxrpc/af_rxrpc.c:888 [inline]
+ rxrpc_release+0x237/0x550 net/rxrpc/af_rxrpc.c:914
+ __sock_release+0xcd/0x280 net/socket.c:650
+ sock_close+0x1c/0x20 net/socket.c:1365
+ __fput+0x27c/0xa90 fs/file_table.c:320
+ task_work_run+0x16f/0x270 kernel/task_work.c:179
+ exit_task_work include/linux/task_work.h:38 [inline]
+ do_exit+0xaa8/0x2950 kernel/exit.c:867
+ do_group_exit+0xd4/0x2a0 kernel/exit.c:1010
+ __do_sys_exit_group kernel/exit.c:1021 [inline]
+ __se_sys_exit_group kernel/exit.c:1019 [inline]
+ __x64_sys_exit_group+0x3e/0x50 kernel/exit.c:1019
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x39/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x63/0xcd
+
+The buggy address belongs to the object at ffff88807df55800
+ which belongs to the cache kmalloc-1k of size 1024
+The buggy address is located 540 bytes inside of
+ 1024-byte region [ffff88807df55800, ffff88807df55c00)
+
+The buggy address belongs to the physical page:
+page:ffffea0001f7d400 refcount:1 mapcount:0 mapping:0000000000000000 index:0x0 pfn:0x7df50
+head:ffffea0001f7d400 order:3 compound_mapcount:0 subpages_mapcount:0 compound_pincount:0
+flags: 0xfff00000010200(slab|head|node=0|zone=1|lastcpupid=0x7ff)
+raw: 00fff00000010200 ffff888012441dc0 dead000000000122 0000000000000000
+raw: 0000000000000000 0000000080100010 00000001ffffffff 0000000000000000
+page dumped because: kasan: bad access detected
+page_owner tracks the page as allocated
+page last allocated via order 3, migratetype Unmovable, gfp_mask 0xd20c0(__GFP_IO|__GFP_FS|__GFP_NOWARN|__GFP_NORETRY|__GFP_COMP|__GFP_NOMEMALLOC), pid 5073, tgid 5073 (sshd), ts 62509082767, free_ts 62508815836
+ prep_new_page mm/page_alloc.c:2531 [inline]
+ get_page_from_freelist+0x119c/0x2ce0 mm/page_alloc.c:4283
+ __alloc_pages+0x1cb/0x5b0 mm/page_alloc.c:5549
+ alloc_pages+0x1aa/0x270 mm/mempolicy.c:2285
+ alloc_slab_page mm/slub.c:1851 [inline]
+ allocate_slab+0x25f/0x350 mm/slub.c:1998
+ new_slab mm/slub.c:2051 [inline]
+ ___slab_alloc+0xa91/0x1400 mm/slub.c:3193
+ __slab_alloc.constprop.0+0x56/0xa0 mm/slub.c:3292
+ __slab_alloc_node mm/slub.c:3345 [inline]
+ slab_alloc_node mm/slub.c:3442 [inline]
+ __kmem_cache_alloc_node+0x1a4/0x430 mm/slub.c:3491
+ __do_kmalloc_node mm/slab_common.c:967 [inline]
+ __kmalloc_node_track_caller+0x4b/0xc0 mm/slab_common.c:988
+ kmalloc_reserve net/core/skbuff.c:492 [inline]
+ __alloc_skb+0xe9/0x310 net/core/skbuff.c:565
+ alloc_skb_fclone include/linux/skbuff.h:1320 [inline]
+ tcp_stream_alloc_skb+0x3c/0x580 net/ipv4/tcp.c:862
+ tcp_sendmsg_locked+0xc4c/0x2960 net/ipv4/tcp.c:1325
+ tcp_sendmsg+0x2f/0x50 net/ipv4/tcp.c:1483
+ inet_sendmsg+0x9d/0xe0 net/ipv4/af_inet.c:827
+ sock_sendmsg_nosec net/socket.c:714 [inline]
+ sock_sendmsg+0xd3/0x120 net/socket.c:734
+ sock_write_iter+0x295/0x3d0 net/socket.c:1108
+ call_write_iter include/linux/fs.h:2186 [inline]
+ new_sync_write fs/read_write.c:491 [inline]
+ vfs_write+0x9ed/0xdd0 fs/read_write.c:584
+page last free stack trace:
+ reset_page_owner include/linux/page_owner.h:24 [inline]
+ free_pages_prepare mm/page_alloc.c:1446 [inline]
+ free_pcp_prepare+0x65c/0xc00 mm/page_alloc.c:1496
+ free_unref_page_prepare mm/page_alloc.c:3369 [inline]
+ free_unref_page+0x1d/0x490 mm/page_alloc.c:3464
+ __folio_put_large mm/swap.c:119 [inline]
+ __folio_put+0x109/0x140 mm/swap.c:127
+ folio_put include/linux/mm.h:1250 [inline]
+ put_page+0x21b/0x280 include/linux/mm.h:1319
+ page_to_skb+0x96d/0xc60 drivers/net/virtio_net.c:558
+ receive_mergeable drivers/net/virtio_net.c:1126 [inline]
+ receive_buf+0x11c5/0x5630 drivers/net/virtio_net.c:1265
+ virtnet_receive drivers/net/virtio_net.c:1560 [inline]
+ virtnet_poll+0x704/0x1300 drivers/net/virtio_net.c:1678
+ __napi_poll+0xb8/0x770 net/core/dev.c:6485
+ napi_poll net/core/dev.c:6552 [inline]
+ net_rx_action+0xa00/0xde0 net/core/dev.c:6663
+ __do_softirq+0x1fb/0xadc kernel/softirq.c:571
+
+Memory state around the buggy address:
+ ffff88807df55900: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+ ffff88807df55980: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+>ffff88807df55a00: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+                            ^
+ ffff88807df55a80: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+ ffff88807df55b00: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+==================================================================

@@ -1,0 +1,35 @@
+------------[ cut here ]------------
+WARNING: CPU: 1 PID: 8412 at kernel/tracepoint.c:291 tracepoint_add_func+0x1fb/0xa90 kernel/tracepoint.c:291
+Modules linked in:
+CPU: 1 PID: 8412 Comm: syz-executor167 Not tainted 5.12.0-syzkaller #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+RIP: 0010:tracepoint_add_func+0x1fb/0xa90 kernel/tracepoint.c:291
+Code: 44 24 18 48 8b 5d 08 80 38 00 0f 85 62 07 00 00 48 8b 44 24 10 48 3b 58 08 0f 85 71 ff ff ff 41 bc ef ff ff ff e8 75 5f fe ff <0f> 0b e9 ac 02 00 00 e8 69 5f fe ff 41 83 c6 02 e8 60 5f fe ff 44
+RSP: 0018:ffffc90001b97ab8 EFLAGS: 00010293
+RAX: 0000000000000000 RBX: ffffc90000e96000 RCX: 0000000000000000
+RDX: ffff88802ce64000 RSI: ffffffff8175335b RDI: ffff88801ac06198
+RBP: ffff88801ac06190 R08: 0000000000000000 R09: 0000000000000000
+R10: ffffffff8175358a R11: 0000000000000000 R12: 00000000ffffffef
+R13: ffff88801ac06190 R14: 0000000000000000 R15: dffffc0000000000
+FS:  00007fa751a1d700(0000) GS:ffff8880b9c00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: 00007f20996c3000 CR3: 0000000024735000 CR4: 00000000001506f0
+DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400
+Call Trace:
+ tracepoint_probe_register_prio kernel/tracepoint.c:369 [inline]
+ tracepoint_probe_register+0x9c/0xe0 kernel/tracepoint.c:389
+ __bpf_probe_register kernel/trace/bpf_trace.c:2154 [inline]
+ bpf_probe_register+0x15a/0x1c0 kernel/trace/bpf_trace.c:2159
+ bpf_raw_tracepoint_open+0x34a/0x720 kernel/bpf/syscall.c:2878
+ __do_sys_bpf+0x2586/0x4f40 kernel/bpf/syscall.c:4435
+ do_syscall_64+0x3a/0xb0 arch/x86/entry/common.c:47
+ entry_SYSCALL_64_after_hwframe+0x44/0xae
+RIP: 0033:0x445999
+Code: 28 00 00 00 75 05 48 83 c4 28 c3 e8 11 15 00 00 90 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b8 ff ff ff f7 d8 64 89 01 48
+RSP: 002b:00007fa751a1d318 EFLAGS: 00000246 ORIG_RAX: 0000000000000141
+RAX: ffffffffffffffda RBX: 00000000004ca408 RCX: 0000000000445999
+RDX: 0000000000000010 RSI: 0000000020000080 RDI: 0000000000000011
+RBP: 00000000004ca400 R08: 0000000000000000 R09: 0000000000000000
+R10: 0000000000000000 R11: 0000000000000246 R12: 65676e61725f636f
+R13: 00007ffc847ba7ef R14: 00007fa751a1d400 R15: 0000000000022000

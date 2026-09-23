@@ -1,0 +1,46 @@
+------------[ cut here ]------------
+WARNING: CPU: 0 PID: 5056 at lib/iov_iter.c:274 _copy_from_iter+0x38c/0x10f0 lib/iov_iter.c:274
+Modules linked in:
+CPU: 0 PID: 5056 Comm: syz-executor838 Not tainted 6.7.0-syzkaller-09928-g052d534373b7 #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 11/17/2023
+RIP: 0010:_copy_from_iter+0x38c/0x10f0 lib/iov_iter.c:274
+Code: 79 fd 0f 01 cb 4c 89 f9 4c 89 f7 48 89 de e8 ab 40 19 06 48 89 cb 0f 01 ca 4d 89 fc 49 29 cc e9 db fe ff ff e8 35 fb 21 fd 90 <0f> 0b 90 45 31 e4 e9 25 ff ff ff e8 24 fb 21 fd 48 8b 14 24 4c 89
+RSP: 0018:ffffc90003b6f668 EFLAGS: 00010293
+RAX: 0000000000000000 RBX: 0000000000000000 RCX: ffffffff84661298
+RDX: ffff888023820000 RSI: ffffffff8466156b RDI: 0000000000000001
+RBP: 0000000000000000 R08: 0000000000000001 R09: 0000000000000000
+R10: 0000000000000000 R11: ffffffff81df5804 R12: 000000000000007e
+R13: ffffea0001351800 R14: ffffc90003b6f880 R15: 000000000000007e
+FS:  000055555703b380(0000) GS:ffff8880b9800000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: 00007f9bbd1f2304 CR3: 00000000227bc000 CR4: 0000000000350ef0
+Call Trace:
+ <TASK>
+ copy_page_from_iter lib/iov_iter.c:441 [inline]
+ copy_page_from_iter+0xa5/0x120 lib/iov_iter.c:430
+ bio_copy_from_iter block/blk-map.c:56 [inline]
+ bio_copy_user_iov block/blk-map.c:211 [inline]
+ blk_rq_map_user_iov+0x9e7/0x1840 block/blk-map.c:661
+ blk_rq_map_user block/blk-map.c:690 [inline]
+ blk_rq_map_user_io+0x202/0x230 block/blk-map.c:723
+ sg_start_req drivers/scsi/sg.c:1817 [inline]
+ sg_common_write.constprop.0+0xd61/0x1c90 drivers/scsi/sg.c:803
+ sg_new_write.isra.0+0x546/0xaa0 drivers/scsi/sg.c:770
+ sg_ioctl_common drivers/scsi/sg.c:935 [inline]
+ sg_ioctl+0x1814/0x2760 drivers/scsi/sg.c:1160
+ vfs_ioctl fs/ioctl.c:51 [inline]
+ __do_sys_ioctl fs/ioctl.c:871 [inline]
+ __se_sys_ioctl fs/ioctl.c:857 [inline]
+ __x64_sys_ioctl+0x18f/0x210 fs/ioctl.c:857
+ do_syscall_x64 arch/x86/entry/common.c:52 [inline]
+ do_syscall_64+0xd3/0x250 arch/x86/entry/common.c:83
+ entry_SYSCALL_64_after_hwframe+0x63/0x6b
+RIP: 0033:0x7f73db7931e9
+Code: 48 83 c4 28 c3 e8 37 17 00 00 0f 1f 80 00 00 00 00 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b8 ff ff ff f7 d8 64 89 01 48
+RSP: 002b:00007ffd1ba27088 EFLAGS: 00000246 ORIG_RAX: 0000000000000010
+RAX: ffffffffffffffda RBX: 00007ffd1ba27258 RCX: 00007f73db7931e9
+RDX: 0000000020000480 RSI: 0000000000002285 RDI: 0000000000000003
+RBP: 00007f73db806610 R08: 002367732f766564 R09: 00007ffd1ba27258
+R10: 00007f73db7ce863 R11: 0000000000000246 R12: 0000000000000001
+R13: 00007ffd1ba27248 R14: 0000000000000001 R15: 0000000000000001
+ </TASK>

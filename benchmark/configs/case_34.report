@@ -1,0 +1,79 @@
+general protection fault, probably for non-canonical address 0xdffffc0000000000: 0000 [#1] PREEMPT SMP KASAN
+KASAN: null-ptr-deref in range [0x0000000000000000-0x0000000000000007]
+CPU: 1 PID: 3598 Comm: syz-executor929 Not tainted 5.17.0-rc1-syzkaller-00228-g3aa430d33b8d #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+RIP: 0010:btf_type_vlen include/linux/btf.h:231 [inline]
+RIP: 0010:btf_decl_tag_resolve+0x83e/0xaa0 kernel/bpf/btf.c:3910
+Code: c1 ea 03 80 3c 02 00 0f 85 90 01 00 00 48 8b 1b e8 b7 c9 e6 ff 48 8d 7b 04 48 b8 00 00 00 00 00 fc ff df 48 89 fa 48 c1 ea 03 <0f> b6 14 02 48 89 f8 83 e0 07 83 c0 03 38 d0 7c 08 84 d2 0f 85 2b
+RSP: 0018:ffffc90002aafa00 EFLAGS: 00010247
+RAX: dffffc0000000000 RBX: 0000000000000000 RCX: 0000000000000000
+RDX: 0000000000000000 RSI: ffffffff81919399 RDI: 0000000000000004
+RBP: ffff8881473b6000 R08: 0000000000000008 R09: 0000000000000008
+R10: ffffffff81919341 R11: 0000000000000001 R12: 0000000000000004
+R13: 0000000000000008 R14: 0000000000000000 R15: 0000000000000005
+FS:  0000555557074300(0000) GS:ffff8880b9d00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: 00007f2b79e40d20 CR3: 000000001a7fe000 CR4: 00000000003506e0
+DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400
+Call Trace:
+ <TASK>
+ btf_resolve+0x251/0x1020 kernel/bpf/btf.c:4198
+ btf_check_all_types kernel/bpf/btf.c:4239 [inline]
+ btf_parse_type_sec kernel/bpf/btf.c:4280 [inline]
+ btf_parse kernel/bpf/btf.c:4513 [inline]
+ btf_new_fd+0x19fe/0x2370 kernel/bpf/btf.c:6047
+ bpf_btf_load kernel/bpf/syscall.c:4039 [inline]
+ __sys_bpf+0x1cbb/0x5970 kernel/bpf/syscall.c:4679
+ __do_sys_bpf kernel/bpf/syscall.c:4738 [inline]
+ __se_sys_bpf kernel/bpf/syscall.c:4736 [inline]
+ __x64_sys_bpf+0x75/0xb0 kernel/bpf/syscall.c:4736
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x35/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x44/0xae
+RIP: 0033:0x7f4baea57099
+Code: 28 c3 e8 2a 14 00 00 66 2e 0f 1f 84 00 00 00 00 00 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 c0 ff ff ff f7 d8 64 89 01 48
+RSP: 002b:00007ffef75cb0b8 EFLAGS: 00000246 ORIG_RAX: 0000000000000141
+RAX: ffffffffffffffda RBX: 0000000000000000 RCX: 00007f4baea57099
+RDX: 0000000000000020 RSI: 0000000020000000 RDI: 0000000000000012
+RBP: 00007f4baea1b080 R08: 0000000000000000 R09: 0000000000000000
+R10: 00000000ffffffff R11: 0000000000000246 R12: 00007f4baea1b110
+R13: 0000000000000000 R14: 0000000000000000 R15: 0000000000000000
+ </TASK>
+Modules linked in:
+---[ end trace 0000000000000000 ]---
+RIP: 0010:btf_type_vlen include/linux/btf.h:231 [inline]
+RIP: 0010:btf_decl_tag_resolve+0x83e/0xaa0 kernel/bpf/btf.c:3910
+Code: c1 ea 03 80 3c 02 00 0f 85 90 01 00 00 48 8b 1b e8 b7 c9 e6 ff 48 8d 7b 04 48 b8 00 00 00 00 00 fc ff df 48 89 fa 48 c1 ea 03 <0f> b6 14 02 48 89 f8 83 e0 07 83 c0 03 38 d0 7c 08 84 d2 0f 85 2b
+RSP: 0018:ffffc90002aafa00 EFLAGS: 00010247
+RAX: dffffc0000000000 RBX: 0000000000000000 RCX: 0000000000000000
+RDX: 0000000000000000 RSI: ffffffff81919399 RDI: 0000000000000004
+RBP: ffff8881473b6000 R08: 0000000000000008 R09: 0000000000000008
+R10: ffffffff81919341 R11: 0000000000000001 R12: 0000000000000004
+R13: 0000000000000008 R14: 0000000000000000 R15: 0000000000000005
+FS:  0000555557074300(0000) GS:ffff8880b9c00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: 00007f2b79e37d90 CR3: 000000001a7fe000 CR4: 00000000003506f0
+DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400
+----------------
+Code disassembly (best guess):
+   0:	c1 ea 03             	shr    $0x3,%edx
+   3:	80 3c 02 00          	cmpb   $0x0,(%rdx,%rax,1)
+   7:	0f 85 90 01 00 00    	jne    0x19d
+   d:	48 8b 1b             	mov    (%rbx),%rbx
+  10:	e8 b7 c9 e6 ff       	callq  0xffe6c9cc
+  15:	48 8d 7b 04          	lea    0x4(%rbx),%rdi
+  19:	48 b8 00 00 00 00 00 	movabs $0xdffffc0000000000,%rax
+  20:	fc ff df
+  23:	48 89 fa             	mov    %rdi,%rdx
+  26:	48 c1 ea 03          	shr    $0x3,%rdx
+* 2a:	0f b6 14 02          	movzbl (%rdx,%rax,1),%edx <-- trapping instruction
+  2e:	48 89 f8             	mov    %rdi,%rax
+  31:	83 e0 07             	and    $0x7,%eax
+  34:	83 c0 03             	add    $0x3,%eax
+  37:	38 d0                	cmp    %dl,%al
+  39:	7c 08                	jl     0x43
+  3b:	84 d2                	test   %dl,%dl
+  3d:	0f                   	.byte 0xf
+  3e:	85 2b                	test   %ebp,(%rbx)

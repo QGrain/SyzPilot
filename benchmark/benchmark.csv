@@ -1,0 +1,69 @@
+SyzDirect_ID,ID,Syzbot Bug ID,Title,Version,Commit,Bug Position
+30,1,7787ea8a8ec228b5ea0acb1e9ac8373271ef8bdd,kernel BUG in validate_xmit_skb,5.14.0-rc5,761c6d7ec820,net/core/dev.c:3763
+32,2,e3cd8df8330f976efd72c1a562e96c44a1f2431f,WARNING: ODEBUG bug in qdisc_create,5.15.0-rc2,e8f71f89236e,net/sched/sch_api.c:1299
+35,3,31216a0f4941f9e070a4ba59723ddd50c355fe24,BUG: unable to handle kernel NULL pointer dereference in fifo_set_limit,5.15-rc3,02d5e016800d,net/sched/sch_fifo.c:238
+78,4,6bf42326e0930f0a844a1d53256c0fb15423dda1,KASAN: slab-use-after-free Read in tcf_action_destroy,6.2.0,1ec35eadc3b4,net/sched/act_api.c:1121
+84,5,d894f245105f59f788177ae2f53df8ffce3ec1ac,KASAN: slab-out-of-bounds Read in vxlan_vnifilter_dump_dev,5.17.0,d888c83fcec7,drivers/net/vxlan/vxlan_vnifilter.c:343
+90,6,b32fa08468c9e84e361296e1bc502283ea202ec6,KASAN: invalid-free in packet_set_ring,5.16.0-rc4,a763d5a5abd6,net/packet/af_packet.c:4495
+98,7,f5697a2cc8cc739814a87d3755258160e812c9dd,KASAN: use-after-free Read in ipvlan_queue_xmit,5.19.0,200e340f2196,drivers/net/ipvlan/ipvlan_core.c:644
+1,8,24a275e91595279d28038eb72a64fe00143fd2a4,KASAN: slab-out-of-bounds Read in squashfs_export_iget,5.11-rc1,5c8fe583cce5,fs/squashfs/export.c:69
+36,9,f381deedf1e8d44b545a5ab112c1747f75fb57d6,KASAN: use-after-free Read in snd_seq_timer_interrupt,5.13-rc4,e5220dd16778,sound/core/seq/seq_timer.c:130
+42,10,67c06f27e8efe15830eb8ff6ee742380e18c3d9b,WARNING in __dma_map_sg_attrs,5.17-rc2,0457e5153e0e,kernel/dma/mapping.c:264
+45,11,4d666adb3fbcfe329b8cc75958b976aea0a3c48a,WARNING in kvm_mmu_notifier_invalidate_range_start,5.17-rc8,56e337f2cf13,virt/kvm/kvm_main.c:714
+57,12,a25ae9cae4c5adffac5364e5f8aea4a098d01f41,KASAN: use-after-free Write in io_submit_one,5.16-rc4,6f513529296f,fs/aio.c:2000
+62,13,6dc9ae7ccfcf2d2e5237d4e68f1c9f63e866d0ef,KASAN: use-after-free Read in madvise_update_vma,5.17-rc3,dfd42facf1e4,mm/madvise.c:212
+77,14,62d6a292ad633abc9ce6159dec8e8ac5b0455b19,KASAN: use-after-free Read in disk_part_iter_next,5.12-rc3,1c273e10bc0c,block/genhd.c:206
+91,15,517fa734b92b7db404c409b924cf5c997640e324,KASAN: use-after-free Write in null_skcipher_crypt,5.14.0,78e709522d2c,crypto/crypto_null.c:85
+17,16,59a8b2b621a7e8fb23ac85cd5f125f504cebfee9,BUG: unable to handle kernel paging request in vga16fb_imageblit,5.12.0,d2b6f8a17919,drivers/video/fbdev/vga16fb.c:1260
+19,17,41f4318cf01762389f4d1c1c459da4f542fe5153,WARNING in tracepoint_add_func,5.12.0,d2b6f8a17919,kernel/tracepoint.c:389
+41,18,0be4824a86385f022a4f6f5104bcb9246032fdd9,WARNING: kmalloc bug in snd_pcm_plugin_alloc,5.17-rc7,68453767131a,sound/core/oss/pcm_plugin.c:70
+74,19,bcc246d137428d00ed14b476c2068579515fe2bc,KASAN: use-after-free Write in sco_sock_timeout,5.15-rc2,cf1d2c3e7e2f,net/bluetooth/sco.c:89
+89,20,4b1e9cf490ffaaa8d9b87c2db04490923603aedd,KASAN: use-after-free Read in remove_wait_queue,5.16-rc5,2585cf9dfaad,kernel/cgroup/cgroup.c:3645
+14,21,c54b440ca738afc4ba82c15ef998e5262a605773,WARNING in cfg80211_connect,5.12.0-rc6,2d743660786e,net/wireless/sme.c:533
+60,22,d5ffb9da8352927dd8f17911b5e7ed9d75df89ff,KASAN: use-after-free Read in rxrpc_lookup_local,6.1.0,b6bb9676f216,net/rxrpc/local_object.c:225
+6,23,071122e4f772c1ec834c7a6facc0b5058d215481,KASAN: vmalloc-out-of-bounds Write in imageblit,5.11.0,f40ddce88593,drivers/video/fbdev/core/fbcon.c:1306
+18,24,113d9a01cbe0af3e291633ba7a7a3e983b86c3c0,WARNING in close_fs_devices,5.13.0-rc1,315d99318179,fs/btrfs/volumes.c:1170
+48,25,4c4af2385654d032d6480051e771ade1732f2ecc,WARNING in f2fs_is_valid_blkaddr,5.18.0,1e57930e9f40,fs/f2fs/node.c:613
+99,26,345d17288acb20f42c7a83874b03d00dd662f8eb,KASAN: use-after-free Read in __kernfs_remove,6.0.0,a5088ee7251e,fs/kernfs/dir.c:1370
+55,27,6ac17d26b59694aa04bc6b423d94b444349682a5,KASAN: slab-out-of-bounds Read in btrfs_scan_one_device,5.10.0-rc2,521b619acdc8,fs/btrfs/super.c:246
+21,28,1ce224deef468aa150f36b7aef5144db9d83d43a,KASAN: null-ptr-deref Read in __free_pages,5.17.0-rc8,56e337f2cf13,kernel/watch_queue.c:275
+24,29,03c2ae9146416edf811958d5fd7acfab75b143d1,WARNING in internal_create_group,5.14.0-rc2,8cae8cd89f05,fs/sysfs/group.c:117
+56,30,c4fd25bc9502e9924e2b0850151cbbf707fb2c31,KASAN: use-after-free Read in netlbl_catmap_walk,5.14.0-rc7,6e764bcd1cf7,net/netlabel/netlabel_kapi.c:616
+3,31,1eb47c8b68c0b1e4dc380c47ef588c41a0bc9bab,KASAN: use-after-free Read in nbd_genl_connect,5.11.0,f40ddce88593,drivers/block/nbd.c:1980
+5,32,08a86f0867ba0f092bf6ecbd6d5c2ae5e16a52d7,KASAN: invalid-free in p9_client_create,5.11.0-rc4,fe75a21824e7,net/9p/client.c:1064
+9,33,f7c5a86e747f9b7ce333e7295875cd4ede2c7a0d,WARNING: kmalloc bug in xdp_umem_create,5.17.0-rc3,f4bc5bbb5fef,net/xdp/xdp_umem.c:102
+10,34,527a000e3a661da4fcb29f48baab94242b3cb2fb,general protection fault in btf_decl_tag_resolve,5.17.0-rc1,3aa430d33b8d,kernel/bpf/btf.c:3897
+11,35,15bf7d92374ccf44446d19de1fc0e11724b632a2,general protection fault in gfs2_withdraw,5.11.0-rc1,139711f033f6,fs/gfs2/util.c:293
+2,36,d524c1aac21f8ea2759b6314c2e48bfa230c38b0,WARNING in rds_rdma_extra_size,5.11.0-rc2,6207214a70bf,net/rds/rdma.c:568
+4,37,67d5dc5f84651b05fc3c2cb3d163037f414a10f4,WARNING in qrtr_tun_write_iter,5.11.0-rc2,6207214a70bf,net/qrtr/tun.c:83
+15,38,26567b12e74b8791e1db50da6039ee1705e5a7ed,BUG: unable to handle kernel NULL pointer dereference in fbcon_cursor,5.12.0-rc4,4ee998b0ef8b,drivers/video/fbdev/core/fbcon.c:1336
+25,39,3d48c91ba894fb986f24e94797aca34b0149a6fc,possible deadlock in del_gendisk,5.14.0-rc7,64b4fc45bea6,block/genhd.c:588
+33,40,d4bc7d67efe79c6ead3cb6bd94b84dbd287f1069,WARNING in netlbl_cipsov4_add,5.14.0,b91db6a0b52e,net/netlabel/netlabel_cipso_v4.c:417
+86,41,7f84dfc3902878befc22e52eb5c7298d0ad70cf3,KASAN: use-after-free Read in idr_for_each,5.11.0-rc6,dd86e7fa07a3,lib/idr.c:202
+13,42,2d08de6cbeceee7f4e7281025630ec004a924496,general protection fault in ieee80211_assign_vif_chanctx,5.12.0-rc4,7acac4b3196c,net/wireless/util.c:1047
+23,43,3d5252b25c09861fb965a45c6623a6c923dae9de,WARNING in nbd_dev_add,5.15.0-rc5,304040fb4909,drivers/block/nbd.c:1736
+34,46,0421a448a695664b5952adad46879b96d82d6a36,general protection fault in scsi_queue_rq,5.15.0-rc5,ec681c53f8d2,drivers/scsi/scsi_ioctl.c:484
+37,47,223c64b1a2c03f0d67d64fdf69606ee2d5e26672,WARNING in batadv_nc_mesh_free,5.15.0-rc6,2f111a6fd5b5,net/batman-adv/main.c:225
+43,48,c1408bfc99ec00b14d16d1fce95336e0a22d454d,WARNING in ext4_xattr_set_entry,5.11.0-rc1,f6e1ea196492,fs/ext4/xattr.c:1639
+49,49,1870dd7791ba05f2ea7f47f7cbdde701173973fc,KASAN: use-after-free Read in post_one_notification,5.19.0-rc1,e71e60cd74df,kernel/watch_queue.c:205
+50,50,558888413b9d65634d5dd0a2d860c4bbf6651d51,WARNING: suspicious RCU usage in bond_ipsec_add_sa,5.12.0,57fa2369ab17,drivers/net/bonding/bond_main.c:410
+59,51,6d40ea5ee0f0513c07ec0967f0a350627e9cd773,KASAN: use-after-free Read in register_shrinker_prepared,6.0.0,a6afa4199d3d,ipc/mqueue.c:485
+65,52,933dab9c03ac47a3d09dd4b0563a0a8fcb35f282,KASAN: use-after-free Read in ntfs_iget,5.10.0-rc5,418baf2c28f3,fs/ntfs/super.c:2894
+68,53,891fc6743a5dd803220cefaf63f5fd49cce41e17,KASAN: vmalloc-out-of-bounds Write in lzo_uncompress,5.11.0-rc3,a0d54b4f5b21,fs/squashfs/lzo_wrapper.c:81
+70,54,16a7f16e9182bbfdbd2142306a82a41d4debb670,KASAN: slab-out-of-bounds Read in squashfs_get_id,5.10.0-rc7,cd796ed33450,fs/squashfs/inode.c:121
+71,55,d8c00bae1644df59696f2d74d1955fd286691234,KASAN: out-of-bounds Read in leaf_paste_entries,5.14.0-rc6,1bdc3d5be7e1,fs/reiserfs/xattr.c:1013
+75,56,5de20befde5f05afead7cffac9fb110c1d760909,KASAN: use-after-free Read in ntfs_attr_find,6.0.0,a6afa4199d3d,fs/ntfs/inode.c:999
+80,57,96e7d345748d8814901c91cd92084ed04b46701e,KASAN: use-after-free Read in cipso_v4_genopt,5.12.0-rc1,7a7fd0de4a98,net/ipv4/cipso_ipv4.c:1867
+82,58,205c40dcecd95c9450622ce281aef3ee26b44cff,KASAN: use-after-free Read in filp_close,5.18.0,952923ddc011,fs/io_uring.c:6053
+87,59,c28952126847f6e6af55b800915c9dbd5286abf4,KASAN: null-ptr-deref Write in rhashtable_free_and_destroy,5.12.0,9f4ad9e425a1,net/mac80211/iface.c:2020
+95,60,c46757660a2b99103a2f46a15bfcd8d687d5dabc,KASAN: vmalloc-out-of-bounds Write in imageblit,5.19.0,200e340f2196,drivers/video/fbdev/core/fbcon.c:2436
+-,61,-,WARNING: suspicious RCU usage in kvm_vcpu_memslots,5.15.112,9d6bde853685,virt/kvm/kvm_main.c:2140
+-,62,-,general protection fault in bio_associate_blkg_from_css,5.15.140,a78d278e01b1,block/blk-cgroup.c:1852
+-,63,-,BUG: corrupted list in nfc_llcp_register_device,6.4-rc5,a4d7d7011219,net/nfc/llcp_core.c:1604
+-,64,-,KASAN: slab-use-after-free Read in iommufd_vfio_ioas,6.6-rc7,2af9b20dbb39,drivers/iommu/iommufd/vfio_compat.c:146
+-,65,-,WARNING in blk_rq_map_user_iov,6.7.0,052d534373b7,block/blk-map.c:661
+-,66,-,WARNING in p9_client_create,6.12-rc3,2f87d0916ce0,net/9p/client.c:1042
+-,67,-,general protection fault in ebt_do_table,6.8.0,e8f897f4afef,net/bridge/netfilter/ebtables.c:220
+-,68,-,KASAN: slab-use-after-free Read in __video_do_ioctl,6.12.28,f08cdc6cc92e,drivers/media/v4l2-core/v4l2-ioctl.c:3093
+-,69,-,BUG: unable to handle kernel paging request in squashfs_cache_delete,6.14-rc2,a64dcfb451e2,fs/squashfs/cache.c:204
+-,70,-,KASAN: slab-out-of-bounds Write in sco_conn_put,6.14-rc7,4701f33a1070,net/bluetooth/sco.c:107

@@ -1,0 +1,68 @@
+==================================================================
+BUG: KASAN: slab-out-of-bounds in squashfs_get_id+0x1ae/0x1d0 fs/squashfs/id.c:38
+Read of size 8 at addr ffff888014da0890 by task syz-executor820/8457
+
+CPU: 1 PID: 8457 Comm: syz-executor820 Not tainted 5.10.0-rc7-syzkaller #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+Call Trace:
+ __dump_stack lib/dump_stack.c:77 [inline]
+ dump_stack+0x107/0x163 lib/dump_stack.c:118
+ print_address_description.constprop.0.cold+0xae/0x4c8 mm/kasan/report.c:385
+ __kasan_report mm/kasan/report.c:545 [inline]
+ kasan_report.cold+0x1f/0x37 mm/kasan/report.c:562
+ squashfs_get_id+0x1ae/0x1d0 fs/squashfs/id.c:38
+ squashfs_new_inode fs/squashfs/inode.c:51 [inline]
+ squashfs_read_inode+0x1b4/0x1b40 fs/squashfs/inode.c:120
+ squashfs_fill_super+0x1140/0x23b0 fs/squashfs/super.c:310
+ get_tree_bdev+0x421/0x740 fs/super.c:1344
+ vfs_get_tree+0x89/0x2f0 fs/super.c:1549
+ do_new_mount fs/namespace.c:2875 [inline]
+ path_mount+0x13ad/0x20c0 fs/namespace.c:3205
+ do_mount fs/namespace.c:3218 [inline]
+ __do_sys_mount fs/namespace.c:3426 [inline]
+ __se_sys_mount fs/namespace.c:3403 [inline]
+ __x64_sys_mount+0x27f/0x300 fs/namespace.c:3403
+ do_syscall_64+0x2d/0x70 arch/x86/entry/common.c:46
+ entry_SYSCALL_64_after_hwframe+0x44/0xa9
+RIP: 0033:0x446d1a
+Code: b8 08 00 00 00 0f 05 48 3d 01 f0 ff ff 0f 83 fd ad fb ff c3 66 2e 0f 1f 84 00 00 00 00 00 66 90 49 89 ca b8 a5 00 00 00 0f 05 <48> 3d 01 f0 ff ff 0f 83 da ad fb ff c3 66 0f 1f 84 00 00 00 00 00
+RSP: 002b:00007ffec71d7408 EFLAGS: 00000293 ORIG_RAX: 00000000000000a5
+RAX: ffffffffffffffda RBX: 00007ffec71d7460 RCX: 0000000000446d1a
+RDX: 0000000020000000 RSI: 0000000020000100 RDI: 00007ffec71d7420
+RBP: 00007ffec71d7420 R08: 00007ffec71d7460 R09: 00007ffe00000015
+R10: 0000000000000000 R11: 0000000000000293 R12: 0000000000000001
+R13: 0000000000000004 R14: 0000000000000003 R15: 0000000000000003
+
+Allocated by task 6443:
+ kasan_save_stack+0x1b/0x40 mm/kasan/common.c:48
+ kasan_set_track mm/kasan/common.c:56 [inline]
+ __kasan_kmalloc.constprop.0+0xc2/0xd0 mm/kasan/common.c:461
+ kmalloc include/linux/slab.h:557 [inline]
+ kzalloc include/linux/slab.h:664 [inline]
+ lsm_cred_alloc security/security.c:533 [inline]
+ security_prepare_creds+0x10e/0x190 security/security.c:1632
+ prepare_creds+0x4bd/0x6c0 kernel/cred.c:285
+ access_override_creds fs/open.c:353 [inline]
+ do_faccessat+0x3d7/0x820 fs/open.c:417
+ do_syscall_64+0x2d/0x70 arch/x86/entry/common.c:46
+ entry_SYSCALL_64_after_hwframe+0x44/0xa9
+
+The buggy address belongs to the object at ffff888014da0870
+ which belongs to the cache kmalloc-8 of size 8
+The buggy address is located 24 bytes to the right of
+ 8-byte region [ffff888014da0870, ffff888014da0878)
+The buggy address belongs to the page:
+page:00000000ac3d44c7 refcount:1 mapcount:0 mapping:0000000000000000 index:0x0 pfn:0x14da0
+flags: 0xfff00000000200(slab)
+raw: 00fff00000000200 ffffea00006eb080 0000001700000017 ffff888010041c80
+raw: 0000000000000000 0000000080660066 00000001ffffffff 0000000000000000
+page dumped because: kasan: bad access detected
+
+Memory state around the buggy address:
+ ffff888014da0780: fa fc fc fc fc fa fc fc fc fc fa fc fc fc fc 00
+ ffff888014da0800: fc fc fc fc fa fc fc fc fc 00 fc fc fc fc fb fc
+>ffff888014da0880: fc fc fc fa fc fc fc fc fb fc fc fc fc 00 fc fc
+                         ^
+ ffff888014da0900: fc fc fa fc fc fc fc fa fc fc fc fc 00 fc fc fc
+ ffff888014da0980: fc fb fc fc fc fc 00 fc fc fc fc 00 fc fc fc fc
+==================================================================

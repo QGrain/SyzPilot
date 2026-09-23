@@ -1,0 +1,41 @@
+------------[ cut here ]------------
+WARNING: CPU: 0 PID: 3587 at mm/util.c:590 kvmalloc_node+0xf5/0x100 mm/util.c:590
+Modules linked in:
+CPU: 0 PID: 3587 Comm: syz-executor225 Not tainted 5.17.0-rc3-syzkaller-00043-gf4bc5bbb5fef #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+RIP: 0010:kvmalloc_node+0xf5/0x100 mm/util.c:590
+Code: 01 00 00 00 48 89 ef e8 39 0e 0d 00 49 89 c5 e9 62 ff ff ff e8 4c a0 d0 ff 45 89 e5 41 81 cd 00 20 01 00 eb 8e e8 3b a0 d0 ff <0f> 0b e9 45 ff ff ff 0f 1f 40 00 55 48 89 fd 53 e8 26 a0 d0 ff 48
+RSP: 0018:ffffc9000289fc48 EFLAGS: 00010293
+RAX: 0000000000000000 RBX: 0000000000000001 RCX: 0000000000000000
+RDX: ffff888079200000 RSI: ffffffff81a7d855 RDI: 0000000000000003
+RBP: 00000007ff810000 R08: 000000007fffffff R09: 00000000ffffffff
+R10: ffffffff81a7d811 R11: 0000000000000000 R12: 0000000000002dc0
+R13: 0000000000000000 R14: 00000000ffffffff R15: 0000000000000700
+FS:  000055555679c300(0000) GS:ffff8880b9c00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: 0000000020000080 CR3: 00000000743f8000 CR4: 0000000000350ef0
+Call Trace:
+ <TASK>
+ kvmalloc include/linux/slab.h:732 [inline]
+ kvmalloc_array include/linux/slab.h:750 [inline]
+ kvcalloc include/linux/slab.h:755 [inline]
+ xdp_umem_pin_pages net/xdp/xdp_umem.c:102 [inline]
+ xdp_umem_reg net/xdp/xdp_umem.c:219 [inline]
+ xdp_umem_create+0x563/0x1180 net/xdp/xdp_umem.c:252
+ xsk_setsockopt+0x73e/0x9e0 net/xdp/xsk.c:1051
+ __sys_setsockopt+0x2db/0x610 net/socket.c:2180
+ __do_sys_setsockopt net/socket.c:2191 [inline]
+ __se_sys_setsockopt net/socket.c:2188 [inline]
+ __x64_sys_setsockopt+0xba/0x150 net/socket.c:2188
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x35/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x44/0xae
+RIP: 0033:0x7f8455d6c009
+Code: 28 c3 e8 2a 14 00 00 66 2e 0f 1f 84 00 00 00 00 00 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 c0 ff ff ff f7 d8 64 89 01 48
+RSP: 002b:00007ffd58012708 EFLAGS: 00000246 ORIG_RAX: 0000000000000036
+RAX: ffffffffffffffda RBX: 0000000000000000 RCX: 00007f8455d6c009
+RDX: 0000000000000004 RSI: 000000000000011b RDI: 0000000000000003
+RBP: 00007f8455d2fff0 R08: 0000000000000020 R09: 0000000000000000
+R10: 0000000020000080 R11: 0000000000000246 R12: 00007f8455d30080
+R13: 0000000000000000 R14: 0000000000000000 R15: 0000000000000000
+ </TASK>

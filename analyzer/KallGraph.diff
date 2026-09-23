@@ -1,0 +1,2784 @@
+diff --git a/analyze_waypoints.py b/analyze_waypoints.py
+new file mode 100644
+index 0000000..e8c488f
+--- /dev/null
++++ b/analyze_waypoints.py
+@@ -0,0 +1,2124 @@
++#!/usr/bin/env python3
++"""
++Multi-method waypoint analysis for kernel callgraphs.
++
++Implements 6 analysis methods to find meaningful waypoints:
++1. Graph exploration (in-degree + betweenness centrality)
++2. Real entry filtering (syscall/module_init/IRQ)
++3. Forward dominator chain (baseline)
++4. Post-dominator chain (from target)
++5. Path frequency analysis
++6. Combined approach
++
++Usage:
++    python analyze_waypoints.py \
++        --callgraph output/case_1/<timestamp>/callgraph.csv \
++        --target validate_xmit_skb \
++        --mode all \
++        --timeout 3600 \
++        --output results/case_1_analysis.json
++"""
++
++import argparse
++import csv
++import json
++import re
++import sys
++import time
++from collections import Counter, defaultdict
++from pathlib import Path
++from typing import Dict, List, Optional, Set, Tuple
++
++import igraph as ig
++
++
++# ============================================================================
++# Wrapper patterns for filtering
++# ============================================================================
++
++WRAPPER_OUTER = [
++    r'^__x64_sys_',
++    r'^__ia32_sys_',
++    r'^__x64_compat_sys_',
++]
++
++WRAPPER_MID = [
++    r'^__se_sys_',
++    r'^__se_compat_sys_',
++    r'^__do_sys_',
++    r'^__do_compat_sys_',
++    r'^_{3,}sys_',
++]
++
++WRAPPER_INNER = [
++    r'^__sys_',
++    r'^compat_',
++    r'^ksys_',
++]
++
++def is_wrapper_outer(name: str) -> bool:
++    return any(re.match(p, name) for p in WRAPPER_OUTER)
++
++def is_wrapper_mid(name: str) -> bool:
++    return any(re.match(p, name) for p in WRAPPER_MID)
++
++def is_wrapper(name: str) -> bool:
++    return is_wrapper_outer(name) or is_wrapper_mid(name)
++
++
++# ============================================================================
++# Universal connector filtering
++# ============================================================================
++
++# Hardcoded noise set (expand during testing based on empirical observation)
++NOISE_FUNCTIONS = {
++    # Scheduling
++    'schedule', 'schedule_timeout', 'cond_resched', 'yield',
++    # Memory management
++    'kfree', 'kzalloc', 'kmalloc', 'kmem_cache_alloc', 'kmem_cache_free',
++    # User/kernel copy
++    '_copy_to_user', '_copy_from_user', 'copy_user_enhanced_fast_string',
++    # Locking
++    'mutex_lock', 'mutex_unlock', 'spin_lock', 'spin_unlock',
++    'down_read', 'down_write', 'up_read', 'up_write',
++    # Refcount
++    'kref_put', 'kref_get',
++    # Error handling
++    'panic', 'BUG', 'WARN_ON', 'warn_slowpath_fmt',
++    # Notification chain
++    'notifier_call_chain', 'atomic_notifier_call_chain',
++    'raw_notifier_call_chain', 'blocking_notifier_call_chain',
++    # bcache (appears on many unrelated paths)
++    'cache_set_flush', 'closure_queue', 'bcache_device_stop', 'bcache_reboot',
++    'bcache_device_alloc', 'bcache_cached_dev_error', 'bcache_write_bdev',
++    'bcache_read', 'bcache_write', 'bcache_flush',
++    # floppy
++    'floppy_shutdown', 'floppy_ready', 'floppy_cmos_clock',
++    # Misc
++    'add_taint', '__cant_migrate',
++    'br_mrp_in_test_work_expired', 'br_mrp_in_role_off',
++    'ifb_ri_tasklet',
++}
++
++# Pattern-based noise rules (expand during testing)
++NOISE_PATTERNS = [
++    # Compiler-inserted sanitizer/coverage runtime helpers are observations of
++    # instrumentation, not semantic progress toward the target.
++    r'^__ubsan_',
++    r'^ubsan_',
++    r'^__sanitizer_',
++    r'^sanitizer_',
++    r'^__wake_up(?:_|$)',
++    r'^wake_up_(?:bit|process|state|var|q)$',
++    r'^__warn_',
++    r'^___might_',
++    r'^lockdep_',
++    r'^rcu_.*_lock$',
++    r'^__asan_',
++    r'^__kasan_',
++    r'^kasan_',
++    r'^__might_',
++    r'^printk$',
++    r'^vprintk$',
++    r'^_printk$',
++]
++
++
++def is_noise_function(name: str) -> bool:
++    """Check if a function is noise (blacklisted or matches noise patterns)."""
++    if name in NOISE_FUNCTIONS:
++        return True
++    return any(re.match(p, name) for p in NOISE_PATTERNS)
++
++
++def compute_filter_sets(graph: ig.Graph, vid_to_name: Dict[int, str],
++                         betweenness_threshold: float = 1_000_000,
++                         indegree_threshold: int = 5_000,
++                         compute_betweenness: bool = True
++                         ) -> Tuple[Set[str], Optional[List[float]]]:
++    """Compute set of functions to filter (universal connectors).
++
++    Uses BOTH betweenness centrality AND in-degree for robust filtering.
++    Also includes heuristic noise filtering via is_noise_function().
++    """
++    print(f"  Computing filter sets (bc>{betweenness_threshold:.0f}, in_deg>{indegree_threshold})...",
++          flush=True)
++
++    # Layer 1: Heuristic noise filtering
++    heuristic_noise = set()
++    for vid in range(graph.vcount()):
++        name = vid_to_name[vid]
++        if is_noise_function(name):
++            heuristic_noise.add(name)
++
++    # In-degree
++    in_degrees = graph.indegree()
++    high_indegree = set()
++    for vid, deg in enumerate(in_degrees):
++        if deg > indegree_threshold:
++            high_indegree.add(vid_to_name[vid])
++
++    # Betweenness centrality (with cutoff for performance).  The backbone mode
++    # deliberately skips this whole-graph computation: it is the dominant cost
++    # on Linux graphs and its absolute score is not needed for path support.
++    betweenness_array = None
++    if compute_betweenness:
++        try:
++            betweenness_array = graph.betweenness(directed=True, cutoff=5)
++            high_betweenness = set()
++            for vid, bc in enumerate(betweenness_array):
++                if bc > betweenness_threshold:
++                    high_betweenness.add(vid_to_name[vid])
++        except Exception as e:
++            print(f"  Betweenness computation failed: {e}", flush=True)
++            high_betweenness = set()
++    else:
++        print("  Skipping whole-graph betweenness in backbone mode", flush=True)
++        high_betweenness = set()
++
++    # Union of all sets
++    filter_set = high_indegree | high_betweenness | heuristic_noise
++
++    print(f"  Heuristic noise: {len(heuristic_noise)}", flush=True)
++    print(f"  High in-degree: {len(high_indegree)}", flush=True)
++    print(f"  High betweenness: {len(high_betweenness)}", flush=True)
++    print(f"  Total filter set: {len(filter_set)}", flush=True)
++    print(f"  Sample filtered: {sorted(filter_set)[:15]}", flush=True)
++
++    return filter_set, betweenness_array
++
++
++# ============================================================================
++# Entry pattern matching
++# ============================================================================
++
++def is_syscall_entry(name: str) -> bool:
++    return bool(re.match(r'^__(x64|ia32|x64_compat)_sys_', name))
++
++def is_module_init(name: str) -> bool:
++    # Match *_init, *_probe, *_register functions
++    return bool(re.match(r'.*_(init|probe|register)$', name))
++
++def is_irq_handler(name: str) -> bool:
++    # Match *_irq, *_handler, *_isr, *_interrupt functions
++    return bool(re.match(r'.*(_irq|_handler|_isr|_interrupt)$', name))
++
++def is_real_entry(name: str) -> bool:
++    return is_syscall_entry(name) or is_module_init(name) or is_irq_handler(name)
++
++
++def is_wrapper_backed_dispatch(graph: ig.Graph, vid: int,
++                               vid_to_name: Dict[int, str]) -> bool:
++    """Reject internal helpers that merely happen to use a __sys_* prefix."""
++    name = vid_to_name[vid]
++    if not re.match(r'^__sys_|^__do_sys_', name):
++        return False
++    for pred_vid in graph.predecessors(vid):
++        predecessor = vid_to_name[pred_vid]
++        if is_wrapper_outer(predecessor) or is_wrapper_mid(predecessor):
++            return True
++        if re.match(r'^__compat_sys_', predecessor):
++            return True
++    return False
++
++
++def identify_dispatch_entries(graph: ig.Graph, name_to_vid: Dict[str, int],
++                               vid_to_name: Dict[int, str],
++                               target_vid: int) -> List[Tuple[str, int, int]]:
++    """Find dispatch-level syscall entries that can reach target.
++
++    Returns list of (name, vertex_id, level) sorted by level (4 preferred, 3 fallback).
++    Level 4: __sys_* (arch-independent implementation, ~30 functions)
++    Level 3: __do_sys_* (SYSCALL_DEFINEx body, ~366 functions)
++    """
++    entries = []
++    for vid in range(graph.vcount()):
++        name = vid_to_name[vid]
++        if re.match(r'^__sys_', name) and is_wrapper_backed_dispatch(
++                graph, vid, vid_to_name):
++            entries.append((name, vid, 4))
++        elif re.match(r'^__do_sys_', name) and is_wrapper_backed_dispatch(
++                graph, vid, vid_to_name):
++            entries.append((name, vid, 3))
++
++    # Filter: single reverse BFS from target to find all ancestors, then intersect
++    try:
++        ancestors = set(graph.bfs(target_vid, mode='in')[0])
++    except Exception:
++        ancestors = set()
++
++    reachable_entries = []
++    for name, vid, level in entries:
++        if vid in ancestors:
++            reachable_entries.append((name, vid, level))
++
++    # Sort: Level 4 first (higher level = higher priority, negate for descending)
++    reachable_entries.sort(key=lambda x: (-x[2], x[0]))
++    return reachable_entries
++
++
++def discover_reachable_entries(graph: ig.Graph, vid_to_name: Dict[int, str],
++                                target_vid: int, max_hops: int = 15
++                                ) -> List[Tuple[str, int, int, int]]:
++    """Single backward BFS from target, filter to dispatch entries.
++
++    Returns list of (name, vertex_id, level, hops) sorted by hops.
++    Level 4: __sys_*, Level 3: __do_sys_*.
++    """
++    from collections import deque
++
++    dist = {target_vid: 0}
++    queue = deque([target_vid])
++    while queue:
++        v = queue.popleft()
++        if dist[v] >= max_hops:
++            continue
++        for pred in graph.predecessors(v):
++            if pred not in dist:
++                dist[pred] = dist[v] + 1
++                queue.append(pred)
++
++    entries = []
++    for vid, hops in dist.items():
++        name = vid_to_name[vid]
++        if re.match(r'^__sys_', name) and is_wrapper_backed_dispatch(
++                graph, vid, vid_to_name):
++            entries.append((name, vid, 4, hops))
++        elif re.match(r'^__do_sys_', name) and is_wrapper_backed_dispatch(
++                graph, vid, vid_to_name):
++            entries.append((name, vid, 3, hops))
++
++    entries.sort(key=lambda x: (x[3], -x[2], x[0]))  # hops asc, level desc, name asc
++    return entries
++
++
++def score_entries_bc(graph: ig.Graph, entries: List[Tuple[str, int, int, int]],
++                     target_vid: int, vid_to_name: Dict[int, str],
++                     alpha: float = 0.4,
++                     bc_array: List[float] = None) -> List[Tuple[str, int, float, int, List[int]]]:
++    """Score dispatch entries using Betweenness Centrality path scoring.
++
++    Theory: Freeman (1977), "A set of measures of centrality based on betweenness"
++
++    For each entry, compute shortest path to target. Score combines:
++    - Distance factor (shorter = better)
++    - Path specificity (lower avg betweenness on path = more subsystem-specific)
++
++    Returns sorted list of (name, vid, score, hops, path) by score descending.
++    """
++    if bc_array is not None:
++        bc = bc_array
++        print("  Using pre-computed betweenness for path scoring", flush=True)
++    else:
++        print("  Computing betweenness centrality for path scoring...", flush=True)
++        try:
++            bc = graph.betweenness(directed=True, cutoff=5)
++        except Exception:
++            bc = [0.0] * graph.vcount()
++
++    # Compute all shortest paths and score
++    results = []
++    hop_distances = []
++    path_bcs = []
++
++    for name, vid, level, hops in entries:
++        try:
++            path = graph.get_shortest_paths(vid, to=target_vid, mode='out')[0]
++            if not path or len(path) <= 1:
++                continue
++        except Exception:
++            continue
++
++        hop_distances.append(hops)
++
++        # Betweenness of intermediate vertices (exclude entry and target)
++        intermediate = path[1:-1]
++        if intermediate:
++            avg_bc = sum(bc[v] for v in intermediate) / len(intermediate)
++        else:
++            avg_bc = 0.0
++        path_bcs.append(avg_bc)
++
++        results.append((name, vid, hops, path, avg_bc, level))
++
++    if not results:
++        return []
++
++    # Normalize: use medians as scale factors
++    hop_distances.sort()
++    path_bcs.sort()
++    median_hops = hop_distances[len(hop_distances) // 2] if hop_distances else 1
++    median_bc = path_bcs[len(path_bcs) // 2] if path_bcs else 1.0
++
++    # Avoid division by zero
++    if median_hops == 0:
++        median_hops = 1
++    if median_bc == 0:
++        median_bc = 1.0
++
++    beta = 1.0 - alpha
++
++    scored = []
++    for name, vid, hops, path, avg_bc, level in results:
++        dist_factor = 1.0 / (1.0 + hops / median_hops)
++        specificity = 1.0 / (1.0 + avg_bc / median_bc)
++        level_bonus = 0.1 if level == 4 else 0.0
++        score = alpha * dist_factor + beta * specificity + level_bonus
++        scored.append((name, vid, score, hops, path))
++
++    scored.sort(key=lambda x: -x[2])
++    return scored
++
++
++def score_entries_flow(graph: ig.Graph, entries: List[Tuple[str, int, int, int]],
++                       target_vid: int) -> List[Tuple[str, int, float, int, List[int]]]:
++    """Score dispatch entries using Network Max-Flow.
++
++    Theory: Ford-Fulkerson (1956), "Maximal flow through a network"
++
++    Max-flow from entry to target measures structural connectivity.
++    Entries with higher max-flow have more edge-disjoint paths.
++
++    Returns sorted list of (name, vid, score, hops, path) by score descending.
++    """
++    print("  Computing max-flow for entry scoring...", flush=True)
++
++    results = []
++    hop_distances = []
++    flow_values = []
++
++    for name, vid, level, hops in entries:
++        try:
++            mf = graph.maxflow(vid, target_vid)
++            flow_val = mf.value
++        except Exception:
++            flow_val = 0.0
++
++        try:
++            path = graph.get_shortest_paths(vid, to=target_vid, mode='out')[0]
++            if not path or len(path) <= 1:
++                continue
++        except Exception:
++            continue
++
++        hop_distances.append(hops)
++        flow_values.append(flow_val)
++        results.append((name, vid, hops, path, flow_val, level))
++
++    if not results:
++        return []
++
++    # Normalize
++    hop_distances.sort()
++    flow_values.sort()
++    median_hops = hop_distances[len(hop_distances) // 2] if hop_distances else 1
++    max_flow = max(flow_values) if flow_values else 1.0
++
++    if median_hops == 0:
++        median_hops = 1
++    if max_flow == 0:
++        max_flow = 1.0
++
++    alpha = 0.4
++
++    scored = []
++    for name, vid, hops, path, flow_val, level in results:
++        dist_factor = 1.0 / (1.0 + hops / median_hops)
++        flow_factor = flow_val / max_flow
++        level_bonus = 0.1 if level == 4 else 0.0
++        score = alpha * dist_factor + (1.0 - alpha) * flow_factor + level_bonus
++        scored.append((name, vid, score, hops, path))
++
++    scored.sort(key=lambda x: -x[2])
++    return scored
++
++
++# ============================================================================
++# Graph loading
++# ============================================================================
++
++def load_callgraph(callgraph_path: str) -> Tuple[ig.Graph, Dict[str, int], Dict[int, str]]:
++    """Load callgraph.csv into an igraph Graph.
++
++    Returns:
++        graph: igraph directed graph
++        name_to_vid: mapping from function name to vertex ID
++        vid_to_name: mapping from vertex ID to function name
++    """
++    print(f"Loading callgraph from {callgraph_path}...", flush=True)
++    t0 = time.time()
++
++    # Read edges
++    edges = []
++    edge_set = set()  # Track unique edges
++    callers = set()
++    callees = set()
++
++    with open(callgraph_path) as f:
++        reader = csv.DictReader(f)
++        for row in reader:
++            caller = row['caller_name']
++            callee = row['callee_name']
++            edge = (caller, callee)
++            if edge not in edge_set:
++                edge_set.add(edge)
++                edges.append(edge)
++                callers.add(caller)
++                callees.add(callee)
++
++    # Build vertex list
++    all_funcs = callers | callees
++    func_list = sorted(all_funcs)
++    name_to_vid = {name: i for i, name in enumerate(func_list)}
++    vid_to_name = {i: name for i, name in enumerate(func_list)}
++
++    # Build graph
++    edge_pairs = [(name_to_vid[c], name_to_vid[e]) for c, e in edges]
++    graph = ig.Graph(n=len(func_list), directed=True)
++    graph.add_edges(edge_pairs)
++    graph.vs['name'] = func_list
++
++    t1 = time.time()
++    print(f"  Loaded {graph.vcount()} vertices, {graph.ecount()} edges in {t1-t0:.1f}s",
++          flush=True)
++
++    return graph, name_to_vid, vid_to_name
++
++
++# ============================================================================
++# Method 1: Graph exploration
++# ============================================================================
++
++def method_graph_exploration(graph: ig.Graph, vid_to_name: Dict[int, str],
++                              top_k: int = 50) -> Dict:
++    """Compute in-degree and betweenness centrality top-k functions."""
++    print("\n=== Method 1: Graph Exploration ===", flush=True)
++    t0 = time.time()
++
++    # In-degree
++    in_degrees = graph.indegree()
++    in_degree_pairs = [(vid_to_name[i], d) for i, d in enumerate(in_degrees)]
++    in_degree_pairs.sort(key=lambda x: -x[1])
++    top_in_degree = in_degree_pairs[:top_k]
++
++    print(f"  Top {top_k} in-degree functions:", flush=True)
++    for name, deg in top_in_degree[:20]:
++        print(f"    {name}: {deg}", flush=True)
++
++    # Betweenness centrality (with cutoff for performance)
++    print(f"  Computing betweenness centrality (may take a while)...", flush=True)
++    try:
++        betweenness = graph.betweenness(directed=True, cutoff=5)
++        betweenness_pairs = [(vid_to_name[i], b) for i, b in enumerate(betweenness)]
++        betweenness_pairs.sort(key=lambda x: -x[1])
++        top_betweenness = betweenness_pairs[:top_k]
++
++        print(f"  Top {top_k} betweenness centrality functions:", flush=True)
++        for name, bc in top_betweenness[:20]:
++            print(f"    {name}: {bc:.1f}", flush=True)
++    except Exception as e:
++        print(f"  Betweenness computation failed: {e}", flush=True)
++        top_betweenness = []
++
++    t1 = time.time()
++    print(f"  Completed in {t1-t0:.1f}s", flush=True)
++
++    return {
++        "top_in_degree": top_in_degree,
++        "top_betweenness": top_betweenness,
++        "time_s": t1 - t0,
++    }
++
++
++# ============================================================================
++# Method 2: Real entry filtering
++# ============================================================================
++
++def method_real_entries(graph: ig.Graph, name_to_vid: Dict[str, int],
++                        vid_to_name: Dict[int, str]) -> Dict:
++    """Filter source nodes to real entries (syscall/module_init/IRQ)."""
++    print("\n=== Method 2: Real Entry Filtering ===", flush=True)
++    t0 = time.time()
++
++    # Find source nodes (callers that are never callees)
++    callers = set()
++    callees = set()
++    for edge in graph.es:
++        callers.add(edge.source)
++        callees.add(edge.target)
++    source_vids = callers - callees
++
++    # Categorize source nodes
++    syscall_entries = []
++    module_inits = []
++    irq_handlers = []
++    other_sources = []
++
++    for vid in source_vids:
++        name = vid_to_name[vid]
++        if is_syscall_entry(name):
++            syscall_entries.append(name)
++        elif is_module_init(name):
++            module_inits.append(name)
++        elif is_irq_handler(name):
++            irq_handlers.append(name)
++        else:
++            other_sources.append(name)
++
++    real_entries = syscall_entries + module_inits + irq_handlers
++
++    print(f"  Total source nodes: {len(source_vids)}", flush=True)
++    print(f"  Syscall entries: {len(syscall_entries)}", flush=True)
++    print(f"  Module init: {len(module_inits)}", flush=True)
++    print(f"  IRQ handlers: {len(irq_handlers)}", flush=True)
++    print(f"  Other (filtered out): {len(other_sources)}", flush=True)
++    print(f"  Real entries total: {len(real_entries)}", flush=True)
++
++    t1 = time.time()
++    print(f"  Completed in {t1-t0:.1f}s", flush=True)
++
++    return {
++        "total_source_nodes": len(source_vids),
++        "syscall_entries": len(syscall_entries),
++        "module_inits": len(module_inits),
++        "irq_handlers": len(irq_handlers),
++        "other_sources": len(other_sources),
++        "real_entry_count": len(real_entries),
++        "real_entries_sample": sorted(real_entries)[:20],
++        "time_s": t1 - t0,
++    }
++
++
++# ============================================================================
++# Method 3: Forward dominator chain (baseline)
++# ============================================================================
++
++def method_forward_dominator(graph: ig.Graph, name_to_vid: Dict[str, int],
++                              vid_to_name: Dict[int, str], target: str,
++                              entries: List[str], timeout: int = 3600) -> Dict:
++    """Compute forward dominator chains from entries to target."""
++    print("\n=== Method 3: Forward Dominator Chain ===", flush=True)
++    t0 = time.time()
++
++    if target not in name_to_vid:
++        print(f"  Target '{target}' not found in graph", flush=True)
++        return {"error": "target_not_found", "time_s": 0}
++
++    target_vid = name_to_vid[target]
++    chains = []
++    func_freq = Counter()
++    reachable_count = 0
++
++    for entry_name in entries:
++        if time.time() - t0 > timeout:
++            print(f"  Timeout reached after {len(chains)} entries", flush=True)
++            break
++
++        if entry_name not in name_to_vid:
++            continue
++
++        entry_vid = name_to_vid[entry_name]
++
++        # Check reachability
++        try:
++            reachable = graph.bfs(entry_vid, mode='out')[0]
++            if target_vid not in reachable:
++                continue
++        except:
++            continue
++
++        reachable_count += 1
++
++        # Compute dominator tree
++        try:
++            dom = graph.dominator(entry_vid, mode='out')
++        except:
++            continue
++
++        # Walk from target to entry
++        chain_vids = []
++        current = target_vid
++        visited = set()
++        while current != entry_vid and current != -1 and current not in visited:
++            visited.add(current)
++            chain_vids.append(current)
++            parent = dom[current]
++            if parent == -1 or parent == current:
++                break
++            current = parent
++
++        if current == entry_vid:
++            chain_vids.append(entry_vid)
++
++        chain_vids.reverse()
++
++        # Convert to names
++        chain = [vid_to_name[vid] for vid in chain_vids]
++        chains.append(chain)
++
++        # Count frequency
++        for func in chain:
++            func_freq[func] += 1
++
++    # Sort by frequency
++    sorted_funcs = func_freq.most_common()
++
++    print(f"  Reachable entries: {reachable_count}/{len(entries)}", flush=True)
++    print(f"  Chains computed: {len(chains)}", flush=True)
++    if sorted_funcs:
++        print(f"  Top waypoints:", flush=True)
++        for func, freq in sorted_funcs[:15]:
++            ratio = freq / len(chains) if chains else 0
++            print(f"    {func}: {freq} ({ratio:.0%})", flush=True)
++
++    t1 = time.time()
++    print(f"  Completed in {t1-t0:.1f}s", flush=True)
++
++    return {
++        "reachable_entries": reachable_count,
++        "chains_computed": len(chains),
++        "avg_chain_length": sum(len(c) for c in chains) / len(chains) if chains else 0,
++        "top_waypoints": sorted_funcs[:30],
++        "time_s": t1 - t0,
++    }
++
++
++# ============================================================================
++# Method 4: Post-dominator chain
++# ============================================================================
++
++def method_post_dominator(graph: ig.Graph, name_to_vid: Dict[str, int],
++                           vid_to_name: Dict[int, str], target: str,
++                           entries: List[str], timeout: int = 3600) -> Dict:
++    """Compute post-dominator chain from target (reverse dominator tree)."""
++    print("\n=== Method 4: Post-Dominator Chain ===", flush=True)
++    t0 = time.time()
++
++    if target not in name_to_vid:
++        print(f"  Target '{target}' not found in graph", flush=True)
++        return {"error": "target_not_found", "time_s": 0}
++
++    target_vid = name_to_vid[target]
++
++    # Compute post-dominator tree (dominators on reverse graph)
++    # This finds nodes that MUST be passed through to reach the target
++    try:
++        # mode='in' gives post-dominators
++        dom = graph.dominator(target_vid, mode='in')
++    except Exception as e:
++        print(f"  Post-dominator computation failed: {e}", flush=True)
++        return {"error": str(e), "time_s": time.time() - t0}
++
++    # Build post-dominator chain from target
++    # Walk backwards through post-dominator tree
++    chain_vids = []
++    current = target_vid
++    visited = set()
++    while current != -1 and current not in visited:
++        visited.add(current)
++        chain_vids.append(current)
++        parent = dom[current]
++        if parent == -1 or parent == current:
++            break
++        current = parent
++
++    chain = [vid_to_name[vid] for vid in chain_vids]
++
++    print(f"  Post-dominator chain from target:", flush=True)
++    for i, func in enumerate(chain):
++        print(f"    {'  ' * i}{func}", flush=True)
++
++    # For each entry, find the intersection with post-dominator chain
++    entry_intersections = {}
++    for entry_name in entries:
++        if entry_name not in name_to_vid:
++            continue
++        entry_vid = name_to_vid[entry_name]
++
++        # Check if entry can reach target
++        try:
++            reachable = graph.bfs(entry_vid, mode='out')[0]
++            if target_vid not in reachable:
++                continue
++        except:
++            continue
++
++        # Find which post-dominator nodes are on the path from entry to target
++        # We do this by checking if the post-dominator node is reachable from entry
++        intersection = []
++        for func in chain:
++            func_vid = name_to_vid[func]
++            try:
++                func_reachable = graph.bfs(entry_vid, mode='out')[0]
++                if func_vid in func_reachable:
++                    intersection.append(func)
++            except:
++                continue
++
++        if intersection:
++            entry_intersections[entry_name] = intersection
++
++    # Aggregate frequency
++    func_freq = Counter()
++    for entry, intersection in entry_intersections.items():
++        for func in intersection:
++            func_freq[func] += 1
++
++    sorted_funcs = func_freq.most_common()
++
++    print(f"\n  Entries with post-dominator intersection: {len(entry_intersections)}", flush=True)
++    if sorted_funcs:
++        print(f"  Top post-dominator waypoints:", flush=True)
++        for func, freq in sorted_funcs[:15]:
++            ratio = freq / len(entry_intersections) if entry_intersections else 0
++            print(f"    {func}: {freq} ({ratio:.0%})", flush=True)
++
++    t1 = time.time()
++    print(f"  Completed in {t1-t0:.1f}s", flush=True)
++
++    return {
++        "post_dominator_chain": chain,
++        "entries_with_intersection": len(entry_intersections),
++        "top_waypoints": sorted_funcs[:30],
++        "time_s": t1 - t0,
++    }
++
++
++# ============================================================================
++# Method 5: Path frequency analysis
++# ============================================================================
++
++def method_path_frequency(graph: ig.Graph, name_to_vid: Dict[str, int],
++                           vid_to_name: Dict[int, str], target: str,
++                           entries: List[str], timeout: int = 3600,
++                           max_paths: int = 1000,
++                           filter_set: Set[str] = None) -> Dict:
++    """Find shortest paths from entries to target, extract layered waypoints.
++
++    Key improvement: Instead of just counting frequency, we now select waypoints
++    at different DEPTHS of the call chain to ensure differentiation:
++    - Entry layer (0-20% of path length)
++    - Shallow layer (20-40%)
++    - Mid layer (40-60%)
++    - Deep layer (60-80%)
++    - Near-target layer (80-100%)
++
++    For each layer, we select the most common function across all paths.
++    This ensures waypoints are at different stages and not consecutive.
++    """
++    print("\n=== Method 5: Layered Path Frequency Analysis ===", flush=True)
++    if filter_set:
++        print(f"  Filtering {len(filter_set)} universal connectors", flush=True)
++    t0 = time.time()
++
++    if target not in name_to_vid:
++        print(f"  Target '{target}' not found in graph", flush=True)
++        return {"error": "target_not_found", "time_s": 0}
++
++    target_vid = name_to_vid[target]
++    all_paths = []
++
++    # Layer-based frequency counting
++    # Layers: entry(0-0.2), shallow(0.2-0.4), mid(0.4-0.6), deep(0.6-0.8), near(0.8-1.0)
++    layer_names = ['entry', 'shallow', 'mid', 'deep', 'near']
++    layer_freq = {name: Counter() for name in layer_names}
++    # Also track overall frequency
++    overall_freq = Counter()
++    # Track which functions appear at which positions
++    func_positions = {}  # func_name -> list of normalized positions
++
++    for entry_name in entries:
++        if time.time() - t0 > timeout:
++            print(f"  Timeout reached after {len(entries)} entries", flush=True)
++            break
++
++        if entry_name not in name_to_vid:
++            continue
++
++        entry_vid = name_to_vid[entry_name]
++
++        # Find shortest path using BFS
++        try:
++            path = graph.get_shortest_paths(entry_vid, to=target_vid, mode='out')[0]
++            if path and len(path) > 1:
++                all_paths.append(path)
++                path_len = len(path)
++
++                # For each intermediate function, determine its layer
++                for pos, vid in enumerate(path[1:-1], start=1):
++                    func_name = vid_to_name[vid]
++
++                    # Skip filtered functions
++                    if filter_set and func_name in filter_set:
++                        continue
++
++                    # Normalize position to [0, 1]
++                    norm_pos = pos / path_len
++
++                    # Determine layer
++                    if norm_pos < 0.2:
++                        layer = 'entry'
++                    elif norm_pos < 0.4:
++                        layer = 'shallow'
++                    elif norm_pos < 0.6:
++                        layer = 'mid'
++                    elif norm_pos < 0.8:
++                        layer = 'deep'
++                    else:
++                        layer = 'near'
++
++                    layer_freq[layer][func_name] += 1
++                    overall_freq[func_name] += 1
++
++                    # Track positions
++                    if func_name not in func_positions:
++                        func_positions[func_name] = []
++                    func_positions[func_name].append(norm_pos)
++        except:
++            continue
++
++    num_paths = len(all_paths) if all_paths else 1
++
++    # Track syscall entries that appear at the start of paths
++    # Also track the shortest path from each syscall entry
++    syscall_entry_paths = {}  # entry -> (path_length, path)
++    for path in all_paths:
++        if path:
++            first_func = vid_to_name[path[0]]
++            if is_syscall_entry(first_func):
++                if first_func not in syscall_entry_paths or len(path) < syscall_entry_paths[first_func][0]:
++                    syscall_entry_paths[first_func] = (len(path), path)
++
++    # For entry layer, use the syscall entry with the shortest path to target
++    entry_syscall = None
++    if syscall_entry_paths:
++        # Sort by path length, then by frequency
++        sorted_entries = sorted(syscall_entry_paths.items(), key=lambda x: x[1][0])
++        entry_syscall = sorted_entries[0][0]
++
++    # For each layer, find the most common function
++    layer_waypoints = {}
++    for layer in layer_names:
++        if layer_freq[layer]:
++            if layer == 'entry' and entry_syscall:
++                # For entry layer, use the syscall entry with shortest path
++                top_func = entry_syscall
++                top_freq = len([p for p in all_paths if p and vid_to_name[p[0]] == entry_syscall])
++                ratio = top_freq / num_paths
++                avg_pos = 0.0  # Entry is always at position 0
++            else:
++                # For other layers, use the most common function
++                top_func, top_freq = layer_freq[layer].most_common(1)[0]
++                ratio = top_freq / num_paths
++                avg_pos = sum(func_positions.get(top_func, [0])) / len(func_positions.get(top_func, [1]))
++
++            layer_waypoints[layer] = {
++                'func': top_func,
++                'freq': top_freq,
++                'ratio': ratio,
++                'avg_pos': avg_pos,
++            }
++
++    # Also get overall top functions (for comparison)
++    overall_top = overall_freq.most_common(20)
++
++    # Select final waypoints: one per layer, but ensure no consecutive functions
++    final_waypoints = []
++    prev_func = None
++    for layer in layer_names:
++        if layer in layer_waypoints:
++            wp = layer_waypoints[layer]
++            func = wp['func']
++
++            # Skip if this function is the same as the previous one
++            if func == prev_func:
++                continue
++
++            # Skip if this function is too close to the previous one in the call chain
++            # (check if they appear consecutively in any path)
++            if prev_func and _are_consecutive(graph, name_to_vid, vid_to_name, prev_func, func):
++                continue
++
++            final_waypoints.append({
++                'layer': layer,
++                'func': func,
++                'freq': wp['freq'],
++                'ratio': wp['ratio'],
++                'avg_pos': wp['avg_pos'],
++            })
++            prev_func = func
++
++    # If we have fewer than 3 waypoints, add more from overall top functions
++    if len(final_waypoints) < 3:
++        for func, freq in overall_top:
++            if any(wp['func'] == func for wp in final_waypoints):
++                continue
++            if filter_set and func in filter_set:
++                continue
++
++            ratio = freq / num_paths
++            if ratio < 0.10:
++                continue
++
++            avg_pos = sum(func_positions.get(func, [0])) / len(func_positions.get(func, [1]))
++
++            # Find which layer this function belongs to
++            layer = _get_layer(avg_pos)
++
++            # Check if we already have a waypoint in this layer
++            if any(wp['layer'] == layer for wp in final_waypoints):
++                continue
++
++            final_waypoints.append({
++                'layer': layer,
++                'func': func,
++                'freq': freq,
++                'ratio': ratio,
++                'avg_pos': avg_pos,
++            })
++
++            if len(final_waypoints) >= 5:
++                break
++
++    # Sort by average position (entry -> target)
++    final_waypoints.sort(key=lambda x: x['avg_pos'])
++
++    # Print results
++    print(f"  Paths found: {len(all_paths)}", flush=True)
++    print(f"  Filter set: {len(filter_set) if filter_set else 0}", flush=True)
++    print(f"  Layer waypoints: {len(final_waypoints)}", flush=True)
++
++    print(f"\n  Layer-based waypoints:", flush=True)
++    for wp in final_waypoints:
++        print(f"    [{wp['layer']:8s}] {wp['func']}: {wp['freq']} ({wp['ratio']:.0%}), "
++              f"avg_pos={wp['avg_pos']:.2f}", flush=True)
++
++    print(f"\n  Overall top functions:", flush=True)
++    for func, freq in overall_top[:10]:
++        ratio = freq / num_paths
++        avg_pos = sum(func_positions.get(func, [0])) / len(func_positions.get(func, [1]))
++        print(f"    {func}: {freq} ({ratio:.0%}), avg_pos={avg_pos:.2f}", flush=True)
++
++    # Show example paths
++    print(f"\n  Example paths:", flush=True)
++    for i, path_vids in enumerate(all_paths[:3]):
++        path_names = [vid_to_name[vid] for vid in path_vids]
++        # Show first 10 functions
++        path_display = path_names[:10]
++        suffix = '...' if len(path_names) > 10 else ''
++        print(f"    Path {i+1} (len={len(path_names)}): {' -> '.join(path_display)}{suffix}",
++              flush=True)
++
++    t1 = time.time()
++    print(f"  Completed in {t1-t0:.1f}s", flush=True)
++
++    return {
++        "paths_found": len(all_paths),
++        "avg_path_length": sum(len(p) for p in all_paths) / len(all_paths) if all_paths else 0,
++        "layer_waypoints": final_waypoints,
++        "overall_top": [(func, freq, freq/num_paths) for func, freq in overall_top[:20]],
++        "example_paths": [[vid_to_name[vid] for vid in p] for p in all_paths[:5]],
++        "time_s": t1 - t0,
++    }
++
++
++def _are_consecutive(graph: ig.Graph, name_to_vid: Dict[str, int],
++                      vid_to_name: Dict[int, str], func1: str, func2: str) -> bool:
++    """Check if two functions appear consecutively in the call graph."""
++    if func1 not in name_to_vid or func2 not in name_to_vid:
++        return False
++
++    vid1 = name_to_vid[func1]
++    vid2 = name_to_vid[func2]
++
++    # Check if func1 calls func2
++    successors = graph.successors(vid1)
++    if vid2 in successors:
++        return True
++
++    # Check if func2 calls func1
++    successors = graph.successors(vid2)
++    if vid1 in successors:
++        return True
++
++    return False
++
++
++def _get_layer(avg_pos: float) -> str:
++    """Get layer name from average position."""
++    if avg_pos < 0.2:
++        return 'entry'
++    elif avg_pos < 0.4:
++        return 'shallow'
++    elif avg_pos < 0.6:
++        return 'mid'
++    elif avg_pos < 0.8:
++        return 'deep'
++    else:
++        return 'near'
++
++
++# ============================================================================
++# Method 5v2: K-shortest paths + dispatch entries
++# ============================================================================
++
++def method_path_frequency_v2(graph: ig.Graph, name_to_vid: Dict[str, int],
++                              vid_to_name: Dict[int, str], target: str,
++                              timeout: int = 3600, k_paths: int = 10,
++                              min_waypoints: int = 3, max_waypoints: int = 10,
++                              filter_set: Set[str] = None,
++                              use_community: bool = False,
++                              entry_override: str = None) -> Dict:
++    """V2: K-shortest paths + dispatch entries + multi-layer filtering.
++
++    Improvements over v1:
++    - Uses __sys_*/__do_sys_* dispatch entries instead of __ia32_sys_*
++    - K-shortest paths per entry for path diversity
++    - Non-consecutive waypoint selection
++    - Differentiation-based filtering when exceeding max_waypoints
++    """
++    print("\n=== Method 5v2: K-Shortest Paths + Dispatch Entries ===", flush=True)
++    if filter_set:
++        print(f"  Filtering {len(filter_set)} noise functions", flush=True)
++    t0 = time.time()
++
++    if target not in name_to_vid:
++        print(f"  Target '{target}' not found in graph", flush=True)
++        return {"error": "target_not_found", "time_s": 0}
++
++    target_vid = name_to_vid[target]
++
++    # Phase 2: Identify dispatch entries (or use override)
++    if entry_override:
++        if entry_override not in name_to_vid:
++            print(f"  Entry '{entry_override}' not found in graph", flush=True)
++            return {"error": "entry_not_found", "time_s": 0}
++        entry_vid = name_to_vid[entry_override]
++        dispatch_entries = [(entry_override, entry_vid, 0)]
++        print(f"  Phase 2: Using single entry override: {entry_override}", flush=True)
++    else:
++        print("  Phase 2: Identifying dispatch entries...", flush=True)
++        dispatch_entries = identify_dispatch_entries(graph, name_to_vid, vid_to_name, target_vid)
++    print(f"  Found {len(dispatch_entries)} dispatch entries reachable to target", flush=True)
++    level4 = [e for e in dispatch_entries if e[2] == 4]
++    level3 = [e for e in dispatch_entries if e[2] == 3]
++    print(f"    Level 4 (__sys_*): {len(level4)}", flush=True)
++    print(f"    Level 3 (__do_sys_*): {len(level3)}", flush=True)
++
++    if not dispatch_entries:
++        print("  No dispatch entries found, falling back to all syscall entries", flush=True)
++        # Single reverse BFS from target for reachability
++        try:
++            ancestors = set(graph.bfs(target_vid, mode='in')[0])
++        except Exception:
++            ancestors = set()
++        for vid in range(graph.vcount()):
++            name = vid_to_name[vid]
++            if is_syscall_entry(name) and vid in ancestors:
++                dispatch_entries.append((name, vid, 1))
++
++    # Phase 3: K-shortest paths
++    print(f"  Phase 3: Finding K={k_paths} shortest paths per entry...", flush=True)
++    all_paths = []
++    entry_path_count = {}
++
++    for entry_name, entry_vid, level in dispatch_entries:
++        if time.time() - t0 > timeout:
++            print(f"  Timeout reached after {len(all_paths)} paths", flush=True)
++            break
++
++        try:
++            paths = graph.get_k_shortest_paths(entry_vid, to=target_vid,
++                                                k=k_paths, mode='out')
++            valid_paths = [p for p in paths if p and len(p) > 1]
++            all_paths.extend(valid_paths)
++            entry_path_count[entry_name] = len(valid_paths)
++        except Exception:
++            continue
++
++    print(f"  Total paths found: {len(all_paths)}", flush=True)
++    print(f"  Entries with paths: {len(entry_path_count)}", flush=True)
++
++    if not all_paths:
++        return {"error": "no_paths_found", "time_s": time.time() - t0}
++
++    # Phase 4: Frequency counting + filtering
++    print("  Phase 4: Computing frequency and filtering...", flush=True)
++    func_freq = Counter()
++    func_positions = {}
++
++    for path in all_paths:
++        path_len = len(path)
++        for pos, vid in enumerate(path[1:-1], start=1):
++            func_name = vid_to_name[vid]
++
++            if filter_set and func_name in filter_set:
++                continue
++
++            func_freq[func_name] += 1
++            norm_pos = pos / path_len
++            if func_name not in func_positions:
++                func_positions[func_name] = []
++            func_positions[func_name].append(norm_pos)
++
++    # Track dispatch entry as first waypoint candidate
++    entry_func_freq = Counter()
++    for path in all_paths:
++        if path:
++            entry_name = vid_to_name[path[0]]
++            if not (filter_set and entry_name in filter_set):
++                entry_func_freq[entry_name] += 1
++
++    # Community detection filter (optional)
++    if use_community and func_freq:
++        print("  Phase 4b: Community detection filter...", flush=True)
++        try:
++            communities = graph.community_multilevel()
++            target_comm = communities.membership[target_vid]
++            community_filtered = set()
++            for func in func_freq:
++                func_vid = name_to_vid.get(func)
++                if func_vid is not None and communities.membership[func_vid] == target_comm:
++                    community_filtered.add(func)
++            before_count = len(func_freq)
++            func_freq = Counter({f: c for f, c in func_freq.items() if f in community_filtered})
++            print(f"  Community filter: {before_count} -> {len(func_freq)} candidates", flush=True)
++        except Exception as e:
++            print(f"  Community detection failed: {e}", flush=True)
++
++    # Phase 5: Waypoint selection
++    print("  Phase 5: Selecting waypoints...", flush=True)
++
++    # Combine entry functions with intermediate functions
++    all_candidate_funcs = set(func_freq.keys())
++    if entry_func_freq:
++        top_entry, top_entry_freq = entry_func_freq.most_common(1)[0]
++        if re.match(r'^__sys_|^__do_sys_', top_entry):
++            all_candidate_funcs.add(top_entry)
++            if top_entry not in func_freq:
++                func_freq[top_entry] = top_entry_freq
++                func_positions[top_entry] = [0.0]
++
++    sorted_candidates = sorted(all_candidate_funcs, key=lambda f: -func_freq[f])
++
++    # Select with non-consecutive and differentiation constraints
++    selected = []
++    for func in sorted_candidates:
++        if len(selected) >= max_waypoints:
++            break
++
++        if any(_are_consecutive(graph, name_to_vid, vid_to_name, func, s)
++               for s in selected):
++            continue
++
++        avg_pos = sum(func_positions.get(func, [0.5])) / len(func_positions.get(func, [0.5]))
++        too_close = False
++        for s in selected:
++            s_avg = sum(func_positions.get(s, [0.5])) / len(func_positions.get(s, [0.5]))
++            if abs(avg_pos - s_avg) < 0.15:
++                too_close = True
++                break
++        if too_close:
++            continue
++
++        selected.append(func)
++
++    # Relax differentiation if below min
++    if len(selected) < min_waypoints:
++        for func in sorted_candidates:
++            if func in selected:
++                continue
++            if len(selected) >= min_waypoints:
++                break
++            if not any(_are_consecutive(graph, name_to_vid, vid_to_name, func, s)
++                       for s in selected):
++                selected.append(func)
++
++    # Relax all constraints if still below min
++    if len(selected) < min_waypoints:
++        for func in sorted_candidates:
++            if func in selected:
++                continue
++            if len(selected) >= min_waypoints:
++                break
++            selected.append(func)
++
++    # Build final waypoint list
++    final_waypoints = []
++    for func in selected:
++        avg_pos = sum(func_positions.get(func, [0.5])) / len(func_positions.get(func, [0.5]))
++        final_waypoints.append({
++            'func': func,
++            'freq': func_freq.get(func, 0),
++            'ratio': func_freq.get(func, 0) / len(all_paths),
++            'avg_pos': avg_pos,
++        })
++
++    final_waypoints.sort(key=lambda x: x['avg_pos'])
++
++    print(f"  Selected {len(final_waypoints)} waypoints:", flush=True)
++    for wp in final_waypoints:
++        print(f"    {wp['func']}: freq={wp['freq']} ({wp['ratio']:.0%}), "
++              f"avg_pos={wp['avg_pos']:.2f}", flush=True)
++
++    print(f"\n  Example paths:", flush=True)
++    for i, path_vids in enumerate(all_paths[:3]):
++        path_names = [vid_to_name[vid] for vid in path_vids]
++        path_display = path_names[:10]
++        suffix = '...' if len(path_names) > 10 else ''
++        print(f"    Path {i+1} (len={len(path_names)}): {' -> '.join(path_display)}{suffix}",
++              flush=True)
++
++    t1 = time.time()
++    print(f"  Completed in {t1-t0:.1f}s", flush=True)
++
++    return {
++        "paths_found": len(all_paths),
++        "entries_with_paths": len(entry_path_count),
++        "avg_path_length": sum(len(p) for p in all_paths) / len(all_paths),
++        "waypoints": final_waypoints,
++        "dispatch_entries_used": list(entry_path_count.keys())[:20],
++        "filter_set_size": len(filter_set) if filter_set else 0,
++        "community_filter_used": use_community,
++        "time_s": t1 - t0,
++    }
++
++
++# ============================================================================
++# Method 5v3: Entry discovery with Betweenness Centrality / Max-Flow scoring
++# ============================================================================
++
++def method_path_frequency_v3(graph: ig.Graph, name_to_vid: Dict[str, int],
++                              vid_to_name: Dict[int, str], target: str,
++                              callgraph_path: str = None,
++                              timeout: int = 3600, k_paths: int = 10,
++                              min_waypoints: int = 3, max_waypoints: int = 10,
++                              filter_set: Set[str] = None,
++                              entry_method: str = "bc",
++                              entry_top_n: int = 10,
++                              max_hops: int = 15,
++                              bc_array: List[float] = None) -> Dict:
++    """V3: Principled entry discovery + K-shortest paths + waypoint selection.
++
++    Two theoretically grounded methods for entry scoring:
++    - Method A (bc): Betweenness Centrality path scoring (Freeman, 1977)
++    - Method B (flow): Network Max-Flow (Ford-Fulkerson, 1956)
++
++    Both use backward BFS from target to find dispatch entries, then score
++    entries by path properties. Top-N entries are used for K-shortest paths.
++    """
++    print("\n=== Method 5v3: Principled Entry Discovery ===", flush=True)
++    print(f"  Entry method: {entry_method}, top-N: {entry_top_n}, max-hops: {max_hops}", flush=True)
++    t0 = time.time()
++
++    if target not in name_to_vid:
++        print(f"  Target '{target}' not found in graph", flush=True)
++        return {"error": "target_not_found", "time_s": 0}
++
++    target_vid = name_to_vid[target]
++
++    # Phase 1: Backward BFS to find all reachable dispatch entries
++    print("  Phase 1: Backward BFS entry discovery...", flush=True)
++    all_entries = discover_reachable_entries(graph, vid_to_name, target_vid, max_hops)
++    print(f"  Found {len(all_entries)} dispatch entries within {max_hops} hops", flush=True)
++
++    if not all_entries:
++        return {"error": "no_entries_found", "time_s": time.time() - t0}
++
++    hop_counts = [e[3] for e in all_entries]
++    print(f"  Hop distance range: {min(hop_counts)}-{max(hop_counts)}, "
++          f"median={sorted(hop_counts)[len(hop_counts)//2]}", flush=True)
++
++    # Phase 2: Score entries using selected method
++    results_bc = None
++    results_flow = None
++
++    if entry_method in ("bc", "all"):
++        print("\n  Phase 2a: Betweenness Centrality scoring (Method A)...", flush=True)
++        results_bc = score_entries_bc(graph, all_entries, target_vid, vid_to_name,
++                                      bc_array=bc_array)
++        print(f"  BC: scored {len(results_bc)} entries", flush=True)
++        if results_bc:
++            print(f"  BC top-5:", flush=True)
++            for name, vid, score, hops, path in results_bc[:5]:
++                print(f"    {name}: score={score:.3f}, hops={hops}", flush=True)
++
++    if entry_method in ("flow", "all"):
++        print("\n  Phase 2b: Network Max-Flow scoring (Method B)...", flush=True)
++        results_flow = score_entries_flow(graph, all_entries, target_vid)
++        print(f"  Flow: scored {len(results_flow)} entries", flush=True)
++        if results_flow:
++            print(f"  Flow top-5:", flush=True)
++            for name, vid, score, hops, path in results_flow[:5]:
++                print(f"    {name}: score={score:.3f}, hops={hops}", flush=True)
++
++    # Phase 3: Select top entries and compute K-shortest paths
++    output = {"time_s": 0}  # Will be updated at end
++
++    for method_label, scored_entries in [("bc", results_bc), ("flow", results_flow)]:
++        if scored_entries is None:
++            continue
++
++        print(f"\n  Phase 3 ({method_label}): K-shortest paths from top {entry_top_n} entries...", flush=True)
++        top_entries = scored_entries[:entry_top_n]
++
++        all_paths = []
++        entry_path_count = {}
++        for name, vid, score, hops, _ in top_entries:
++            if time.time() - t0 > timeout:
++                print(f"  Timeout reached", flush=True)
++                break
++            try:
++                paths = graph.get_k_shortest_paths(vid, to=target_vid, k=k_paths, mode='out')
++                valid = [p for p in paths if p and len(p) > 1]
++                all_paths.extend(valid)
++                entry_path_count[name] = len(valid)
++            except Exception:
++                continue
++
++        print(f"  {method_label}: {len(all_paths)} paths from {len(entry_path_count)} entries", flush=True)
++
++        if not all_paths:
++            output[f"method_5v3_{method_label}"] = {"error": "no_paths", "time_s": time.time() - t0}
++            continue
++
++        # Phase 4: Frequency counting + filtering (reuse v2 logic)
++        func_freq = Counter()
++        func_positions = {}
++        for path in all_paths:
++            path_len = len(path)
++            for pos, vid in enumerate(path[1:-1], start=1):
++                func_name = vid_to_name[vid]
++                if filter_set and func_name in filter_set:
++                    continue
++                func_freq[func_name] += 1
++                norm_pos = pos / path_len
++                if func_name not in func_positions:
++                    func_positions[func_name] = []
++                func_positions[func_name].append(norm_pos)
++
++        # Phase 5: Waypoint selection (reuse v2 logic)
++        all_candidate_funcs = set(func_freq.keys())
++        sorted_candidates = sorted(all_candidate_funcs, key=lambda f: -func_freq[f])
++
++        selected = []
++        for func in sorted_candidates:
++            if len(selected) >= max_waypoints:
++                break
++            if any(_are_consecutive(graph, name_to_vid, vid_to_name, func, s) for s in selected):
++                continue
++            avg_pos = sum(func_positions.get(func, [0.5])) / len(func_positions.get(func, [0.5]))
++            too_close = any(
++                abs(avg_pos - sum(func_positions.get(s, [0.5])) / len(func_positions.get(s, [0.5]))) < 0.15
++                for s in selected
++            )
++            if too_close:
++                continue
++            selected.append(func)
++
++        # Relax if below min
++        if len(selected) < min_waypoints:
++            for func in sorted_candidates:
++                if func in selected or len(selected) >= min_waypoints:
++                    continue
++                if not any(_are_consecutive(graph, name_to_vid, vid_to_name, func, s) for s in selected):
++                    selected.append(func)
++        if len(selected) < min_waypoints:
++            for func in sorted_candidates:
++                if func in selected or len(selected) >= min_waypoints:
++                    continue
++                selected.append(func)
++
++        final_waypoints = []
++        for func in selected:
++            avg_pos = sum(func_positions.get(func, [0.5])) / len(func_positions.get(func, [0.5]))
++            final_waypoints.append({
++                'func': func, 'freq': func_freq.get(func, 0),
++                'ratio': func_freq.get(func, 0) / len(all_paths),
++                'avg_pos': avg_pos,
++            })
++        final_waypoints.sort(key=lambda x: x['avg_pos'])
++
++        print(f"  {method_label}: selected {len(final_waypoints)} waypoints:", flush=True)
++        for wp in final_waypoints:
++            print(f"    {wp['func']}: {wp['freq']} ({wp['ratio']:.0%}), pos={wp['avg_pos']:.2f}", flush=True)
++
++        output[f"method_5v3_{method_label}"] = {
++            "paths_found": len(all_paths),
++            "entries_used": list(entry_path_count.keys()),
++            "entry_scores": [(n, s, h) for n, _, s, h, _ in top_entries],
++            "waypoints": final_waypoints,
++            "time_s": time.time() - t0,
++        }
++
++    output["time_s"] = time.time() - t0
++    return output
++
++
++# ============================================================================
++# Method 7: Path-supported, location-resolved waypoint backbone
++# ============================================================================
++
++def parse_target_spec(target_spec: str) -> Tuple[str, Optional[str]]:
++    """Parse FUNC or FUNC@FILE:LINE without discarding the target location."""
++    if "@" not in target_spec:
++        return target_spec, None
++    func, location = target_spec.rsplit("@", 1)
++    if not func or not re.match(r"^.+:\d+$", location):
++        raise ValueError(
++            f"invalid target '{target_spec}'; expected FUNC or FUNC@FILE:LINE")
++    return func, location
++
++
++def load_callsite_metadata(callgraph_path: str) -> Tuple[Dict, Dict]:
++    """Load deterministic callsite and callee-definition frequency indexes."""
++    edge_callsites = defaultdict(Counter)
++    callee_defs = defaultdict(Counter)
++    with open(callgraph_path) as f:
++        reader = csv.DictReader(f)
++        for row in reader:
++            caller = row["caller_name"]
++            callee = row["callee_name"]
++            callsite = f'{row["callsite_file"]}:{row["callsite_line"]}'
++            callee_def = f'{row["callee_file"]}:{row["callee_line"]}'
++            edge_callsites[(caller, callee)][callsite] += 1
++            callee_defs[callee][callee_def] += 1
++    return edge_callsites, callee_defs
++
++
++def _counter_choice(counter: Counter) -> Optional[str]:
++    """Return the most frequent value with a deterministic lexical tie-break."""
++    if not counter:
++        return None
++    return min(counter, key=lambda value: (-counter[value], value))
++
++
++def _dispatch_base(name: str) -> str:
++    """Group __sys_foo and __do_sys_foo as the same primitive entry."""
++    for prefix in ("__sys_", "__do_sys_"):
++        if name.startswith(prefix):
++            return name[len(prefix):]
++    return name
++
++
++def _observed_connector_path(path_records: List[Tuple[str, List[int], float]],
++                             start_vid: int, end_vid: int,
++                             vid_to_name: Dict[int, str]) -> Optional[List[int]]:
++    """Choose a deterministic sampled subpath from start to end, if present."""
++    connectors = []
++    for _, path, _ in path_records:
++        try:
++            start_pos = path.index(start_vid)
++            end_pos = path.index(end_vid, start_pos + 1)
++        except ValueError:
++            continue
++        connector = path[start_pos:end_pos + 1]
++        names = tuple(vid_to_name[vid] for vid in connector)
++        connectors.append((len(connector), names, connector))
++    if not connectors:
++        return None
++    return min(connectors, key=lambda item: (item[0], item[1]))[2]
++
++
++def method_waypoint_backbone(graph: ig.Graph, name_to_vid: Dict[str, int],
++                             vid_to_name: Dict[int, str], target: str,
++                             callgraph_path: str, target_location: str = None,
++                             timeout: int = 3600, k_paths: int = 10,
++                             min_waypoints: int = 3,
++                             max_waypoints: int = 10,
++                             filter_set: Set[str] = None,
++                             entry_top_n: int = 10,
++                             max_hops: int = 15,
++                             entry_override: str = None,
++                             support_threshold: float = 0.25,
++                             min_position_gap: float = 0.12) -> Dict:
++    """Extract a deterministic, path-supported linear waypoint backbone.
++
++    Each selected intermediate must precede the next one on at least one
++    sampled entry-to-target path.  Paths from every selected entry contribute
++    total mass one, preventing an entry with more enumerated paths from
++    dominating the support score.  Syscall entries are returned separately as
++    cold-start hints; they are not mixed into the runtime waypoint chain.
++    """
++    print("\n=== Method 7: Path-Supported Waypoint Backbone ===", flush=True)
++    t0 = time.time()
++
++    if target not in name_to_vid:
++        print(f"  Target '{target}' not found in graph", flush=True)
++        return {"error": "target_not_found", "time_s": 0}
++    if not (0.0 <= support_threshold <= 1.0):
++        return {"error": "invalid_support_threshold", "time_s": 0}
++    if max_waypoints < 1:
++        return {"error": "invalid_waypoint_budget", "time_s": 0}
++
++    target_vid = name_to_vid[target]
++    edge_callsites, callee_defs = load_callsite_metadata(callgraph_path)
++
++    # Discover and de-duplicate dispatch layers for the same primitive syscall.
++    if entry_override:
++        if entry_override not in name_to_vid:
++            return {"error": "entry_not_found", "time_s": time.time() - t0}
++        entry_vid = name_to_vid[entry_override]
++        shortest = graph.get_shortest_paths(entry_vid, to=target_vid, mode="out")[0]
++        if not shortest:
++            return {"error": "entry_cannot_reach_target", "time_s": time.time() - t0}
++        discovered = [(entry_override, entry_vid, 0, len(shortest) - 1)]
++    else:
++        discovered = discover_reachable_entries(
++            graph, vid_to_name, target_vid, max_hops)
++
++    deduplicated = {}
++    for item in discovered:
++        name, _, level, hops = item
++        key = _dispatch_base(name)
++        previous = deduplicated.get(key)
++        if previous is None or (-level, hops, name) < (
++                -previous[2], previous[3], previous[0]):
++            deduplicated[key] = item
++    ranked_entries = sorted(
++        deduplicated.values(), key=lambda item: (item[3], -item[2], item[0]))
++    selected_entries = ranked_entries[:entry_top_n]
++    if not selected_entries:
++        return {"error": "no_entries_found", "time_s": time.time() - t0}
++
++    # Enumerate paths per entry first, then normalize each entry to mass one.
++    entry_paths = {}
++    for entry_name, entry_vid, _, _ in selected_entries:
++        if time.time() - t0 > timeout:
++            break
++        try:
++            paths = graph.get_k_shortest_paths(
++                entry_vid, to=target_vid, k=k_paths, mode="out")
++        except Exception:
++            continue
++        valid = [path for path in paths if path and len(path) > 1]
++        if valid:
++            # igraph may return equal paths when parallel edges exist.
++            unique = {tuple(path): path for path in valid}
++            entry_paths[entry_name] = [unique[key] for key in sorted(unique)]
++
++    if not entry_paths:
++        return {"error": "no_paths_found", "time_s": time.time() - t0}
++
++    path_records = []
++    for entry_name in sorted(entry_paths):
++        paths = entry_paths[entry_name]
++        weight = 1.0 / len(paths)
++        path_records.extend((entry_name, path, weight) for path in paths)
++    total_mass = float(len(entry_paths))
++
++    support_mass = Counter()
++    position_mass = Counter()
++    occurrence_count = Counter()
++    entry_occurrence = defaultdict(set)
++    precedence_mass = Counter()
++
++    for entry_name, path, weight in path_records:
++        path_len = max(1, len(path) - 1)
++        ordered = []
++        seen = set()
++        for pos, vid in enumerate(path[1:-1], start=1):
++            func = vid_to_name[vid]
++            if func in seen or (filter_set and func in filter_set) or is_wrapper(func):
++                continue
++            seen.add(func)
++            ordered.append(func)
++            support_mass[func] += weight
++            position_mass[func] += weight * (pos / path_len)
++            occurrence_count[func] += 1
++            entry_occurrence[func].add(entry_name)
++        for left_pos, left in enumerate(ordered):
++            for right in ordered[left_pos + 1:]:
++                precedence_mass[(left, right)] += weight
++
++    candidates = []
++    for func in sorted(support_mass):
++        mass = support_mass[func]
++        support = mass / total_mass
++        avg_pos = position_mass[func] / mass
++        candidates.append({
++            "func": func,
++            "support": support,
++            "score": support,
++            "avg_pos": avg_pos,
++            "path_occurrences": occurrence_count[func],
++            "entry_support": len(entry_occurrence[func]),
++        })
++    candidates.sort(key=lambda item: (
++        -item["score"], item["avg_pos"], item["func"]))
++    # Greedily build a chain, but never relax the observed precedence rule.
++    # The final target consumes one slot in the total runtime waypoint budget.
++    intermediate_budget = max(0, max_waypoints - 1)
++    desired_intermediates = max(0, min(min_waypoints - 1, intermediate_budget))
++    selected = []
++
++    def try_insert(candidate: Dict, gap: float) -> bool:
++        proposed = sorted(
++            selected + [candidate], key=lambda item: (item["avg_pos"], item["func"]))
++        for left, right in zip(proposed, proposed[1:]):
++            if right["avg_pos"] - left["avg_pos"] < gap:
++                return False
++            if precedence_mass[(left["func"], right["func"])] <= 0:
++                return False
++            # A direct caller/callee pair is usually one runtime event rather
++            # than two useful curriculum stages: once the callsite is hit, the
++            # callee is entered immediately.  Keep at least one connector node
++            # between selected intermediate waypoints.
++            if _are_consecutive(
++                    graph, name_to_vid, vid_to_name,
++                    left["func"], right["func"]):
++                return False
++        selected[:] = proposed
++        return True
++
++    for candidate in candidates:
++        if len(selected) >= intermediate_budget:
++            break
++        if candidate["support"] < support_threshold:
++            continue
++        try_insert(candidate, min_position_gap)
++
++    warnings = []
++    if len(selected) < desired_intermediates:
++        warnings.append(
++            f"only {len(selected)} path-consistent intermediate waypoints "
++            f"met support/spacing constraints; requested {desired_intermediates}")
++
++    # Resolve each intermediate to a callsite on an observed connector to the
++    # next selected waypoint.  The exact user-provided target site is retained.
++    resolved = []
++    chain_funcs = [item["func"] for item in selected] + [target]
++    for index, item in enumerate(selected):
++        func = item["func"]
++        next_func = chain_funcs[index + 1]
++        connector = _observed_connector_path(
++            path_records, name_to_vid[func], name_to_vid[next_func], vid_to_name)
++        if connector and len(connector) > 1:
++            immediate_callee = vid_to_name[connector[1]]
++            location = _counter_choice(edge_callsites[(func, immediate_callee)])
++            connector_names = [vid_to_name[vid] for vid in connector]
++        else:
++            location = None
++            connector_names = []
++        if not location:
++            location = "unknown:0"
++            warnings.append(f"no callsite location for waypoint {func}")
++        definitions = sorted(callee_defs.get(func, {}))
++        resolved.append({
++            **item,
++            "location": location,
++            "spec": f"{func}@{location}",
++            "next_waypoint": next_func,
++            "connector_path": connector_names,
++            "definition_locations": definitions,
++            "ambiguous_symbol": len(definitions) > 1,
++            "below_support_threshold": False,
++        })
++
++    if target_location:
++        final_location = target_location
++    else:
++        final_location = _counter_choice(callee_defs.get(target, Counter()))
++        if not final_location:
++            final_location = "unknown:0"
++            warnings.append(f"no definition location for target {target}")
++    target_definitions = sorted(callee_defs.get(target, {}))
++    resolved.append({
++        "func": target,
++        "location": final_location,
++        "spec": f"{target}@{final_location}",
++        "support": 1.0,
++        "score": 1.0,
++        "avg_pos": 1.0,
++        "is_final_target": True,
++        "definition_locations": target_definitions,
++        "ambiguous_symbol": len(target_definitions) > 1,
++    })
++
++    cold_start_entries = []
++    for name, _, level, hops in selected_entries:
++        if name not in entry_paths:
++            continue
++        cold_start_entries.append({
++            "func": name,
++            "syscall": _dispatch_base(name),
++            "level": level,
++            "hops": hops,
++            "paths": len(entry_paths[name]),
++        })
++
++    elapsed = time.time() - t0
++    print(f"  Entries with paths: {len(entry_paths)}", flush=True)
++    print(f"  Equally weighted sampled paths: {len(path_records)}", flush=True)
++    print(f"  Selected runtime waypoints (including target): {len(resolved)}", flush=True)
++    for waypoint in resolved:
++        print(f'    {waypoint["spec"]}: support={waypoint["support"]:.0%}', flush=True)
++    print(f"  Completed in {elapsed:.1f}s", flush=True)
++
++    return {
++        "algorithm": "path_supported_backbone_v1",
++        "target": target,
++        "target_location_supplied": target_location is not None,
++        "cold_start_entries": cold_start_entries,
++        "entries_with_paths": len(entry_paths),
++        "paths_found": len(path_records),
++        "entry_weighting": "uniform_per_entry",
++        "support_threshold": support_threshold,
++        "min_position_gap": min_position_gap,
++        "waypoints": resolved,
++        "candidate_count": len(candidates),
++        "top_candidates": candidates[:50],
++        "warnings": sorted(set(warnings)),
++        "time_s": elapsed,
++    }
++
++
++# ============================================================================
++# Method 6: Combined approach
++# ============================================================================
++
++def method_combined(graph: ig.Graph, name_to_vid: Dict[str, int],
++                     vid_to_name: Dict[int, str], target: str,
++                     entries: List[str], timeout: int = 3600) -> Dict:
++    """Combined approach: post-dominator skeleton + path frequency + wrapper filtering."""
++    print("\n=== Method 6: Combined Approach ===", flush=True)
++    t0 = time.time()
++
++    if target not in name_to_vid:
++        print(f"  Target '{target}' not found in graph", flush=True)
++        return {"error": "target_not_found", "time_s": 0}
++
++    target_vid = name_to_vid[target]
++
++    # Step 1: Compute post-dominator chain
++    print("  Step 1: Computing post-dominator chain...", flush=True)
++    try:
++        dom = graph.dominator(target_vid, mode='in')
++        post_dom_chain = []
++        current = target_vid
++        visited = set()
++        while current != -1 and current not in visited:
++            visited.add(current)
++            post_dom_chain.append(vid_to_name[current])
++            parent = dom[current]
++            if parent == -1 or parent == current:
++                break
++            current = parent
++    except Exception as e:
++        print(f"  Post-dominator failed: {e}", flush=True)
++        post_dom_chain = []
++
++    # Step 2: Path frequency analysis
++    print("  Step 2: Computing path frequency...", flush=True)
++    path_func_freq = Counter()
++    paths_found = 0
++    for entry_name in entries:
++        if time.time() - t0 > timeout:
++            break
++        if entry_name not in name_to_vid:
++            continue
++        entry_vid = name_to_vid[entry_name]
++        try:
++            path = graph.get_shortest_paths(entry_vid, to=target_vid, mode='out')[0]
++            if path and len(path) > 1:
++                paths_found += 1
++                for vid in path[1:-1]:
++                    path_func_freq[vid_to_name[vid]] += 1
++        except:
++            continue
++
++    # Step 3: Combine scores
++    print("  Step 3: Combining scores...", flush=True)
++
++    # Score each function
++    # - Post-dominator chain members get +10
++    # - Path frequency is normalized to [0, 1]
++    # - Wrapper functions get penalty
++    max_freq = max(path_func_freq.values()) if path_func_freq else 1
++
++    combined_scores = {}
++    for func, freq in path_func_freq.items():
++        score = freq / max_freq  # Normalize to [0, 1]
++
++        # Boost for post-dominator chain members
++        if func in post_dom_chain:
++            score += 10
++
++        # Penalty for outer wrappers
++        if is_wrapper_outer(func):
++            score *= 0.1
++        elif is_wrapper_mid(func):
++            score *= 0.5
++
++        combined_scores[func] = score
++
++    # Sort by score
++    sorted_combined = sorted(combined_scores.items(), key=lambda x: -x[1])
++
++    print(f"  Post-dominator chain: {len(post_dom_chain)} functions", flush=True)
++    print(f"  Paths analyzed: {paths_found}", flush=True)
++    print(f"\n  Combined waypoints (top 20):", flush=True)
++    for func, score in sorted_combined[:20]:
++        in_post_dom = "POST_DOM" if func in post_dom_chain else ""
++        freq = path_func_freq.get(func, 0)
++        print(f"    {func}: score={score:.2f}, freq={freq} {in_post_dom}", flush=True)
++
++    t1 = time.time()
++    print(f"  Completed in {t1-t0:.1f}s", flush=True)
++
++    return {
++        "post_dominator_chain": post_dom_chain,
++        "paths_analyzed": paths_found,
++        "combined_waypoints_top30": [(f, s) for f, s in sorted_combined[:30]],
++        "time_s": t1 - t0,
++    }
++
++
++# ============================================================================
++# Main
++# ============================================================================
++
++def main():
++    program_start = time.time()
++    parser = argparse.ArgumentParser(
++        description="Multi-method waypoint analysis for kernel callgraphs."
++    )
++    parser.add_argument("--callgraph", required=True, help="Path to callgraph.csv")
++    parser.add_argument("--target", required=True,
++                        help="Target as FUNC or exact FUNC@FILE:LINE")
++    parser.add_argument("--mode", choices=["all", "exploration", "entries",
++                                            "dominator", "post-dominator",
++                                            "path-freq", "backbone", "combined"],
++                        default="all", help="Analysis mode (default: all)")
++    parser.add_argument("--timeout", type=int, default=3600,
++                        help="Timeout per method in seconds (default: 3600)")
++    parser.add_argument("--max-entries", type=int, default=200,
++                        help="Max entries to analyze for dominator methods (default: 200)")
++    parser.add_argument("--bc-threshold", type=float, default=2_000_000,
++                        help="Betweenness centrality threshold for filtering (default: 2000000)")
++    parser.add_argument("--indegree-threshold", type=int, default=10_000,
++                        help="In-degree threshold for filtering (default: 10000)")
++    parser.add_argument("--k-paths", type=int, default=10,
++                        help="K for K-shortest paths per entry (default: 10)")
++    parser.add_argument("--min-waypoints", type=int, default=3,
++                        help="Minimum waypoints to output (default: 3)")
++    parser.add_argument("--max-waypoints", type=int, default=10,
++                        help="Maximum waypoints to output (default: 10)")
++    parser.add_argument("--use-community-filter", action='store_true',
++                        help="Use community detection as additional noise filter")
++    parser.add_argument("--entry", type=str, default=None,
++                        help="Override: use single entry function instead of dispatch entry discovery")
++    parser.add_argument("--entry-method", choices=["bc", "flow", "all"], default="bc",
++                        help="Entry scoring method: bc (betweenness), flow (max-flow), all (both)")
++    parser.add_argument("--entry-top-n", type=int, default=10,
++                        help="Top-N entries for v3 scoring (default: 10)")
++    parser.add_argument("--max-hops", type=int, default=15,
++                        help="Max backward BFS hops for entry discovery (default: 15)")
++    parser.add_argument("--support-threshold", type=float, default=0.25,
++                        help="Minimum per-entry-normalized path support for backbone candidates (default: 0.25)")
++    parser.add_argument("--min-position-gap", type=float, default=0.12,
++                        help="Minimum normalized depth gap between backbone waypoints (default: 0.12)")
++    parser.add_argument("--output", required=True, help="Output JSON file")
++    args = parser.parse_args()
++
++    # Load callgraph
++    graph, name_to_vid, vid_to_name = load_callgraph(args.callgraph)
++
++    # Keep an exact source target for runtime mapping while using its function
++    # component for call-graph traversal.
++    try:
++        target, target_location = parse_target_spec(args.target)
++    except ValueError as error:
++        parser.error(str(error))
++
++    # Find real entries
++    print("\nFinding real entries...", flush=True)
++    syscall_entries = []
++    module_inits = []
++    irq_handlers = []
++    for vid in range(graph.vcount()):
++        name = vid_to_name[vid]
++        if is_syscall_entry(name):
++            syscall_entries.append(name)
++        elif is_module_init(name):
++            module_inits.append(name)
++        elif is_irq_handler(name):
++            irq_handlers.append(name)
++
++    real_entries = sorted(set(syscall_entries + module_inits + irq_handlers))
++    print(f"  Found {len(real_entries)} real entries", flush=True)
++    print(f"    Syscall: {len(syscall_entries)}", flush=True)
++    print(f"    Module init: {len(module_inits)}", flush=True)
++    print(f"    IRQ handlers: {len(irq_handlers)}", flush=True)
++
++    # Limit entries for dominator methods
++    # For path frequency, prefer syscall entries over module_init
++    syscall_only_entries = [e for e in real_entries if is_syscall_entry(e)]
++    if len(syscall_only_entries) >= 50:
++        entries_for_dominator = syscall_only_entries[:args.max_entries]
++        print(f"  Using {len(entries_for_dominator)} syscall entries for path analysis", flush=True)
++    else:
++        entries_for_dominator = real_entries[:args.max_entries]
++        print(f"  Using {len(entries_for_dominator)} entries (including module_init/IRQ)", flush=True)
++
++    # Compute filter set (universal connectors)
++    print("\nComputing universal connector filter set...", flush=True)
++    filter_set, betweenness_array = compute_filter_sets(
++        graph, vid_to_name,
++        betweenness_threshold=args.bc_threshold,
++        indegree_threshold=args.indegree_threshold,
++        compute_betweenness=args.mode != "backbone")
++
++    results = {
++        "callgraph": args.callgraph,
++        "target": target,
++        "target_spec": args.target,
++        "graph_stats": {
++            "vertices": graph.vcount(),
++            "edges": graph.ecount(),
++            "real_entries": len(real_entries),
++            "syscall_entries": len(syscall_entries),
++            "module_inits": len(module_inits),
++            "irq_handlers": len(irq_handlers),
++        },
++        "filter_stats": {
++            "filter_set_size": len(filter_set),
++            "bc_threshold": args.bc_threshold,
++            "indegree_threshold": args.indegree_threshold,
++        },
++    }
++
++    # Run methods
++    if args.mode in ("all", "exploration"):
++        results["method_1_exploration"] = method_graph_exploration(
++            graph, vid_to_name)
++
++    if args.mode in ("all", "entries"):
++        results["method_2_real_entries"] = method_real_entries(
++            graph, name_to_vid, vid_to_name)
++
++    if args.mode in ("all", "dominator"):
++        results["method_3_forward_dominator"] = method_forward_dominator(
++            graph, name_to_vid, vid_to_name, target,
++            entries_for_dominator, args.timeout)
++
++    if args.mode in ("all", "post-dominator"):
++        results["method_4_post_dominator"] = method_post_dominator(
++            graph, name_to_vid, vid_to_name, target,
++            entries_for_dominator, args.timeout)
++
++    if args.mode in ("all", "path-freq"):
++        results["method_5_path_frequency"] = method_path_frequency(
++            graph, name_to_vid, vid_to_name, target,
++            entries_for_dominator, args.timeout,
++            filter_set=filter_set)
++
++        # V2: K-shortest paths + dispatch entries
++        results["method_5v2_path_frequency"] = method_path_frequency_v2(
++            graph, name_to_vid, vid_to_name, target,
++            timeout=args.timeout, k_paths=args.k_paths,
++            min_waypoints=args.min_waypoints,
++            max_waypoints=args.max_waypoints,
++            filter_set=filter_set,
++            use_community=args.use_community_filter,
++            entry_override=args.entry)
++
++        # V3: Principled entry discovery + K-shortest paths
++        results["method_5v3_path_frequency"] = method_path_frequency_v3(
++            graph, name_to_vid, vid_to_name, target,
++            callgraph_path=args.callgraph,
++            timeout=args.timeout, k_paths=args.k_paths,
++            min_waypoints=args.min_waypoints,
++            max_waypoints=args.max_waypoints,
++            filter_set=filter_set,
++            entry_method=args.entry_method,
++            entry_top_n=args.entry_top_n,
++            max_hops=args.max_hops,
++            bc_array=betweenness_array)
++
++    if args.mode in ("all", "path-freq", "backbone"):
++        results["method_7_waypoint_backbone"] = method_waypoint_backbone(
++            graph, name_to_vid, vid_to_name, target,
++            callgraph_path=args.callgraph,
++            target_location=target_location,
++            timeout=args.timeout, k_paths=args.k_paths,
++            min_waypoints=args.min_waypoints,
++            max_waypoints=args.max_waypoints,
++            filter_set=filter_set,
++            entry_top_n=args.entry_top_n,
++            max_hops=args.max_hops,
++            entry_override=args.entry,
++            support_threshold=args.support_threshold,
++            min_position_gap=args.min_position_gap)
++
++    if args.mode in ("all", "combined"):
++        results["method_6_combined"] = method_combined(
++            graph, name_to_vid, vid_to_name, target,
++            entries_for_dominator, args.timeout)
++
++    # Save results
++    results["total_time_s"] = time.time() - program_start
++    output_path = Path(args.output)
++    output_path.parent.mkdir(parents=True, exist_ok=True)
++    with open(output_path, 'w') as f:
++        json.dump(results, f, indent=2, default=str)
++
++    print(f"\n{'='*60}", flush=True)
++    print(f"Results saved to: {output_path}", flush=True)
++
++    # Print summary
++    print(f"\nSummary:", flush=True)
++    print(f"  Graph: {graph.vcount()} vertices, {graph.ecount()} edges", flush=True)
++    print(f"  Target: {target}", flush=True)
++    print(f"  Real entries: {len(real_entries)}", flush=True)
++
++    for method_key in ["method_3_forward_dominator", "method_5_path_frequency",
++                       "method_6_combined"]:
++        if method_key in results:
++            r = results[method_key]
++            if "layer_waypoints" in r and r["layer_waypoints"]:
++                print(f"\n  {method_key} layer waypoints:", flush=True)
++                for wp in r["layer_waypoints"][:8]:
++                    print(f"    [{wp['layer']:8s}] {wp['func']}: {wp['freq']} ({wp['ratio']:.0%})", flush=True)
++            elif "meaningful_waypoints" in r and r["meaningful_waypoints"]:
++                print(f"\n  {method_key} meaningful waypoints:", flush=True)
++                for item in r["meaningful_waypoints"][:5]:
++                    func, freq, ratio, weight = item
++                    print(f"    {func}: {freq} ({ratio:.0%}), weight={weight:.1f}", flush=True)
++            elif "top_waypoints" in r and r["top_waypoints"]:
++                print(f"\n  {method_key} top waypoints:", flush=True)
++                for func, freq in r["top_waypoints"][:5]:
++                    print(f"    {func}: {freq}", flush=True)
++
++    if "method_5v2_path_frequency" in results:
++        r = results["method_5v2_path_frequency"]
++        if "waypoints" in r and r["waypoints"]:
++            print(f"\n  method_5v2_path_frequency waypoints:", flush=True)
++            for wp in r["waypoints"][:10]:
++                print(f"    {wp['func']}: freq={wp['freq']} ({wp['ratio']:.0%}), "
++                      f"avg_pos={wp['avg_pos']:.2f}", flush=True)
++
++    if "method_5v3_path_frequency" in results:
++        r3 = results["method_5v3_path_frequency"]
++        for method_label in ["bc", "flow"]:
++            key = f"method_5v3_{method_label}"
++            if key in r3 and "waypoints" in r3[key]:
++                print(f"\n  {key} entries:", flush=True)
++                for name, score, hops in r3[key].get("entry_scores", [])[:5]:
++                    print(f"    {name}: score={score:.3f}, hops={hops}", flush=True)
++                print(f"  {key} waypoints:", flush=True)
++                for wp in r3[key]["waypoints"][:10]:
++                    print(f"    {wp['func']}: freq={wp['freq']} ({wp['ratio']:.0%}), "
++                          f"avg_pos={wp['avg_pos']:.2f}", flush=True)
++
++    if "method_7_waypoint_backbone" in results:
++        backbone = results["method_7_waypoint_backbone"]
++        if "waypoints" in backbone:
++            print("\n  method_7_waypoint_backbone runtime waypoints:", flush=True)
++            for waypoint in backbone["waypoints"]:
++                print(f"    {waypoint['spec']}: support={waypoint['support']:.0%}",
++                      flush=True)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/src/DominatorAnalyzer.cpp b/src/DominatorAnalyzer.cpp
+new file mode 100644
+index 0000000..4b95753
+--- /dev/null
++++ b/src/DominatorAnalyzer.cpp
+@@ -0,0 +1,648 @@
++#include <igraph/igraph.h>
++
++#include <algorithm>
++#include <chrono>
++#include <cstdlib>
++#include <fstream>
++#include <iomanip>
++#include <iostream>
++#include <map>
++#include <queue>
++#include <sstream>
++#include <string>
++#include <unordered_map>
++#include <unordered_set>
++#include <vector>
++
++using Clock = std::chrono::high_resolution_clock;
++using Ms = std::chrono::duration<double, std::milli>;
++
++struct Config {
++    std::string csv_path;
++    std::string target;
++    std::string entry;
++    std::string output_path;
++    bool all_entries = false;
++    bool relevant_entries = false;
++    bool show_stats = false;
++};
++
++void printUsage(const char* prog) {
++    std::cerr << "Usage: " << prog << " [options]\n"
++              << "Options:\n"
++              << "  --csv PATH        Path to callgraph.csv (required)\n"
++              << "  --target FUNC     Target function name (required)\n"
++              << "  --entry FUNC      Entry function name (single-entry mode)\n"
++              << "  --all-entries     Auto-detect all source nodes as entries\n"
++              << "  --relevant-entries  Find relevant syscall entries via reverse BFS, frequency-ranked output\n"
++              << "  --output PATH     Output file path (default: stdout)\n"
++              << "  --stats           Print graph statistics to stderr\n"
++              << "\nExactly one of --entry, --all-entries, or --relevant-entries must be specified.\n";
++}
++
++Config parseArgs(int argc, char* argv[]) {
++    Config cfg;
++    for (int i = 1; i < argc; i++) {
++        std::string arg = argv[i];
++        if (arg == "--csv" && i + 1 < argc) cfg.csv_path = argv[++i];
++        else if (arg == "--target" && i + 1 < argc) cfg.target = argv[++i];
++        else if (arg == "--entry" && i + 1 < argc) cfg.entry = argv[++i];
++        else if (arg == "--all-entries") cfg.all_entries = true;
++        else if (arg == "--relevant-entries") cfg.relevant_entries = true;
++        else if (arg == "--output" && i + 1 < argc) cfg.output_path = argv[++i];
++        else if (arg == "--stats") cfg.show_stats = true;
++        else if (arg == "--help" || arg == "-h") { printUsage(argv[0]); exit(0); }
++        else { std::cerr << "Unknown option: " << arg << "\n"; printUsage(argv[0]); exit(1); }
++    }
++    if (cfg.csv_path.empty()) { std::cerr << "Error: --csv is required\n"; exit(1); }
++    if (cfg.target.empty()) { std::cerr << "Error: --target is required\n"; exit(1); }
++    int mode_count = (!cfg.entry.empty() ? 1 : 0) + (cfg.all_entries ? 1 : 0) + (cfg.relevant_entries ? 1 : 0);
++    if (mode_count != 1) {
++        std::cerr << "Error: exactly one of --entry, --all-entries, or --relevant-entries must be specified\n"; exit(1);
++    }
++    return cfg;
++}
++
++struct CallEdge {
++    std::string caller_name;
++    std::string callsite_file;
++    unsigned callsite_line;
++    std::string callee_name;
++    std::string callee_file;
++    unsigned callee_line;
++    std::string call_type;
++    bool is_declaration;
++};
++
++std::vector<std::string> split(const std::string& s, char delim) {
++    std::vector<std::string> parts;
++    std::istringstream iss(s);
++    std::string part;
++    while (std::getline(iss, part, delim)) {
++        parts.push_back(part);
++    }
++    return parts;
++}
++
++std::vector<CallEdge> parseCSV(const std::string& path) {
++    std::vector<CallEdge> edges;
++    std::ifstream fin(path);
++    if (!fin.is_open()) {
++        std::cerr << "Error: cannot open CSV file: " << path << "\n";
++        exit(1);
++    }
++
++    std::string line;
++    if (std::getline(fin, line)) {
++        if (line.find("caller_name,") != 0) {
++            std::cerr << "Error: unexpected CSV header: " << line << "\n";
++            exit(1);
++        }
++    }
++
++    while (std::getline(fin, line)) {
++        if (line.empty()) continue;
++        auto parts = split(line, ',');
++        if (parts.size() != 8) {
++            std::cerr << "Warning: skipping malformed line (" << parts.size() << " fields): " << line << "\n";
++            continue;
++        }
++        CallEdge edge;
++        edge.caller_name = parts[0];
++        edge.callsite_file = parts[1];
++        edge.callsite_line = std::stoul(parts[2]);
++        edge.callee_name = parts[3];
++        edge.callee_file = parts[4];
++        edge.callee_line = std::stoul(parts[5]);
++        edge.call_type = parts[6];
++        edge.is_declaration = (parts[7] == "true");
++        edges.push_back(std::move(edge));
++    }
++    return edges;
++}
++
++struct GraphData {
++    igraph_t g;
++    std::vector<std::string> vertex_names;
++    std::unordered_map<std::string, int> name_to_vertex;
++    std::vector<std::vector<int>> out_neighbors;
++    std::map<std::pair<int,int>, std::string> edge_callsite;
++    std::map<std::pair<int,int>, std::string> edge_callee_def;
++};
++
++GraphData buildGraph(const std::vector<CallEdge>& edges) {
++    GraphData data;
++
++    // First pass: collect all unique function names
++    std::unordered_set<std::string> all_names;
++    for (const auto& e : edges) {
++        all_names.insert(e.caller_name);
++        all_names.insert(e.callee_name);
++    }
++
++    // Assign vertex IDs
++    std::vector<std::string> sorted_names(all_names.begin(), all_names.end());
++    std::sort(sorted_names.begin(), sorted_names.end());
++    int next_id = 0;
++    for (const auto& name : sorted_names) {
++        data.name_to_vertex[name] = next_id++;
++        data.vertex_names.push_back(name);
++    }
++    data.out_neighbors.resize(next_id);
++
++    // Second pass: build edge list and callsite maps
++    igraph_vector_t edge_list;
++    igraph_vector_init(&edge_list, 0);
++
++    for (const auto& e : edges) {
++        int caller_id = data.name_to_vertex[e.caller_name];
++        int callee_id = data.name_to_vertex[e.callee_name];
++
++        igraph_vector_push_back(&edge_list, caller_id);
++        igraph_vector_push_back(&edge_list, callee_id);
++
++        std::string callsite = e.callsite_file + ":" + std::to_string(e.callsite_line);
++        std::string callee_def = e.callee_file + ":" + std::to_string(e.callee_line);
++        auto key = std::make_pair(caller_id, callee_id);
++        if (data.edge_callsite.find(key) == data.edge_callsite.end()) {
++            data.edge_callsite[key] = callsite;
++            data.edge_callee_def[key] = callee_def;
++            data.out_neighbors[caller_id].push_back(callee_id);
++        }
++    }
++
++    for (auto& neighbors : data.out_neighbors) {
++        std::sort(neighbors.begin(), neighbors.end(),
++            [&data](int left, int right) {
++                return data.vertex_names[left] < data.vertex_names[right];
++            });
++    }
++
++    igraph_empty(&data.g, next_id, IGRAPH_DIRECTED);
++    igraph_add_edges(&data.g, &edge_list, NULL);
++    igraph_vector_destroy(&edge_list);
++
++    return data;
++}
++
++struct Waypoint {
++    std::string func_name;
++    std::string location;  // file:line
++};
++
++std::string findCallsite(const GraphData& graph, int parent, int current) {
++    auto key = std::make_pair(parent, current);
++    auto it = graph.edge_callsite.find(key);
++    if (it != graph.edge_callsite.end()) return it->second;
++
++    // A dominator-tree parent is not necessarily a direct call-graph parent.
++    // Resolve a real connector path and use its first callsite.  The old
++    // fallback returned an arbitrary outgoing callsite from `parent`, which
++    // could point to a completely unrelated subsystem.
++    std::vector<int> predecessor(graph.vertex_names.size(), -1);
++    std::queue<int> worklist;
++    predecessor[parent] = parent;
++    worklist.push(parent);
++    while (!worklist.empty() && predecessor[current] == -1) {
++        int vertex = worklist.front();
++        worklist.pop();
++        for (int successor : graph.out_neighbors[vertex]) {
++            if (predecessor[successor] != -1) continue;
++            predecessor[successor] = vertex;
++            worklist.push(successor);
++        }
++    }
++
++    if (predecessor[current] == -1) return "unknown:0";
++    int first_hop = current;
++    while (predecessor[first_hop] != parent) {
++        first_hop = predecessor[first_hop];
++        if (first_hop == -1 || first_hop == parent) break;
++    }
++    auto connector = graph.edge_callsite.find(std::make_pair(parent, first_hop));
++    return connector == graph.edge_callsite.end() ? "unknown:0" : connector->second;
++}
++
++std::vector<Waypoint> computeDominatorChain(
++    const GraphData& graph,
++    int entry_vertex,
++    int target_vertex)
++{
++    igraph_integer_t vc = igraph_vcount(&graph.g);
++
++    // Check reachability first via BFS (igraph_reachable not available in 0.9.x)
++    igraph_vector_t reachable_vids;
++    igraph_vector_init(&reachable_vids, 0);
++    // igraph_bfs_simple takes non-const igraph_t*, but only reads
++    igraph_bfs_simple(const_cast<igraph_t*>(&graph.g), entry_vertex, IGRAPH_OUT,
++                      &reachable_vids, NULL, NULL);
++
++    bool target_reachable = false;
++    for (long i = 0; i < igraph_vector_size(&reachable_vids); i++) {
++        if ((int)VECTOR(reachable_vids)[i] == target_vertex) {
++            target_reachable = true;
++            break;
++        }
++    }
++    igraph_vector_destroy(&reachable_vids);
++
++    if (!target_reachable) {
++        return {};  // Empty = unreachable
++    }
++
++    // Compute dominator tree
++    igraph_vector_t dom;
++    igraph_vector_init(&dom, vc);
++    igraph_dominator_tree(&graph.g, entry_vertex, &dom, NULL, NULL, IGRAPH_OUT);
++
++    // Step 1: walk backwards from target to entry to collect node IDs
++    std::vector<int> node_ids;
++    int current = target_vertex;
++    while (current != entry_vertex && current != -1) {
++        node_ids.push_back(current);
++        int parent = (int)VECTOR(dom)[current];
++        if (parent == -1) break;
++        current = parent;
++    }
++    node_ids.push_back(entry_vertex);
++
++    // Reverse to get entry -> ... -> target order
++    std::reverse(node_ids.begin(), node_ids.end());
++
++    // Step 2: build waypoints with correct locations
++    // For each function (except target), use callsite of edge to NEXT function
++    // For target, use its callee definition location
++    std::vector<Waypoint> chain;
++    for (size_t i = 0; i < node_ids.size(); i++) {
++        if (i + 1 < node_ids.size()) {
++            // Not the last node: use callsite of edge to next node
++            std::string loc = findCallsite(graph, node_ids[i], node_ids[i + 1]);
++            chain.push_back({graph.vertex_names[node_ids[i]], loc});
++        } else {
++            // Last node (target): find lexicographically smallest callee def
++            int target_id = node_ids[i];
++            std::string loc;
++            for (const auto& [k, v] : graph.edge_callee_def) {
++                if (k.second == target_id && (loc.empty() || v < loc)) {
++                    loc = v;
++                }
++            }
++            if (loc.empty()) {
++                loc = graph.vertex_names[target_id] + ":0";
++            }
++            chain.push_back({graph.vertex_names[target_id], loc});
++        }
++    }
++
++    igraph_vector_destroy(&dom);
++    return chain;
++}
++
++std::vector<int> detectSourceNodes(const GraphData& graph, const std::vector<CallEdge>& edges) {
++    std::unordered_set<std::string> callers;
++    std::unordered_set<std::string> callees;
++    for (const auto& e : edges) {
++        callers.insert(e.caller_name);
++        callees.insert(e.callee_name);
++    }
++
++    std::vector<int> sources;
++    for (const auto& name : callers) {
++        if (callees.find(name) == callees.end()) {
++            auto it = graph.name_to_vertex.find(name);
++            if (it != graph.name_to_vertex.end()) {
++                sources.push_back(it->second);
++            }
++        }
++    }
++    return sources;
++}
++
++// Reverse BFS from target: find all vertices that can reach the target
++std::unordered_set<int> reverseBFS(const GraphData& graph, int target_vertex) {
++    std::unordered_set<int> reachable;
++    // Build reverse adjacency list
++    std::unordered_map<int, std::vector<int>> reverse_adj;
++    for (const auto& [k, v] : graph.edge_callsite) {
++        reverse_adj[k.second].push_back(k.first);
++    }
++
++    // BFS from target in reverse graph
++    std::queue<int> q;
++    q.push(target_vertex);
++    reachable.insert(target_vertex);
++    while (!q.empty()) {
++        int u = q.front(); q.pop();
++        auto it = reverse_adj.find(u);
++        if (it != reverse_adj.end()) {
++            for (int v : it->second) {
++                if (reachable.find(v) == reachable.end()) {
++                    reachable.insert(v);
++                    q.push(v);
++                }
++            }
++        }
++    }
++    return reachable;
++}
++
++// Detect source nodes: functions that appear as caller but never as callee
++std::vector<int> detectSourceNodesInGraph(const GraphData& graph, const std::vector<CallEdge>& edges) {
++    std::unordered_set<std::string> callers, callees;
++    for (const auto& e : edges) {
++        callers.insert(e.caller_name);
++        callees.insert(e.callee_name);
++    }
++    std::vector<int> sources;
++    for (const auto& name : callers) {
++        if (callees.find(name) == callees.end()) {
++            auto it = graph.name_to_vertex.find(name);
++            if (it != graph.name_to_vertex.end()) {
++                sources.push_back(it->second);
++            }
++        }
++    }
++    return sources;
++}
++
++// Relevant entries mode: reverse BFS + frequency-ranked dominator chains
++void runRelevantEntries(const GraphData& graph, const std::vector<CallEdge>& edges,
++                        const Config& cfg, std::ostream* out) {
++    auto t0 = Clock::now();
++
++    // Find target vertex
++    auto target_it = graph.name_to_vertex.find(cfg.target);
++    if (target_it == graph.name_to_vertex.end()) {
++        std::cerr << "Error: target function '" << cfg.target << "' not found in call graph\n";
++        exit(1);
++    }
++    int target_vertex = target_it->second;
++
++    // Step 1: Reverse BFS to find all vertices that can reach target
++    auto t_bfs = Clock::now();
++    auto reachable = reverseBFS(graph, target_vertex);
++    auto t_bfs_end = Clock::now();
++    std::cerr << "Reverse BFS: " << reachable.size() << " vertices can reach target ("
++              << std::chrono::duration<double>(t_bfs_end - t_bfs).count() << "s)\n";
++
++    // Step 2: Find source nodes that can reach target
++    auto all_source_nodes = detectSourceNodesInGraph(graph, edges);
++    std::vector<int> relevant_entries;
++    for (int vid : all_source_nodes) {
++        if (reachable.count(vid)) {
++            relevant_entries.push_back(vid);
++        }
++    }
++    std::cerr << "Source nodes: " << all_source_nodes.size() << " total, "
++              << relevant_entries.size() << " can reach target\n";
++
++    if (relevant_entries.empty()) {
++        std::cerr << "Error: no source node can reach target '" << cfg.target << "'\n";
++        exit(1);
++    }
++
++    // Step 3: Compute dominator chains for each relevant entry
++    auto t_dom = Clock::now();
++    struct ChainResult {
++        std::string entry_name;
++        std::vector<Waypoint> chain;
++    };
++    std::vector<ChainResult> results;
++    std::unordered_map<std::string, int> func_frequency;  // func_name -> count
++    std::unordered_map<std::string, std::string> func_location;  // func_name -> best location
++
++    for (int entry_v : relevant_entries) {
++        auto chain = computeDominatorChain(graph, entry_v, target_vertex);
++        if (!chain.empty()) {
++            results.push_back({graph.vertex_names[entry_v], std::move(chain)});
++            // Count frequency
++            for (const auto& wp : results.back().chain) {
++                func_frequency[wp.func_name]++;
++                // Keep the location from the first occurrence
++                if (func_location.find(wp.func_name) == func_location.end()) {
++                    func_location[wp.func_name] = wp.location;
++                }
++            }
++        }
++    }
++    auto t_dom_end = Clock::now();
++    std::cerr << "Dominator computation: " << results.size() << " reachable entries, "
++              << std::chrono::duration<double>(t_dom_end - t_dom).count() << "s total\n";
++
++    // Step 4: Sort functions by frequency (descending), then by name
++    std::vector<std::pair<std::string, int>> sorted_funcs(func_frequency.begin(), func_frequency.end());
++    std::sort(sorted_funcs.begin(), sorted_funcs.end(),
++        [](const auto& a, const auto& b) {
++            if (a.second != b.second) return a.second > b.second;
++            return a.first < b.first;
++        });
++
++    // Step 5: Output
++    *out << "# Frequency-ranked waypoints for target: " << cfg.target << "\n";
++    *out << "# Format: func@location (frequency/total_entries)\n";
++    *out << "# Total relevant entries: " << relevant_entries.size()
++         << ", reachable: " << results.size() << "\n";
++    *out << "#\n";
++
++    // Output per-entry chains
++    *out << "\n# === Per-entry dominator chains ===\n";
++    for (const auto& result : results) {
++        *out << "# entry:" << result.entry_name
++             << " (chain_length=" << result.chain.size() << ")\n";
++        for (size_t i = 0; i < result.chain.size(); i++) {
++            if (i > 0) *out << ",";
++            *out << result.chain[i].func_name << "@" << result.chain[i].location;
++        }
++        *out << "\n";
++    }
++
++    // Output frequency-ranked waypoints
++    *out << "\n# === Frequency-ranked waypoints ===\n";
++    *out << "# func@location,frequency,ratio\n";
++    for (const auto& [func, freq] : sorted_funcs) {
++        auto loc_it = func_location.find(func);
++        std::string loc = (loc_it != func_location.end()) ? loc_it->second : "unknown:0";
++        double ratio = static_cast<double>(freq) / results.size();
++        *out << func << "@" << loc << "," << freq << "," << std::fixed << std::setprecision(3) << ratio << "\n";
++    }
++
++    auto t_end = Clock::now();
++    std::cerr << "Total time: " << std::chrono::duration<double>(t_end - t0).count() << "s\n";
++}
++
++void printStats(const GraphData& graph, const std::vector<CallEdge>& edges,
++                const std::string& target, const std::string& entry_mode) {
++    std::cerr << "\n=== Graph Statistics ===\n";
++    std::cerr << "Vertices: " << igraph_vcount(&graph.g) << "\n";
++    std::cerr << "Edges: " << igraph_ecount(&graph.g) << "\n";
++
++    std::unordered_set<std::string> callers, callees;
++    for (const auto& e : edges) {
++        callers.insert(e.caller_name);
++        callees.insert(e.callee_name);
++    }
++    int source_count = 0;
++    for (const auto& c : callers) {
++        if (callees.find(c) == callees.end()) source_count++;
++    }
++    std::cerr << "Source nodes: " << source_count << "\n";
++
++    // Only compute source-node reachability for all-entries/relevant-entries modes.
++    // In single-entry mode this is unnecessary and extremely expensive (O(sources * (V+E))).
++    if (entry_mode.empty()) {
++        auto target_it = graph.name_to_vertex.find(target);
++        if (target_it != graph.name_to_vertex.end()) {
++            auto sources = detectSourceNodes(graph, edges);
++            int reachable_entries = 0;
++            for (int src : sources) {
++                igraph_vector_t vids;
++                igraph_vector_init(&vids, 0);
++                igraph_bfs_simple(const_cast<igraph_t*>(&graph.g), src, IGRAPH_OUT,
++                                  &vids, NULL, NULL);
++                for (long j = 0; j < igraph_vector_size(&vids); j++) {
++                    if ((int)VECTOR(vids)[j] == target_it->second) {
++                        reachable_entries++;
++                        break;
++                    }
++                }
++                igraph_vector_destroy(&vids);
++            }
++            std::cerr << "Entries reaching target: " << reachable_entries << "\n";
++        }
++    }
++    std::cerr << "========================\n\n";
++}
++
++int main(int argc, char* argv[]) {
++    Config cfg = parseArgs(argc, argv);
++    std::cerr << "DominatorAnalyzer: csv=" << cfg.csv_path
++              << " target=" << cfg.target;
++    if (!cfg.entry.empty()) std::cerr << " entry=" << cfg.entry;
++    else if (cfg.all_entries) std::cerr << " all-entries";
++    else if (cfg.relevant_entries) std::cerr << " relevant-entries";
++    std::cerr << "\n";
++
++    auto t_total_start = Clock::now();
++
++    auto t0 = Clock::now();
++    auto edges = parseCSV(cfg.csv_path);
++    auto t1 = Clock::now();
++    std::cerr << "Parsed " << edges.size() << " edges from CSV ("
++              << std::chrono::duration<double>(t1 - t0).count() << "s)\n";
++
++    if (edges.empty()) {
++        std::cerr << "Error: call graph is empty\n";
++        return 1;
++    }
++
++    t0 = Clock::now();
++    GraphData graph = buildGraph(edges);
++    t1 = Clock::now();
++    std::cerr << "Built graph: " << igraph_vcount(&graph.g) << " vertices, "
++              << igraph_ecount(&graph.g) << " edges ("
++              << std::chrono::duration<double>(t1 - t0).count() << "s)\n";
++
++    if (cfg.show_stats) {
++        printStats(graph, edges, cfg.target, cfg.entry);
++    }
++
++    // Output stream
++    std::ostream* out = &std::cout;
++    std::ofstream fout;
++    if (!cfg.output_path.empty()) {
++        fout.open(cfg.output_path);
++        if (!fout.is_open()) {
++            std::cerr << "Error: cannot open output file: " << cfg.output_path << "\n";
++            return 1;
++        }
++        out = &fout;
++    }
++
++    if (!cfg.entry.empty()) {
++        // Single-entry mode
++        auto entry_it = graph.name_to_vertex.find(cfg.entry);
++        if (entry_it == graph.name_to_vertex.end()) {
++            std::cerr << "Error: entry function '" << cfg.entry << "' not found in call graph\n";
++            return 1;
++        }
++        auto target_it = graph.name_to_vertex.find(cfg.target);
++        if (target_it == graph.name_to_vertex.end()) {
++            std::cerr << "Error: target function '" << cfg.target << "' not found in call graph\n";
++            return 1;
++        }
++
++        t0 = Clock::now();
++        auto chain = computeDominatorChain(graph, entry_it->second, target_it->second);
++        t1 = Clock::now();
++        std::cerr << "Dominator computation: " << std::chrono::duration<double>(t1 - t0).count() << "s\n";
++        if (chain.empty()) {
++            std::cerr << "Error: target '" << cfg.target << "' is not reachable from entry '"
++                      << cfg.entry << "'\n";
++            return 1;
++        }
++
++        for (size_t i = 0; i < chain.size(); i++) {
++            if (i > 0) *out << ",";
++            *out << chain[i].func_name << "@" << chain[i].location;
++        }
++        *out << "\n";
++    } else if (cfg.all_entries) {
++        // All-entries mode
++        auto target_it = graph.name_to_vertex.find(cfg.target);
++        if (target_it == graph.name_to_vertex.end()) {
++            std::cerr << "Error: target function '" << cfg.target << "' not found in call graph\n";
++            return 1;
++        }
++
++        auto sources = detectSourceNodes(graph, edges);
++        std::cerr << "Detected " << sources.size() << " source nodes\n";
++
++        struct EntryResult {
++            std::string entry_name;
++            std::vector<Waypoint> chain;
++        };
++        std::vector<EntryResult> results;
++
++        t0 = Clock::now();
++        int reachable_count = 0;
++        for (int entry_v : sources) {
++            auto chain = computeDominatorChain(graph, entry_v, target_it->second);
++            if (!chain.empty()) {
++                results.push_back({graph.vertex_names[entry_v], std::move(chain)});
++                reachable_count++;
++            }
++        }
++        t1 = Clock::now();
++        std::cerr << "Dominator computation: " << reachable_count << " reachable entries, "
++                  << std::chrono::duration<double>(t1 - t0).count() << "s total\n";
++
++        std::sort(results.begin(), results.end(),
++            [](const EntryResult& a, const EntryResult& b) {
++                if (a.chain.size() != b.chain.size())
++                    return a.chain.size() < b.chain.size();
++                return a.entry_name < b.entry_name;
++            });
++
++        std::cerr << "Found " << results.size() << " reachable entries\n";
++
++        for (const auto& result : results) {
++            *out << "# entry:" << result.entry_name
++                 << " (chain_length=" << result.chain.size() << ")\n";
++            for (size_t i = 0; i < result.chain.size(); i++) {
++                if (i > 0) *out << ",";
++                *out << result.chain[i].func_name << "@" << result.chain[i].location;
++            }
++            *out << "\n";
++        }
++    } else if (cfg.relevant_entries) {
++        // Relevant-entries mode: reverse BFS + frequency-ranked output
++        runRelevantEntries(graph, edges, cfg, out);
++    }
++
++    igraph_destroy(&graph.g);
++
++    auto t_total_end = Clock::now();
++    std::cerr << "Total time: " << std::chrono::duration<double>(t_total_end - t_total_start).count() << "s\n";
++
++    return 0;
++}

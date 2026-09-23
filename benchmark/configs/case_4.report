@@ -1,0 +1,131 @@
+==================================================================
+BUG: KASAN: slab-use-after-free in tcf_action_destroy+0x17f/0x1b0 net/sched/act_api.c:1121
+Read of size 8 at addr ffff888029baa200 by task kworker/u4:1/11
+
+CPU: 0 PID: 11 Comm: kworker/u4:1 Not tainted 6.2.0-syzkaller-12017-g1ec35eadc3b4 #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 02/16/2023
+Workqueue: tc_filter_workqueue fl_destroy_filter_work
+Call Trace:
+ <TASK>
+ __dump_stack lib/dump_stack.c:88 [inline]
+ dump_stack_lvl+0xd9/0x150 lib/dump_stack.c:106
+ print_address_description.constprop.0+0x2c/0x3c0 mm/kasan/report.c:319
+ print_report mm/kasan/report.c:430 [inline]
+ kasan_report+0x11c/0x130 mm/kasan/report.c:536
+ tcf_action_destroy+0x17f/0x1b0 net/sched/act_api.c:1121
+ tcf_exts_destroy+0xc5/0x160 net/sched/cls_api.c:3248
+ __fl_destroy_filter+0x1a/0x100 net/sched/cls_flower.c:418
+ process_one_work+0x9bf/0x1820 kernel/workqueue.c:2390
+ worker_thread+0x669/0x1090 kernel/workqueue.c:2537
+ kthread+0x2e8/0x3a0 kernel/kthread.c:376
+ ret_from_fork+0x1f/0x30 arch/x86/entry/entry_64.S:308
+ </TASK>
+
+Allocated by task 5089:
+ kasan_save_stack+0x22/0x40 mm/kasan/common.c:45
+ kasan_set_track+0x25/0x30 mm/kasan/common.c:52
+ ____kasan_kmalloc mm/kasan/common.c:374 [inline]
+ ____kasan_kmalloc mm/kasan/common.c:333 [inline]
+ __kasan_kmalloc+0xa2/0xb0 mm/kasan/common.c:383
+ kmalloc include/linux/slab.h:580 [inline]
+ kmalloc_array include/linux/slab.h:635 [inline]
+ kcalloc include/linux/slab.h:667 [inline]
+ tcf_exts_init_ex+0xe4/0x5a0 net/sched/cls_api.c:3218
+ fl_change+0x56f/0x4ab0 net/sched/cls_flower.c:2234
+ tc_new_tfilter+0x97c/0x2290 net/sched/cls_api.c:2310
+ rtnetlink_rcv_msg+0x996/0xd50 net/core/rtnetlink.c:6165
+ netlink_rcv_skb+0x165/0x440 net/netlink/af_netlink.c:2574
+ netlink_unicast_kernel net/netlink/af_netlink.c:1339 [inline]
+ netlink_unicast+0x547/0x7f0 net/netlink/af_netlink.c:1365
+ netlink_sendmsg+0x925/0xe30 net/netlink/af_netlink.c:1942
+ sock_sendmsg_nosec net/socket.c:722 [inline]
+ sock_sendmsg+0xde/0x190 net/socket.c:745
+ ____sys_sendmsg+0x71c/0x900 net/socket.c:2504
+ ___sys_sendmsg+0x110/0x1b0 net/socket.c:2558
+ __sys_sendmsg+0xf7/0x1c0 net/socket.c:2587
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x39/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x63/0xcd
+
+Freed by task 5089:
+ kasan_save_stack+0x22/0x40 mm/kasan/common.c:45
+ kasan_set_track+0x25/0x30 mm/kasan/common.c:52
+ kasan_save_free_info+0x2e/0x40 mm/kasan/generic.c:521
+ ____kasan_slab_free mm/kasan/common.c:236 [inline]
+ ____kasan_slab_free+0x160/0x1c0 mm/kasan/common.c:200
+ kasan_slab_free include/linux/kasan.h:162 [inline]
+ slab_free_hook mm/slub.c:1781 [inline]
+ slab_free_freelist_hook+0x8b/0x1c0 mm/slub.c:1807
+ slab_free mm/slub.c:3787 [inline]
+ __kmem_cache_free+0xaf/0x2d0 mm/slub.c:3800
+ tcf_exts_destroy+0xe5/0x160 net/sched/cls_api.c:3249
+ tcf_exts_init_ex net/sched/cls_api.c:3237 [inline]
+ tcf_exts_init_ex+0x484/0x5a0 net/sched/cls_api.c:3205
+ fl_change+0x56f/0x4ab0 net/sched/cls_flower.c:2234
+ tc_new_tfilter+0x97c/0x2290 net/sched/cls_api.c:2310
+ rtnetlink_rcv_msg+0x996/0xd50 net/core/rtnetlink.c:6165
+ netlink_rcv_skb+0x165/0x440 net/netlink/af_netlink.c:2574
+ netlink_unicast_kernel net/netlink/af_netlink.c:1339 [inline]
+ netlink_unicast+0x547/0x7f0 net/netlink/af_netlink.c:1365
+ netlink_sendmsg+0x925/0xe30 net/netlink/af_netlink.c:1942
+ sock_sendmsg_nosec net/socket.c:722 [inline]
+ sock_sendmsg+0xde/0x190 net/socket.c:745
+ ____sys_sendmsg+0x71c/0x900 net/socket.c:2504
+ ___sys_sendmsg+0x110/0x1b0 net/socket.c:2558
+ __sys_sendmsg+0xf7/0x1c0 net/socket.c:2587
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x39/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x63/0xcd
+
+The buggy address belongs to the object at ffff888029baa200
+ which belongs to the cache kmalloc-256 of size 256
+The buggy address is located 0 bytes inside of
+ freed 256-byte region [ffff888029baa200, ffff888029baa300)
+
+The buggy address belongs to the physical page:
+page:ffffea0000a6ea80 refcount:1 mapcount:0 mapping:0000000000000000 index:0x0 pfn:0x29baa
+head:ffffea0000a6ea80 order:1 entire_mapcount:0 nr_pages_mapped:0 pincount:0
+flags: 0xfff00000010200(slab|head|node=0|zone=1|lastcpupid=0x7ff)
+raw: 00fff00000010200 ffff888012441b40 dead000000000100 dead000000000122
+raw: 0000000000000000 0000000080100010 00000001ffffffff 0000000000000000
+page dumped because: kasan: bad access detected
+page_owner tracks the page as allocated
+page last allocated via order 1, migratetype Unmovable, gfp_mask 0xd20c0(__GFP_IO|__GFP_FS|__GFP_NOWARN|__GFP_NORETRY|__GFP_COMP|__GFP_NOMEMALLOC), pid 1, tgid 1 (swapper/0), ts 24492540746, free_ts 0
+ prep_new_page mm/page_alloc.c:2552 [inline]
+ get_page_from_freelist+0x1190/0x2f80 mm/page_alloc.c:4325
+ __alloc_pages+0x1cb/0x5c0 mm/page_alloc.c:5591
+ alloc_page_interleave+0x1e/0x200 mm/mempolicy.c:2116
+ alloc_pages+0x233/0x270 mm/mempolicy.c:2278
+ alloc_slab_page mm/slub.c:1851 [inline]
+ allocate_slab+0x25f/0x390 mm/slub.c:1998
+ new_slab mm/slub.c:2051 [inline]
+ ___slab_alloc+0xa91/0x1400 mm/slub.c:3193
+ __slab_alloc.constprop.0+0x56/0xa0 mm/slub.c:3292
+ __slab_alloc_node mm/slub.c:3345 [inline]
+ slab_alloc_node mm/slub.c:3442 [inline]
+ __kmem_cache_alloc_node+0x136/0x330 mm/slub.c:3491
+ __do_kmalloc_node mm/slab_common.c:966 [inline]
+ __kmalloc_node_track_caller+0x4b/0xc0 mm/slab_common.c:987
+ __do_krealloc mm/slab_common.c:1364 [inline]
+ krealloc+0x5e/0x100 mm/slab_common.c:1397
+ add_sysfs_param+0xca/0x960 kernel/params.c:652
+ kernel_add_sysfs_param kernel/params.c:813 [inline]
+ param_sysfs_builtin kernel/params.c:852 [inline]
+ param_sysfs_builtin_init+0x1c0/0x460 kernel/params.c:986
+ do_one_initcall+0x141/0x7d0 init/main.c:1306
+ do_initcall_level init/main.c:1379 [inline]
+ do_initcalls init/main.c:1395 [inline]
+ do_basic_setup init/main.c:1414 [inline]
+ kernel_init_freeable+0x701/0xe50 init/main.c:1634
+ kernel_init+0x1e/0x2c0 init/main.c:1522
+ ret_from_fork+0x1f/0x30 arch/x86/entry/entry_64.S:308
+page_owner free stack trace missing
+
+Memory state around the buggy address:
+ ffff888029baa100: fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+ ffff888029baa180: fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+>ffff888029baa200: fa fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+                   ^
+ ffff888029baa280: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+ ffff888029baa300: fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+==================================================================

@@ -1,0 +1,53 @@
+loop0: detected capacity change from 98 to 0
+==================================================================
+BUG: KASAN: vmalloc-out-of-bounds in memcpy include/linux/string.h:447 [inline]
+BUG: KASAN: vmalloc-out-of-bounds in lzo_uncompress+0x44c/0x620 fs/squashfs/lzo_wrapper.c:80
+Write of size 4096 at addr ffffc90000ea1e75 by task syz-executor001/8476
+
+CPU: 0 PID: 8476 Comm: syz-executor001 Not tainted 5.11.0-rc3-syzkaller #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+Call Trace:
+ __dump_stack lib/dump_stack.c:79 [inline]
+ dump_stack+0x107/0x163 lib/dump_stack.c:120
+ print_address_description.constprop.0.cold+0x5/0x2c6 mm/kasan/report.c:230
+ __kasan_report mm/kasan/report.c:396 [inline]
+ kasan_report.cold+0x79/0xd5 mm/kasan/report.c:413
+ check_memory_region_inline mm/kasan/generic.c:179 [inline]
+ check_memory_region+0x13d/0x180 mm/kasan/generic.c:185
+ memcpy+0x39/0x60 mm/kasan/shadow.c:65
+ memcpy include/linux/string.h:447 [inline]
+ lzo_uncompress+0x44c/0x620 fs/squashfs/lzo_wrapper.c:80
+ squashfs_decompress+0xcc/0x160 fs/squashfs/decompressor_single.c:70
+ squashfs_read_data+0x1f8/0xe30 fs/squashfs/block.c:214
+ squashfs_cache_get+0x4a9/0xd50 fs/squashfs/cache.c:110
+ squashfs_read_metadata+0x134/0x460 fs/squashfs/cache.c:344
+ squashfs_read_inode+0x182/0x1b40 fs/squashfs/inode.c:115
+ squashfs_fill_super+0x1140/0x23b0 fs/squashfs/super.c:310
+ get_tree_bdev+0x440/0x760 fs/super.c:1291
+ vfs_get_tree+0x89/0x2f0 fs/super.c:1496
+ do_new_mount fs/namespace.c:2878 [inline]
+ path_mount+0x13ad/0x20c0 fs/namespace.c:3208
+ do_mount fs/namespace.c:3221 [inline]
+ __do_sys_mount fs/namespace.c:3429 [inline]
+ __se_sys_mount fs/namespace.c:3406 [inline]
+ __x64_sys_mount+0x27f/0x300 fs/namespace.c:3406
+ do_syscall_64+0x2d/0x70 arch/x86/entry/common.c:46
+ entry_SYSCALL_64_after_hwframe+0x44/0xa9
+RIP: 0033:0x446d2a
+Code: b8 08 00 00 00 0f 05 48 3d 01 f0 ff ff 0f 83 fd ad fb ff c3 66 2e 0f 1f 84 00 00 00 00 00 66 90 49 89 ca b8 a5 00 00 00 0f 05 <48> 3d 01 f0 ff ff 0f 83 da ad fb ff c3 66 0f 1f 84 00 00 00 00 00
+RSP: 002b:00007ffc49d40db8 EFLAGS: 00000293 ORIG_RAX: 00000000000000a5
+RAX: ffffffffffffffda RBX: 00007ffc49d40e10 RCX: 0000000000446d2a
+RDX: 0000000020000000 RSI: 0000000020000100 RDI: 00007ffc49d40dd0
+RBP: 00007ffc49d40dd0 R08: 00007ffc49d40e10 R09: 00007ffc00000015
+R10: 0000000000000000 R11: 0000000000000293 R12: 0000000000000001
+R13: 0000000000000004 R14: 0000000000000003 R15: 0000000000000003
+
+
+Memory state around the buggy address:
+ ffffc90000ea1f00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ ffffc90000ea1f80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+>ffffc90000ea2000: f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8
+                   ^
+ ffffc90000ea2080: f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8
+ ffffc90000ea2100: f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8
+==================================================================

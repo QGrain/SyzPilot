@@ -1,0 +1,4 @@
+# Minimal, evidence-backed functional subset. Paths are relative to this CSV.
+case_21,2d743660786e,./configs/case_21.config
+case_25,1e57930e9f40,./configs/case_25.config
+case_36,6207214a70bf,./configs/case_36.config

@@ -1,0 +1,94 @@
+ntfs: (device loop0): check_mft_mirror(): Incomplete multi sector transfer detected in mft mirror record 0.
+ntfs: (device loop0): load_system_files(): $MFTMirr does not match $MFT.  Mounting read-only.  Run ntfsfix and/or chkdsk.
+==================================================================
+BUG: KASAN: use-after-free in ntfs_attr_find+0xb88/0xce0 fs/ntfs/attrib.c:597
+Read of size 2 at addr ffff88806ff431d2 by task syz-executor323/3611
+
+CPU: 0 PID: 3611 Comm: syz-executor323 Not tainted 6.0.0-syzkaller-09039-ga6afa4199d3d #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 09/22/2022
+Call Trace:
+ <TASK>
+ __dump_stack lib/dump_stack.c:88 [inline]
+ dump_stack_lvl+0xcd/0x134 lib/dump_stack.c:106
+ print_address_description mm/kasan/report.c:317 [inline]
+ print_report.cold+0x2ba/0x719 mm/kasan/report.c:433
+ kasan_report+0xb1/0x1e0 mm/kasan/report.c:495
+ ntfs_attr_find+0xb88/0xce0 fs/ntfs/attrib.c:597
+ ntfs_attr_lookup+0x1056/0x2070 fs/ntfs/attrib.c:1193
+ ntfs_read_locked_inode+0xb0c/0x5ae0 fs/ntfs/inode.c:999
+ ntfs_iget+0x12d/0x180 fs/ntfs/inode.c:177
+ load_system_files fs/ntfs/super.c:1847 [inline]
+ ntfs_fill_super+0x3d0d/0x92d0 fs/ntfs/super.c:2892
+ mount_bdev+0x34d/0x410 fs/super.c:1400
+ legacy_get_tree+0x105/0x220 fs/fs_context.c:610
+ vfs_get_tree+0x89/0x2f0 fs/super.c:1530
+ do_new_mount fs/namespace.c:3040 [inline]
+ path_mount+0x1326/0x1e20 fs/namespace.c:3370
+ do_mount fs/namespace.c:3383 [inline]
+ __do_sys_mount fs/namespace.c:3591 [inline]
+ __se_sys_mount fs/namespace.c:3568 [inline]
+ __x64_sys_mount+0x27f/0x300 fs/namespace.c:3568
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x35/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x63/0xcd
+RIP: 0033:0x7f4c77147b4a
+Code: 48 c7 c2 c0 ff ff ff f7 d8 64 89 02 b8 ff ff ff ff eb d2 e8 a8 00 00 00 0f 1f 84 00 00 00 00 00 49 89 ca b8 a5 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 c0 ff ff ff f7 d8 64 89 01 48
+RSP: 002b:00007ffc4fae6598 EFLAGS: 00000286 ORIG_RAX: 00000000000000a5
+RAX: ffffffffffffffda RBX: 0000000000000003 RCX: 00007f4c77147b4a
+RDX: 0000000020000000 RSI: 0000000020000100 RDI: 00007ffc4fae65b0
+RBP: 00007ffc4fae65b0 R08: 00007ffc4fae65f0 R09: 0000000000000000
+R10: 0000000000000000 R11: 0000000000000286 R12: 0000000000000004
+R13: 00007ffc4fae65f0 R14: 000000000000013c R15: 0000000020001fa0
+ </TASK>
+
+The buggy address belongs to the physical page:
+page:ffffea0001bfd0c0 refcount:0 mapcount:0 mapping:0000000000000000 index:0x1 pfn:0x6ff43
+flags: 0xfff00000000000(node=0|zone=1|lastcpupid=0x7ff)
+raw: 00fff00000000000 ffffea0001bfd108 ffff8880b9a407a0 0000000000000000
+raw: 0000000000000001 0000000000000000 00000000ffffffff 0000000000000000
+page dumped because: kasan: bad access detected
+page_owner tracks the page as freed
+page last allocated via order 0, migratetype Movable, gfp_mask 0x140dca(GFP_HIGHUSER_MOVABLE|__GFP_COMP|__GFP_ZERO), pid 3404, tgid 3404 (sshd), ts 27637676427, free_ts 27648698222
+ prep_new_page mm/page_alloc.c:2532 [inline]
+ get_page_from_freelist+0x109b/0x2ce0 mm/page_alloc.c:4283
+ __alloc_pages+0x1c7/0x510 mm/page_alloc.c:5549
+ __folio_alloc+0x12/0x40 mm/page_alloc.c:5580
+ vma_alloc_folio+0xf9/0x780 mm/mempolicy.c:2231
+ alloc_page_vma include/linux/gfp.h:290 [inline]
+ do_anonymous_page mm/memory.c:4084 [inline]
+ handle_pte_fault mm/memory.c:4915 [inline]
+ __handle_mm_fault+0x1784/0x39b0 mm/memory.c:5059
+ handle_mm_fault+0x1c8/0x780 mm/memory.c:5157
+ do_user_addr_fault+0x475/0x1210 arch/x86/mm/fault.c:1407
+ handle_page_fault arch/x86/mm/fault.c:1498 [inline]
+ exc_page_fault+0x94/0x170 arch/x86/mm/fault.c:1554
+ asm_exc_page_fault+0x22/0x30 arch/x86/include/asm/idtentry.h:570
+page last free stack trace:
+ reset_page_owner include/linux/page_owner.h:24 [inline]
+ free_pages_prepare mm/page_alloc.c:1449 [inline]
+ free_pcp_prepare+0x5e4/0xd20 mm/page_alloc.c:1499
+ free_unref_page_prepare mm/page_alloc.c:3380 [inline]
+ free_unref_page_list+0x16f/0xb90 mm/page_alloc.c:3522
+ release_pages+0xbd3/0x1400 mm/swap.c:1012
+ tlb_batch_pages_flush+0xa8/0x1a0 mm/mmu_gather.c:58
+ tlb_flush_mmu_free mm/mmu_gather.c:255 [inline]
+ tlb_flush_mmu mm/mmu_gather.c:262 [inline]
+ tlb_finish_mmu+0x147/0x7e0 mm/mmu_gather.c:353
+ unmap_region+0x27f/0x350 mm/mmap.c:2625
+ __do_munmap+0x6bd/0x10b0 mm/mmap.c:2836
+ __vm_munmap+0xf7/0x230 mm/mmap.c:2859
+ __do_sys_munmap mm/mmap.c:2884 [inline]
+ __se_sys_munmap mm/mmap.c:2881 [inline]
+ __x64_sys_munmap+0x55/0x80 mm/mmap.c:2881
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x35/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x63/0xcd
+
+Memory state around the buggy address:
+ ffff88806ff43080: ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+ ffff88806ff43100: ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+>ffff88806ff43180: ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+                                                 ^
+ ffff88806ff43200: ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+ ffff88806ff43280: ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+==================================================================

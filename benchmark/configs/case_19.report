@@ -1,0 +1,172 @@
+==================================================================
+BUG: KASAN: use-after-free in instrument_atomic_read_write include/linux/instrumented.h:101 [inline]
+BUG: KASAN: use-after-free in atomic_fetch_add_relaxed include/linux/atomic/atomic-instrumented.h:111 [inline]
+BUG: KASAN: use-after-free in __refcount_add include/linux/refcount.h:193 [inline]
+BUG: KASAN: use-after-free in __refcount_inc include/linux/refcount.h:250 [inline]
+BUG: KASAN: use-after-free in refcount_inc include/linux/refcount.h:267 [inline]
+BUG: KASAN: use-after-free in sock_hold include/net/sock.h:702 [inline]
+BUG: KASAN: use-after-free in sco_sock_timeout+0x64/0x290 net/bluetooth/sco.c:88
+Write of size 4 at addr ffff888077aa5080 by task kworker/0:3/6806
+
+CPU: 0 PID: 6806 Comm: kworker/0:3 Not tainted 5.15.0-rc2-syzkaller #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+Workqueue: events sco_sock_timeout
+Call Trace:
+ __dump_stack lib/dump_stack.c:88 [inline]
+ dump_stack_lvl+0xcd/0x134 lib/dump_stack.c:106
+ print_address_description.constprop.0.cold+0x6c/0x309 mm/kasan/report.c:256
+ __kasan_report mm/kasan/report.c:442 [inline]
+ kasan_report.cold+0x83/0xdf mm/kasan/report.c:459
+ check_region_inline mm/kasan/generic.c:183 [inline]
+ kasan_check_range+0x13d/0x180 mm/kasan/generic.c:189
+ instrument_atomic_read_write include/linux/instrumented.h:101 [inline]
+ atomic_fetch_add_relaxed include/linux/atomic/atomic-instrumented.h:111 [inline]
+ __refcount_add include/linux/refcount.h:193 [inline]
+ __refcount_inc include/linux/refcount.h:250 [inline]
+ refcount_inc include/linux/refcount.h:267 [inline]
+ sock_hold include/net/sock.h:702 [inline]
+ sco_sock_timeout+0x64/0x290 net/bluetooth/sco.c:88
+ process_one_work+0x9bf/0x16b0 kernel/workqueue.c:2297
+ worker_thread+0x658/0x11f0 kernel/workqueue.c:2444
+ kthread+0x3e5/0x4d0 kernel/kthread.c:319
+ ret_from_fork+0x1f/0x30 arch/x86/entry/entry_64.S:295
+
+Allocated by task 14096:
+ kasan_save_stack+0x1b/0x40 mm/kasan/common.c:38
+ kasan_set_track mm/kasan/common.c:46 [inline]
+ set_alloc_info mm/kasan/common.c:434 [inline]
+ ____kasan_kmalloc mm/kasan/common.c:513 [inline]
+ ____kasan_kmalloc mm/kasan/common.c:472 [inline]
+ __kasan_kmalloc+0xa4/0xd0 mm/kasan/common.c:522
+ kmalloc include/linux/slab.h:596 [inline]
+ sk_prot_alloc+0x110/0x290 net/core/sock.c:1822
+ sk_alloc+0x30/0xa60 net/core/sock.c:1875
+ sco_sock_alloc.constprop.0+0x31/0x220 net/bluetooth/sco.c:491
+ sco_sock_create+0xd5/0x1b0 net/bluetooth/sco.c:526
+ bt_sock_create+0x17c/0x340 net/bluetooth/af_bluetooth.c:130
+ __sock_create+0x353/0x790 net/socket.c:1464
+ sock_create net/socket.c:1515 [inline]
+ __sys_socket+0xef/0x200 net/socket.c:1557
+ __do_sys_socket net/socket.c:1566 [inline]
+ __se_sys_socket net/socket.c:1564 [inline]
+ __x64_sys_socket+0x6f/0xb0 net/socket.c:1564
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x35/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x44/0xae
+
+Freed by task 14097:
+ kasan_save_stack+0x1b/0x40 mm/kasan/common.c:38
+ kasan_set_track+0x1c/0x30 mm/kasan/common.c:46
+ kasan_set_free_info+0x20/0x30 mm/kasan/generic.c:360
+ ____kasan_slab_free mm/kasan/common.c:366 [inline]
+ ____kasan_slab_free mm/kasan/common.c:328 [inline]
+ __kasan_slab_free+0xff/0x130 mm/kasan/common.c:374
+ kasan_slab_free include/linux/kasan.h:230 [inline]
+ slab_free_hook mm/slub.c:1700 [inline]
+ slab_free_freelist_hook+0x81/0x190 mm/slub.c:1725
+ slab_free mm/slub.c:3483 [inline]
+ kfree+0xe4/0x530 mm/slub.c:4543
+ sk_prot_free net/core/sock.c:1858 [inline]
+ __sk_destruct+0x6a8/0x900 net/core/sock.c:1943
+ sk_destruct+0xbd/0xe0 net/core/sock.c:1958
+ __sk_free+0xef/0x3d0 net/core/sock.c:1969
+ sk_free+0x78/0xa0 net/core/sock.c:1980
+ sock_put include/net/sock.h:1815 [inline]
+ sco_sock_kill+0x18d/0x1b0 net/bluetooth/sco.c:412
+ sco_sock_release+0x155/0x2c0 net/bluetooth/sco.c:1090
+ __sock_release+0xcd/0x280 net/socket.c:649
+ sock_close+0x18/0x20 net/socket.c:1314
+ __fput+0x288/0x9f0 fs/file_table.c:280
+ task_work_run+0xdd/0x1a0 kernel/task_work.c:164
+ tracehook_notify_resume include/linux/tracehook.h:189 [inline]
+ exit_to_user_mode_loop kernel/entry/common.c:175 [inline]
+ exit_to_user_mode_prepare+0x27e/0x290 kernel/entry/common.c:209
+ __syscall_exit_to_user_mode_work kernel/entry/common.c:291 [inline]
+ syscall_exit_to_user_mode+0x19/0x60 kernel/entry/common.c:302
+ do_syscall_64+0x42/0xb0 arch/x86/entry/common.c:86
+ entry_SYSCALL_64_after_hwframe+0x44/0xae
+
+The buggy address belongs to the object at ffff888077aa5000
+ which belongs to the cache kmalloc-2k of size 2048
+The buggy address is located 128 bytes inside of
+ 2048-byte region [ffff888077aa5000, ffff888077aa5800)
+The buggy address belongs to the page:
+page:ffffea0001dea800 refcount:1 mapcount:0 mapping:0000000000000000 index:0x0 pfn:0x77aa0
+head:ffffea0001dea800 order:3 compound_mapcount:0 compound_pincount:0
+flags: 0xfff00000010200(slab|head|node=0|zone=1|lastcpupid=0x7ff)
+raw: 00fff00000010200 0000000000000000 0000000100000001 ffff888010c42000
+raw: 0000000000000000 0000000000080008 00000001ffffffff 0000000000000000
+page dumped because: kasan: bad access detected
+page_owner tracks the page as allocated
+page last allocated via order 3, migratetype Unmovable, gfp_mask 0xd20c0(__GFP_IO|__GFP_FS|__GFP_NOWARN|__GFP_NORETRY|__GFP_COMP|__GFP_NOMEMALLOC), pid 13709, ts 463168374704, free_ts 463140958931
+ prep_new_page mm/page_alloc.c:2424 [inline]
+ get_page_from_freelist+0xa72/0x2f80 mm/page_alloc.c:4153
+ __alloc_pages+0x1b2/0x500 mm/page_alloc.c:5375
+ alloc_pages+0x1a7/0x300 mm/mempolicy.c:2197
+ alloc_slab_page mm/slub.c:1763 [inline]
+ allocate_slab mm/slub.c:1900 [inline]
+ new_slab+0x319/0x490 mm/slub.c:1963
+ ___slab_alloc+0x921/0xfe0 mm/slub.c:2994
+ __slab_alloc.constprop.0+0x4d/0xa0 mm/slub.c:3081
+ slab_alloc_node mm/slub.c:3172 [inline]
+ slab_alloc mm/slub.c:3214 [inline]
+ __kmalloc+0x305/0x320 mm/slub.c:4387
+ kmalloc include/linux/slab.h:596 [inline]
+ kzalloc include/linux/slab.h:721 [inline]
+ ip6t_alloc_initial_table+0x66/0x6f0 net/ipv6/netfilter/ip6_tables.c:42
+ ip6table_nat_table_init+0x22/0x470 net/ipv6/netfilter/ip6table_nat.c:120
+ xt_find_table_lock+0x39e/0x680 net/netfilter/x_tables.c:1259
+ xt_request_find_table_lock+0x27/0xf0 net/netfilter/x_tables.c:1284
+ get_info+0x16a/0x740 net/ipv6/netfilter/ip6_tables.c:980
+ do_ip6t_get_ctl+0x152/0xa10 net/ipv6/netfilter/ip6_tables.c:1662
+ nf_getsockopt+0x72/0xd0 net/netfilter/nf_sockopt.c:116
+ ipv6_getsockopt+0x1be/0x270 net/ipv6/ipv6_sockglue.c:1486
+ tcp_getsockopt+0x86/0xd0 net/ipv4/tcp.c:4254
+page last free stack trace:
+ reset_page_owner include/linux/page_owner.h:24 [inline]
+ free_pages_prepare mm/page_alloc.c:1338 [inline]
+ free_pcp_prepare+0x2c5/0x780 mm/page_alloc.c:1389
+ free_unref_page_prepare mm/page_alloc.c:3315 [inline]
+ free_unref_page+0x19/0x690 mm/page_alloc.c:3394
+ __unfreeze_partials+0x340/0x360 mm/slub.c:2495
+ qlink_free mm/kasan/quarantine.c:146 [inline]
+ qlist_free_all+0x5a/0xc0 mm/kasan/quarantine.c:165
+ kasan_quarantine_reduce+0x180/0x200 mm/kasan/quarantine.c:272
+ __kasan_slab_alloc+0x95/0xb0 mm/kasan/common.c:444
+ kasan_slab_alloc include/linux/kasan.h:254 [inline]
+ slab_post_alloc_hook mm/slab.h:519 [inline]
+ slab_alloc_node mm/slub.c:3206 [inline]
+ slab_alloc mm/slub.c:3214 [inline]
+ kmem_cache_alloc+0x209/0x390 mm/slub.c:3219
+ ptlock_alloc mm/memory.c:5459 [inline]
+ ptlock_init include/linux/mm.h:2223 [inline]
+ pmd_ptlock_init include/linux/mm.h:2309 [inline]
+ pgtable_pmd_page_ctor include/linux/mm.h:2345 [inline]
+ pmd_alloc_one include/asm-generic/pgalloc.h:129 [inline]
+ __pmd_alloc+0xbf/0x5c0 mm/memory.c:4867
+ pmd_alloc include/linux/mm.h:2173 [inline]
+ alloc_new_pmd mm/mremap.c:94 [inline]
+ move_page_tables+0x22d9/0x2c40 mm/mremap.c:528
+ shift_arg_pages+0x192/0x410 fs/exec.c:705
+ setup_arg_pages+0x6b5/0x840 fs/exec.c:822
+ load_elf_binary+0xab8/0x4bb0 fs/binfmt_elf.c:1018
+ search_binary_handler fs/exec.c:1725 [inline]
+ exec_binprm fs/exec.c:1766 [inline]
+ bprm_execve fs/exec.c:1835 [inline]
+ bprm_execve+0x7ef/0x19b0 fs/exec.c:1797
+ do_execveat_common+0x5e3/0x780 fs/exec.c:1924
+ do_execve fs/exec.c:1992 [inline]
+ __do_sys_execve fs/exec.c:2068 [inline]
+ __se_sys_execve fs/exec.c:2063 [inline]
+ __x64_sys_execve+0x8f/0xc0 fs/exec.c:2063
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x35/0xb0 arch/x86/entry/common.c:80
+
+Memory state around the buggy address:
+ ffff888077aa4f80: fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+ ffff888077aa5000: fa fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+>ffff888077aa5080: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+                   ^
+ ffff888077aa5100: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+ ffff888077aa5180: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+==================================================================

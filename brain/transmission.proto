@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package proto;
+
+option go_package = "github.com/google/syzkaller/pkg/syzpilotlib/collectorlib";
+
+// MLTrainingDataService: training data transmission service
+// focuses on training data transmission, inference is handled by inference.proto
+service MLTrainingDataService {
+    // StreamTrainingData: stream training data
+    // fuzzer continuously sends training samples, server returns reception confirmation
+    rpc StreamTrainingData(stream TrainingBatch) returns (stream BatchResponse);
+
+    // HealthCheck: check if the server is healthy
+    rpc HealthCheck(HealthRequest) returns (HealthResponse);
+}
+
+// TrainingBatch: a batch of training samples
+// contains core data of a batch of training samples: signature, program, labels
+message TrainingBatch {
+    int64 batch_id = 1;                        // batch ID, used for tracking and confirmation
+    repeated TrainingExample examples = 2;      // list of training samples
+}
+
+// TrainingExample: a training sample
+// contains program signature, serialized data and one-hot encoded labels
+message TrainingExample {
+    string prog_sig = 1;                       // program content hash (used as unique identifier)
+    bytes prog_data = 2;                       // program serialized data (prog.Serialize())
+    repeated bool target_labels = 3;         // target reachability labels, one-hot encoded [false,true,false,false]
+}
+
+// BatchResponse: response for a batch of training samples
+message BatchResponse {
+    int64 batch_id = 1;                        // corresponding batch ID
+    string status = 2;                         // "success", "retry", or "rejected"; legacy "error" is retryable
+    string message = 3;                        // detailed information
+    uint32 processed_samples = 4;              // number of successfully processed samples
+}
+
+// HealthRequest: request for health check
+message HealthRequest {}
+
+// HealthResponse: response for health check
+message HealthResponse {
+    bool healthy = 1;                          // server health status
+    string message = 2;                        // status description
+    uint64 total_batches_received = 3;         // total number of batches received
+    uint64 total_samples_received = 4;         // total number of samples received
+}

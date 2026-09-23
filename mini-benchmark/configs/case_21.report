@@ -1,0 +1,45 @@
+------------[ cut here ]------------
+WARNING: CPU: 1 PID: 8406 at net/wireless/sme.c:532 cfg80211_sme_connect net/wireless/sme.c:532 [inline]
+WARNING: CPU: 1 PID: 8406 at net/wireless/sme.c:532 cfg80211_connect+0x1600/0x1ad0 net/wireless/sme.c:1257
+Modules linked in:
+CPU: 0 PID: 8406 Comm: syz-executor421 Not tainted 5.12.0-rc6-syzkaller #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+RIP: 0010:cfg80211_sme_connect net/wireless/sme.c:532 [inline]
+RIP: 0010:cfg80211_connect+0x1600/0x1ad0 net/wireless/sme.c:1257
+Code: e8 95 57 e2 f8 e9 9b ea ff ff 44 89 e1 80 e1 07 38 c1 0f 8c fd ea ff ff 4c 89 e7 e8 5a 57 e2 f8 e9 f0 ea ff ff e8 c0 70 9e f8 <0f> 0b bd 8d ff ff ff e9 9d f4 ff ff e8 af 70 9e f8 0f 0b e9 f8 f3
+RSP: 0018:ffffc900016a7678 EFLAGS: 00010293
+RAX: ffffffff88daa810 RBX: ffffffff8af26660 RCX: ffff88801bba54c0
+RDX: 0000000000000000 RSI: ffff888012ff3026 RDI: ffff88801c584d38
+RBP: ffff88801c584d58 R08: dffffc0000000000 R09: ffffed10038b09a7
+R10: ffffed10038b09a7 R11: 0000000000000000 R12: dffffc0000000000
+R13: ffff88801c584e10 R14: 1ffff110038b09ac R15: ffff88801c584d60
+FS:  0000000001282300(0000) GS:ffff8880b9c00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: 00007f7f792e4000 CR3: 0000000021171000 CR4: 00000000001506f0
+DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400
+Call Trace:
+ nl80211_connect+0x16d9/0x1e20 net/wireless/nl80211.c:10901
+ genl_family_rcv_msg_doit net/netlink/genetlink.c:739 [inline]
+ genl_family_rcv_msg net/netlink/genetlink.c:783 [inline]
+ genl_rcv_msg+0xe4e/0x1280 net/netlink/genetlink.c:800
+ netlink_rcv_skb+0x190/0x3a0 net/netlink/af_netlink.c:2502
+ genl_rcv+0x24/0x40 net/netlink/genetlink.c:811
+ netlink_unicast_kernel net/netlink/af_netlink.c:1312 [inline]
+ netlink_unicast+0x786/0x940 net/netlink/af_netlink.c:1338
+ netlink_sendmsg+0x9ae/0xd50 net/netlink/af_netlink.c:1927
+ sock_sendmsg_nosec net/socket.c:654 [inline]
+ sock_sendmsg net/socket.c:674 [inline]
+ ____sys_sendmsg+0x519/0x800 net/socket.c:2350
+ ___sys_sendmsg net/socket.c:2404 [inline]
+ __sys_sendmsg+0x2bf/0x370 net/socket.c:2433
+ do_syscall_64+0x2d/0x70 arch/x86/entry/common.c:46
+ entry_SYSCALL_64_after_hwframe+0x44/0xae
+RIP: 0033:0x441089
+Code: 28 00 00 00 75 05 48 83 c4 28 c3 e8 41 15 00 00 90 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 c0 ff ff ff f7 d8 64 89 01 48
+RSP: 002b:00007ffd53bce6f8 EFLAGS: 00000246 ORIG_RAX: 000000000000002e
+RAX: ffffffffffffffda RBX: 0000000000000003 RCX: 0000000000441089
+RDX: 0000000000000000 RSI: 00000000200001c0 RDI: 0000000000000003
+RBP: 0000000000000000 R08: 0000000c00000000 R09: 0000000c00000000
+R10: 0000000c00000000 R11: 0000000000000246 R12: 000000000000c9cf
+R13: 00007ffd53bce760 R14: 00007ffd53bce750 R15: 00007ffd53bce71c

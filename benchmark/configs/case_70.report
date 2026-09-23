@@ -1,0 +1,175 @@
+Bluetooth: hci4: Opcode 0x0c1a failed: -4
+Bluetooth: hci6: Opcode 0x0c1a failed: -4
+Bluetooth: hci7: Opcode 0x0c1a failed: -4
+==================================================================
+BUG: KASAN: slab-out-of-bounds in sco_conn_free net/bluetooth/sco.c:87 [inline]
+BUG: KASAN: slab-out-of-bounds in kref_put include/linux/kref.h:65 [inline]
+BUG: KASAN: slab-out-of-bounds in sco_conn_put+0x471/0x4c0 net/bluetooth/sco.c:107
+Write of size 8 at addr ffff888106d425a0 by task syz.2.970/24712
+
+CPU: 2 UID: 0 PID: 24712 Comm: syz.2.970 Not tainted 6.14.0-rc7 #1
+Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+Call Trace:
+ <TASK>
+ __dump_stack lib/dump_stack.c:94 [inline]
+ dump_stack_lvl+0x116/0x1f0 lib/dump_stack.c:120
+ print_address_description mm/kasan/report.c:408 [inline]
+ print_report+0xc3/0x670 mm/kasan/report.c:521
+ kasan_report+0xd9/0x110 mm/kasan/report.c:634
+ sco_conn_free net/bluetooth/sco.c:87 [inline]
+ kref_put include/linux/kref.h:65 [inline]
+ sco_conn_put+0x471/0x4c0 net/bluetooth/sco.c:107
+ sco_conn_del+0x26f/0x2e0 net/bluetooth/sco.c:271
+ sco_connect_cfm+0x26c/0xd80 net/bluetooth/sco.c:1426
+ hci_connect_cfm include/net/bluetooth/hci_core.h:2029 [inline]
+ hci_conn_failed+0x1ba/0x330 net/bluetooth/hci_conn.c:1266
+ hci_conn_cleanup_child net/bluetooth/hci_conn.c:1076 [inline]
+ hci_conn_unlink+0x71e/0x9f0 net/bluetooth/hci_conn.c:1103
+ hci_conn_del+0x61/0xdb0 net/bluetooth/hci_conn.c:1129
+ hci_abort_conn_sync+0x745/0xb40 net/bluetooth/hci_sync.c:5588
+ hci_disconnect_all_sync.constprop.0+0x104/0x3c0 net/bluetooth/hci_sync.c:5611
+ hci_suspend_sync+0x772/0xab0 net/bluetooth/hci_sync.c:6088
+ hci_suspend_dev+0x30a/0x510 net/bluetooth/hci_core.c:2812
+ hci_suspend_notifier+0x28d/0x2f0 net/bluetooth/hci_core.c:2392
+ notifier_call_chain+0xb7/0x410 kernel/notifier.c:85
+ notifier_call_chain_robust kernel/notifier.c:120 [inline]
+ blocking_notifier_call_chain_robust kernel/notifier.c:345 [inline]
+ blocking_notifier_call_chain_robust+0xc9/0x170 kernel/notifier.c:333
+ pm_notifier_call_chain_robust+0x27/0x60 kernel/power/main.c:102
+ snapshot_open+0x189/0x2b0 kernel/power/user.c:77
+ misc_open+0x35a/0x420 drivers/char/misc.c:179
+ chrdev_open+0x237/0x6a0 fs/char_dev.c:414
+ do_dentry_open+0x735/0x1c40 fs/open.c:956
+ vfs_open+0x82/0x3f0 fs/open.c:1086
+ do_open fs/namei.c:3830 [inline]
+ path_openat+0x1e88/0x2d80 fs/namei.c:3989
+ do_filp_open+0x20c/0x470 fs/namei.c:4016
+ do_sys_openat2+0x17a/0x1e0 fs/open.c:1428
+ do_sys_open fs/open.c:1443 [inline]
+ __do_sys_openat fs/open.c:1459 [inline]
+ __se_sys_openat fs/open.c:1454 [inline]
+ __x64_sys_openat+0x175/0x210 fs/open.c:1454
+ do_syscall_x64 arch/x86/entry/common.c:52 [inline]
+ do_syscall_64+0xcd/0x250 arch/x86/entry/common.c:83
+ entry_SYSCALL_64_after_hwframe+0x77/0x7f
+RIP: 0033:0x56676d
+Code: 02 b8 ff ff ff ff c3 66 0f 1f 44 00 00 f3 0f 1e fa 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 a8 ff ff ff f7 d8 64 89 01 48
+RSP: 002b:00007f5c4a32efc8 EFLAGS: 00000246 ORIG_RAX: 0000000000000101
+RAX: ffffffffffffffda RBX: 0000000000785fa0 RCX: 000000000056676d
+RDX: 0000000000000400 RSI: 0000400000000500 RDI: ffffffffffffff9c
+RBP: 0000000000000000 R08: 0000000000000000 R09: 0000000000000000
+R10: 0000000000000000 R11: 0000000000000246 R12: 0000000000785fac
+R13: 0000000000000000 R14: 0000000000785fa0 R15: 00007f5c4a30f000
+ </TASK>
+
+Allocated by task 818:
+ kasan_save_stack+0x33/0x60 mm/kasan/common.c:47
+ kasan_save_track+0x14/0x30 mm/kasan/common.c:68
+ poison_kmalloc_redzone mm/kasan/common.c:377 [inline]
+ __kasan_kmalloc+0xaa/0xb0 mm/kasan/common.c:394
+ kmalloc_noprof include/linux/slab.h:901 [inline]
+ kzalloc_noprof include/linux/slab.h:1037 [inline]
+ usb_set_configuration+0x2a8/0x1c50 drivers/usb/core/message.c:2037
+ usb_generic_driver_probe+0xb1/0x110 drivers/usb/core/generic.c:250
+ usb_probe_device+0xec/0x3e0 drivers/usb/core/driver.c:291
+ call_driver_probe drivers/base/dd.c:579 [inline]
+ really_probe+0x23e/0xa90 drivers/base/dd.c:658
+ __driver_probe_device+0x1de/0x440 drivers/base/dd.c:800
+ driver_probe_device+0x4c/0x1b0 drivers/base/dd.c:830
+ __device_attach_driver+0x1df/0x310 drivers/base/dd.c:958
+ bus_for_each_drv+0x157/0x1e0 drivers/base/bus.c:462
+ __device_attach+0x1e8/0x4b0 drivers/base/dd.c:1030
+ bus_probe_device+0x17f/0x1c0 drivers/base/bus.c:537
+ device_add+0x114b/0x1a70 drivers/base/core.c:3666
+ usb_new_device+0xd09/0x19d0 drivers/usb/core/hub.c:2663
+ hub_port_connect drivers/usb/core/hub.c:5533 [inline]
+ hub_port_connect_change drivers/usb/core/hub.c:5673 [inline]
+ port_event drivers/usb/core/hub.c:5833 [inline]
+ hub_event+0x2d9a/0x4e10 drivers/usb/core/hub.c:5915
+ process_one_work+0x9c5/0x1ba0 kernel/workqueue.c:3238
+ process_scheduled_works kernel/workqueue.c:3319 [inline]
+ worker_thread+0x6c8/0xf00 kernel/workqueue.c:3400
+ kthread+0x3af/0x750 kernel/kthread.c:464
+ ret_from_fork+0x45/0x80 arch/x86/kernel/process.c:148
+ ret_from_fork_asm+0x1a/0x30 arch/x86/entry/entry_64.S:244
+
+The buggy address belongs to the object at ffff888106d42000
+ which belongs to the cache kmalloc-2k of size 2048
+The buggy address is located 112 bytes to the right of
+ allocated 1328-byte region [ffff888106d42000, ffff888106d42530)
+
+The buggy address belongs to the physical page:
+page: refcount:0 mapcount:0 mapping:0000000000000000 index:0x0 pfn:0x106d40
+head: order:3 mapcount:0 entire_mapcount:0 nr_pages_mapped:0 pincount:0
+flags: 0x57ff00000000040(head|node=1|zone=2|lastcpupid=0x7ff)
+page_type: f5(slab)
+raw: 057ff00000000040 ffff88801b042f00 ffffea000498ce00 dead000000000002
+raw: 0000000000000000 0000000000080008 00000000f5000000 0000000000000000
+head: 057ff00000000040 ffff88801b042f00 ffffea000498ce00 dead000000000002
+head: 0000000000000000 0000000000080008 00000000f5000000 0000000000000000
+head: 057ff00000000003 ffffea00041b5001 ffffffffffffffff 0000000000000000
+head: 0000000000000008 0000000000000000 00000000ffffffff 0000000000000000
+page dumped because: kasan: bad access detected
+page_owner tracks the page as allocated
+page last allocated via order 3, migratetype Unmovable, gfp_mask 0xd20c0(__GFP_IO|__GFP_FS|__GFP_NOWARN|__GFP_NORETRY|__GFP_COMP|__GFP_NOMEMALLOC), pid 8806, tgid 8737 (in:imklog), ts 90406683211, free_ts 90296202448
+ set_page_owner include/linux/page_owner.h:32 [inline]
+ post_alloc_hook+0x181/0x1b0 mm/page_alloc.c:1551
+ prep_new_page mm/page_alloc.c:1559 [inline]
+ get_page_from_freelist+0xfce/0x2f80 mm/page_alloc.c:3477
+ __alloc_frozen_pages_noprof+0x221/0x2470 mm/page_alloc.c:4740
+ alloc_pages_mpol+0x1fc/0x540 mm/mempolicy.c:2270
+ alloc_slab_page mm/slub.c:2423 [inline]
+ allocate_slab mm/slub.c:2587 [inline]
+ new_slab+0x23d/0x330 mm/slub.c:2640
+ ___slab_alloc+0xc5d/0x1720 mm/slub.c:3826
+ __slab_alloc.constprop.0+0x56/0xb0 mm/slub.c:3916
+ __slab_alloc_node mm/slub.c:3991 [inline]
+ slab_alloc_node mm/slub.c:4152 [inline]
+ __kmalloc_cache_noprof+0xfa/0x410 mm/slub.c:4320
+ kmalloc_noprof include/linux/slab.h:901 [inline]
+ syslog_print+0xf9/0x5d0 kernel/printk/printk.c:1607
+ do_syslog+0x3e1/0x6c0 kernel/printk/printk.c:1785
+ kmsg_read+0x8d/0xc0 fs/proc/kmsg.c:37
+ pde_read fs/proc/inode.c:308 [inline]
+ proc_reg_read+0x11d/0x330 fs/proc/inode.c:318
+ vfs_read+0x1df/0xbf0 fs/read_write.c:563
+ ksys_read+0x12b/0x250 fs/read_write.c:708
+ do_syscall_x64 arch/x86/entry/common.c:52 [inline]
+ do_syscall_64+0xcd/0x250 arch/x86/entry/common.c:83
+ entry_SYSCALL_64_after_hwframe+0x77/0x7f
+page last free pid 9500 tgid 9500 stack trace:
+ reset_page_owner include/linux/page_owner.h:25 [inline]
+ free_pages_prepare mm/page_alloc.c:1127 [inline]
+ free_frozen_pages+0x672/0xfa0 mm/page_alloc.c:2660
+ qlink_free mm/kasan/quarantine.c:163 [inline]
+ qlist_free_all+0x4e/0x120 mm/kasan/quarantine.c:179
+ kasan_quarantine_reduce+0x195/0x1e0 mm/kasan/quarantine.c:286
+ __kasan_slab_alloc+0x69/0x90 mm/kasan/common.c:329
+ kasan_slab_alloc include/linux/kasan.h:250 [inline]
+ slab_post_alloc_hook mm/slub.c:4115 [inline]
+ slab_alloc_node mm/slub.c:4164 [inline]
+ __do_kmalloc_node mm/slub.c:4293 [inline]
+ __kmalloc_node_track_caller_noprof+0x1d3/0x510 mm/slub.c:4313
+ __kmemdup_nul mm/util.c:62 [inline]
+ kstrdup+0x53/0x100 mm/util.c:82
+ kstrdup_const+0x63/0x80 mm/util.c:102
+ kvasprintf_const+0x10f/0x1a0 lib/kasprintf.c:48
+ kobject_set_name_vargs+0x5a/0x140 lib/kobject.c:274
+ dev_set_name+0xc8/0x100 drivers/base/core.c:3469
+ netdev_register_kobject+0xc5/0x3a0 net/core/net-sysfs.c:2157
+ register_netdevice+0x147b/0x1eb0 net/core/dev.c:10946
+ virt_wifi_newlink+0x3ed/0x980 drivers/net/wireless/virtual/virt_wifi.c:567
+ rtnl_newlink_create net/core/rtnetlink.c:3796 [inline]
+ __rtnl_newlink net/core/rtnetlink.c:3907 [inline]
+ rtnl_newlink+0xb95/0x1d60 net/core/rtnetlink.c:4022
+ rtnetlink_rcv_msg+0x95b/0xea0 net/core/rtnetlink.c:6912
+ netlink_rcv_skb+0x16b/0x440 net/netlink/af_netlink.c:2533
+
+Memory state around the buggy address:
+ ffff888106d42480: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ ffff888106d42500: 00 00 00 00 00 00 fc fc fc fc fc fc fc fc fc fc
+>ffff888106d42580: fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+                               ^
+ ffff888106d42600: fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+ ffff888106d42680: fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+==================================================================

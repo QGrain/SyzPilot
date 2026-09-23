@@ -1,0 +1,74 @@
+loop0: detected capacity change from 37488 to 0
+gfs2: fsid=syz:syz: Trying to join cluster "lock_nolock", "syz:syz"
+gfs2: fsid=syz:syz: Now mounting FS...
+gfs2: fsid=syz:syz.0: fatal: invalid metadata block
+  bh = 2075 (magic number)
+  function = gfs2_meta_indirect_buffer, file = fs/gfs2/meta_io.c, line = 488
+gfs2: fsid=syz:syz.0: about to withdraw this file system
+general protection fault, probably for non-canonical address 0xdffffc000000000e: 0000 [#1] PREEMPT SMP KASAN
+KASAN: null-ptr-deref in range [0x0000000000000070-0x0000000000000077]
+CPU: 0 PID: 8475 Comm: syz-executor937 Not tainted 5.11.0-rc1-syzkaller #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+RIP: 0010:signal_our_withdraw fs/gfs2/util.c:97 [inline]
+RIP: 0010:gfs2_withdraw.cold+0xff/0xbee fs/gfs2/util.c:294
+Code: 00 48 c1 e0 2a 80 3c 02 00 0f 85 1c 02 00 00 4c 8b bb 08 09 00 00 b8 ff ff 37 00 48 c1 e0 2a 49 8d 7f 70 48 89 fa 48 c1 ea 03 <80> 3c 02 00 74 05 e8 10 7e f9 f8 4d 8b 7f 70 b8 ff ff 37 00 48 c1
+RSP: 0018:ffffc9000110f370 EFLAGS: 00010212
+RAX: dffffc0000000000 RBX: ffff888018348000 RCX: 0000000000000000
+RDX: 000000000000000e RSI: ffffffff88bb89c6 RDI: 0000000000000070
+RBP: ffff8880183482c5 R08: 0000000000000038 R09: 0000000000000000
+R10: ffffffff88bb89b5 R11: 0000000000000000 R12: ffff8880183480a8
+R13: ffff888018348348 R14: ffffffff8990ea40 R15: 0000000000000000
+FS:  0000000000b34880(0000) GS:ffff8880b9e00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: 000055d3242ec160 CR3: 00000000143c5000 CR4: 0000000000350ef0
+Call Trace:
+ gfs2_meta_check_ii+0x68/0xa0 fs/gfs2/util.c:450
+ gfs2_metatype_check_i fs/gfs2/util.h:126 [inline]
+ gfs2_meta_indirect_buffer+0x3a3/0x3f0 fs/gfs2/meta_io.c:488
+ gfs2_meta_inode_buffer fs/gfs2/meta_io.h:70 [inline]
+ gfs2_inode_refresh+0x95/0xdf0 fs/gfs2/glops.c:478
+ inode_go_lock+0x309/0x4a0 fs/gfs2/glops.c:508
+ do_promote+0x4a0/0xb70 fs/gfs2/glock.c:395
+ finish_xmote+0x671/0xe40 fs/gfs2/glock.c:562
+ do_xmote+0x821/0xbc0 fs/gfs2/glock.c:688
+ run_queue+0x323/0x680 fs/gfs2/glock.c:753
+ gfs2_glock_nq+0x70a/0x11a0 fs/gfs2/glock.c:1408
+ gfs2_glock_nq_init fs/gfs2/glock.h:238 [inline]
+ gfs2_lookupi+0x314/0x630 fs/gfs2/inode.c:322
+ gfs2_lookup_simple+0x99/0xe0 fs/gfs2/inode.c:273
+ init_journal fs/gfs2/ops_fstype.c:714 [inline]
+ init_inodes+0x3cb/0x2650 fs/gfs2/ops_fstype.c:857
+ gfs2_fill_super+0x1a84/0x24e0 fs/gfs2/ops_fstype.c:1184
+ get_tree_bdev+0x421/0x740 fs/super.c:1291
+ gfs2_get_tree+0x4a/0x270 fs/gfs2/ops_fstype.c:1260
+ vfs_get_tree+0x89/0x2f0 fs/super.c:1496
+ do_new_mount fs/namespace.c:2878 [inline]
+ path_mount+0x13ad/0x20c0 fs/namespace.c:3208
+ do_mount fs/namespace.c:3221 [inline]
+ __do_sys_mount fs/namespace.c:3429 [inline]
+ __se_sys_mount fs/namespace.c:3406 [inline]
+ __x64_sys_mount+0x27f/0x300 fs/namespace.c:3406
+ do_syscall_64+0x2d/0x70 arch/x86/entry/common.c:46
+ entry_SYSCALL_64_after_hwframe+0x44/0xa9
+RIP: 0033:0x45b45a
+Code: b8 08 00 00 00 0f 05 48 3d 01 f0 ff ff 0f 83 fd ad fb ff c3 66 2e 0f 1f 84 00 00 00 00 00 66 90 49 89 ca b8 a5 00 00 00 0f 05 <48> 3d 01 f0 ff ff 0f 83 da ad fb ff c3 66 0f 1f 84 00 00 00 00 00
+RSP: 002b:00007ffe227b2028 EFLAGS: 00000293 ORIG_RAX: 00000000000000a5
+RAX: ffffffffffffffda RBX: 00007ffe227b2080 RCX: 000000000045b45a
+RDX: 0000000020000000 RSI: 0000000020000100 RDI: 00007ffe227b2040
+RBP: 00007ffe227b2040 R08: 00007ffe227b2080 R09: 00007ffe00000015
+R10: 0000000000000000 R11: 0000000000000293 R12: 0000000000000919
+R13: 0000000000000004 R14: 0000000000000003 R15: 0000000000000003
+Modules linked in:
+---[ end trace 08f1e840d7d342c3 ]---
+RIP: 0010:signal_our_withdraw fs/gfs2/util.c:97 [inline]
+RIP: 0010:gfs2_withdraw.cold+0xff/0xbee fs/gfs2/util.c:294
+Code: 00 48 c1 e0 2a 80 3c 02 00 0f 85 1c 02 00 00 4c 8b bb 08 09 00 00 b8 ff ff 37 00 48 c1 e0 2a 49 8d 7f 70 48 89 fa 48 c1 ea 03 <80> 3c 02 00 74 05 e8 10 7e f9 f8 4d 8b 7f 70 b8 ff ff 37 00 48 c1
+RSP: 0018:ffffc9000110f370 EFLAGS: 00010212
+RAX: dffffc0000000000 RBX: ffff888018348000 RCX: 0000000000000000
+RDX: 000000000000000e RSI: ffffffff88bb89c6 RDI: 0000000000000070
+RBP: ffff8880183482c5 R08: 0000000000000038 R09: 0000000000000000
+R10: ffffffff88bb89b5 R11: 0000000000000000 R12: ffff8880183480a8
+R13: ffff888018348348 R14: ffffffff8990ea40 R15: 0000000000000000
+FS:  0000000000b34880(0000) GS:ffff8880b9e00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: 000055d3242ec160 CR3: 00000000143c5000 CR4: 0000000000350ef0

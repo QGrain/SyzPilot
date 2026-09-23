@@ -1,0 +1,46 @@
+L1TF CPU bug present and SMT on, data leak possible. See CVE-2018-3646 and https://www.kernel.org/doc/html/latest/admin-guide/hw-vuln/l1tf.html for details.
+=============================
+WARNING: suspicious RCU usage
+5.15.112-syzkaller #0 Not tainted
+-----------------------------
+include/linux/kvm_host.h:880 suspicious rcu_dereference_check() usage!
+
+other info that might help us debug this:
+
+
+rcu_scheduler_active = 2, debug_locks = 1
+1 lock held by syz-executor173/3498:
+ #0: ffff8880736540c8 (&vcpu->mutex){+.+.}-{3:3}, at: kvm_vcpu_ioctl+0x1d4/0xcf0 arch/x86/kvm/../../../virt/kvm/kvm_main.c:3840
+
+stack backtrace:
+CPU: 0 PID: 3498 Comm: syz-executor173 Not tainted 5.15.112-syzkaller #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 04/28/2023
+Call Trace:
+ <TASK>
+ __dump_stack lib/dump_stack.c:88 [inline]
+ dump_stack_lvl+0x1e3/0x2cb lib/dump_stack.c:106
+ __kvm_memslots include/linux/kvm_host.h:878 [inline]
+ kvm_vcpu_memslots+0x1b7/0x200 include/linux/kvm_host.h:892
+ kvm_vcpu_gfn_to_memslot+0x2b/0x390 arch/x86/kvm/../../../virt/kvm/kvm_main.c:2140
+ kvm_vcpu_unmap+0x5d/0x80 arch/x86/kvm/../../../virt/kvm/kvm_main.c:2755
+ nested_vmx_vmexit+0x1451/0x2b50 arch/x86/kvm/vmx/nested.c:4662
+ vmx_leave_nested+0x7d/0xb0 arch/x86/kvm/vmx/nested.c:6322
+ kvm_leave_nested arch/x86/kvm/x86.c:618 [inline]
+ kvm_vcpu_ioctl_x86_set_vcpu_events+0x8d8/0x10e0 arch/x86/kvm/x86.c:4793
+ kvm_arch_vcpu_ioctl+0x120e/0x1d40 arch/x86/kvm/x86.c:5278
+ kvm_vcpu_ioctl+0x6db/0xcf0 arch/x86/kvm/../../../virt/kvm/kvm_main.c:4019
+ vfs_ioctl fs/ioctl.c:51 [inline]
+ __do_sys_ioctl fs/ioctl.c:874 [inline]
+ __se_sys_ioctl+0xf1/0x160 fs/ioctl.c:860
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x3d/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x61/0xcb
+RIP: 0033:0x7fd786045ed9
+Code: 28 c3 e8 2a 14 00 00 66 2e 0f 1f 84 00 00 00 00 00 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 c0 ff ff ff f7 d8 64 89 01 48
+RSP: 002b:00007ffe880d8068 EFLAGS: 00000246 ORIG_RAX: 0000000000000010
+RAX: ffffffffffffffda RBX: 0000000000000000 RCX: 00007fd786045ed9
+RDX: 00000000200000c0 RSI: 000000004040aea0 RDI: 0000000000000005
+RBP: 00007fd7860099d0 R08: 0000000000000000 R09: 0000000000000000
+R10: 0000000000000000 R11: 0000000000000246 R12: 00007fd786009a60
+R13: 0000000000000000 R14: 0000000000000000 R15: 0000000000000000
+ </TASK>

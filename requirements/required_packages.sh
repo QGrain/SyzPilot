@@ -1,0 +1,1 @@
+sudo apt install -y libaio-dev vim curl net-tools git openjdk-11-jdk

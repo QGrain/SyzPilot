@@ -1,0 +1,1 @@
+WARNING: kmalloc bug in snd_pcm_plugin_alloc

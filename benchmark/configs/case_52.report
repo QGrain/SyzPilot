@@ -1,0 +1,54 @@
+==================================================================
+BUG: KASAN: use-after-free in ntfs_read_locked_inode+0x49dc/0x58b0 fs/ntfs/inode.c:645
+Read of size 8 at addr ffff8880374ee6cd by task syz-executor401/8528
+
+CPU: 1 PID: 8528 Comm: syz-executor401 Not tainted 5.10.0-rc5-syzkaller #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+Call Trace:
+ __dump_stack lib/dump_stack.c:77 [inline]
+ dump_stack+0x107/0x163 lib/dump_stack.c:118
+ print_address_description.constprop.0.cold+0xae/0x497 mm/kasan/report.c:385
+ __kasan_report mm/kasan/report.c:545 [inline]
+ kasan_report.cold+0x1f/0x37 mm/kasan/report.c:562
+ ntfs_read_locked_inode+0x49dc/0x58b0 fs/ntfs/inode.c:645
+ ntfs_iget+0x12d/0x180 fs/ntfs/inode.c:177
+ load_and_init_attrdef fs/ntfs/super.c:1589 [inline]
+ load_system_files fs/ntfs/super.c:1817 [inline]
+ ntfs_fill_super+0x255c/0x8560 fs/ntfs/super.c:2893
+ mount_bdev+0x32e/0x3f0 fs/super.c:1419
+ legacy_get_tree+0x105/0x220 fs/fs_context.c:592
+ vfs_get_tree+0x89/0x2f0 fs/super.c:1549
+ do_new_mount fs/namespace.c:2875 [inline]
+ path_mount+0x13ad/0x20c0 fs/namespace.c:3205
+ do_mount fs/namespace.c:3218 [inline]
+ __do_sys_mount fs/namespace.c:3426 [inline]
+ __se_sys_mount fs/namespace.c:3403 [inline]
+ __x64_sys_mount+0x27f/0x300 fs/namespace.c:3403
+ do_syscall_64+0x2d/0x70 arch/x86/entry/common.c:46
+ entry_SYSCALL_64_after_hwframe+0x44/0xa9
+RIP: 0033:0x44954a
+Code: b8 08 00 00 00 0f 05 48 3d 01 f0 ff ff 0f 83 7d a3 fb ff c3 66 2e 0f 1f 84 00 00 00 00 00 66 90 49 89 ca b8 a5 00 00 00 0f 05 <48> 3d 01 f0 ff ff 0f 83 5a a3 fb ff c3 66 0f 1f 84 00 00 00 00 00
+RSP: 002b:00007ffe2910bd28 EFLAGS: 00000287 ORIG_RAX: 00000000000000a5
+RAX: ffffffffffffffda RBX: 00007ffe2910bd80 RCX: 000000000044954a
+RDX: 0000000020000000 RSI: 0000000020000100 RDI: 00007ffe2910bd40
+RBP: 00007ffe2910bd40 R08: 00007ffe2910bd80 R09: 0000000000000000
+R10: 0000000000000000 R11: 0000000000000287 R12: 00000000000000ac
+R13: 0000000000000004 R14: 0000000000000003 R15: 0000000000000003
+
+The buggy address belongs to the page:
+page:00000000dbe06e8c refcount:1 mapcount:0 mapping:0000000069d82f88 index:0x200 pfn:0x374ee
+aops:shmem_aops ino:40b dentry name:"memfd:syzkaller"
+flags: 0xfff0000008001e(referenced|uptodate|dirty|lru|swapbacked)
+raw: 00fff0000008001e ffffea0000ca4a08 ffffea0000d8de88 ffff8880287936a8
+raw: 0000000000000200 0000000000000000 00000001ffffffff ffff888010e00000
+page dumped because: kasan: bad access detected
+page->mem_cgroup:ffff888010e00000
+
+Memory state around the buggy address:
+ ffff8880374ee580: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ ffff8880374ee600: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+>ffff8880374ee680: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+                                              ^
+ ffff8880374ee700: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ ffff8880374ee780: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+==================================================================

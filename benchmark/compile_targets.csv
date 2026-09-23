@@ -1,0 +1,74 @@
+# CSV Configuration for Directed Kernel Fuzzing Targets
+# Only first 3 columns are used by compile_kernel.py
+# config_path can be absolute path or relative path to this configuration file
+# Format: case_name,commit_hash,config_path,title,target_pc
+# Note: cases without commit_hash need to be determined before compilation
+
+case_1,761c6d7ec820,./configs/case_1.config,kernel BUG in validate_xmit_skb,TBD
+case_2,e8f71f89236e,./configs/case_2.config,WARNING: ODEBUG bug in qdisc_create,TBD
+case_3,02d5e016800d,./configs/case_3.config,BUG: unable to handle kernel NULL pointer dereference in fifo_set_limit,TBD
+case_4,1ec35eadc3b4,./configs/case_4.config,KASAN: slab-use-after-free Read in tcf_action_destroy,TBD
+case_5,d888c83fcec7,./configs/case_5.config,KASAN: slab-out-of-bounds Read in vxlan_vnifilter_dump_dev,TBD
+case_6,a763d5a5abd6,./configs/case_6.config,KASAN: invalid-free in packet_set_ring,TBD
+case_7,200e340f2196,./configs/case_7.config,KASAN: use-after-free Read in ipvlan_queue_xmit,TBD
+case_8,5c8fe583cce5,./configs/case_8.config,KASAN: slab-out-of-bounds Read in squashfs_export_iget,TBD
+case_9,e5220dd16778,./configs/case_9.config,KASAN: use-after-free Read in snd_seq_timer_interrupt,TBD
+case_10,0457e5153e0e,./configs/case_10.config,WARNING in __dma_map_sg_attrs,TBD
+case_11,56e337f2cf13,./configs/case_11.config,WARNING in kvm_mmu_notifier_invalidate_range_start,TBD
+case_12,6f513529296f,./configs/case_12.config,KASAN: use-after-free Write in io_submit_one,TBD
+case_13,dfd42facf1e4,./configs/case_13.config,KASAN: use-after-free Read in madvise_update_vma,TBD
+case_14,1c273e10bc0c,./configs/case_14.config,KASAN: use-after-free Read in disk_part_iter_next,TBD
+case_15,78e709522d2c,./configs/case_15.config,KASAN: use-after-free Write in null_skcipher_crypt,TBD
+case_16,d2b6f8a17919,./configs/case_16.config,BUG: unable to handle kernel paging request in vga16fb_imageblit,TBD
+case_17,d2b6f8a17919,./configs/case_17.config,WARNING in tracepoint_add_func,TBD
+case_18,68453767131a,./configs/case_18.config,WARNING: kmalloc bug in snd_pcm_plugin_alloc,TBD
+case_19,cf1d2c3e7e2f,./configs/case_19.config,KASAN: use-after-free Write in sco_sock_timeout,TBD
+case_20,2585cf9dfaad,./configs/case_20.config,KASAN: use-after-free Read in remove_wait_queue,TBD
+case_21,2d743660786e,./configs/case_21.config
+case_22,b6bb9676f216,./configs/case_22.config
+case_23,f40ddce88593,./configs/case_23.config
+case_24,315d99318179,./configs/case_24.config
+case_25,1e57930e9f40,./configs/case_25.config
+case_26,a5088ee7251e,./configs/case_26.config
+case_27,521b619acdc8,./configs/case_27.config
+case_28,56e337f2cf13,./configs/case_28.config
+case_29,8cae8cd89f05,./configs/case_29.config
+case_30,6e764bcd1cf7,./configs/case_30.config
+case_31,f40ddce88593,./configs/case_31.config
+case_32,fe75a21824e7,./configs/case_32.config
+case_33,f4bc5bbb5fef,./configs/case_33.config
+case_34,3aa430d33b8d,./configs/case_34.config
+case_35,139711f033f6,./configs/case_35.config
+case_36,6207214a70bf,./configs/case_36.config
+case_37,6207214a70bf,./configs/case_37.config
+case_38,4ee998b0ef8b,./configs/case_38.config
+case_39,64b4fc45bea6,./configs/case_39.config
+case_40,b91db6a0b52e,./configs/case_40.config
+case_41,dd86e7fa07a3,./configs/case_41.config
+case_42,7acac4b3196c,./configs/case_42.config
+case_43,304040fb4909,./configs/case_43.config
+case_46,ec681c53f8d2,./configs/case_46.config
+case_47,2f111a6fd5b5,./configs/case_47.config
+case_48,f6e1ea196492,./configs/case_48.config
+case_49,e71e60cd74df,./configs/case_49.config
+case_50,57fa2369ab17,./configs/case_50.config
+case_51,a6afa4199d3d,./configs/case_51.config
+case_52,418baf2c28f3,./configs/case_52.config
+case_53,a0d54b4f5b21,./configs/case_53.config
+case_54,cd796ed33450,./configs/case_54.config
+case_55,1bdc3d5be7e1,./configs/case_55.config
+case_56,a6afa4199d3d,./configs/case_56.config
+case_57,7a7fd0de4a98,./configs/case_57.config
+case_58,952923ddc011,./configs/case_58.config
+case_59,9f4ad9e425a1,./configs/case_59.config
+case_60,200e340f2196,./configs/case_60.config
+case_61,9d6bde853685,./configs/case_61.config
+case_62,a78d278e01b1,./configs/case_62.config
+case_63,a4d7d7011219,./configs/case_63.config
+case_64,2af9b20dbb39,./configs/case_64.config
+case_65,052d534373b7,./configs/case_65.config
+case_66,2f87d0916ce0,./configs/case_66.config
+case_67,e8f897f4afef,./configs/case_67.config
+case_68,f08cdc6cc92e,./configs/case_68.config
+case_69,a64dcfb451e2,./configs/case_69.config
+case_70,4701f33a1070,./configs/case_70.config

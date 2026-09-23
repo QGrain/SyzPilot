@@ -1,0 +1,64 @@
+BUG: unable to handle page fault for address: ffff888001000040
+#PF: supervisor write access in kernel mode
+#PF: error_code(0x0003) - permissions violation
+PGD 11201067 P4D 11201067 PUD 11202067 PMD 80000000010001e1
+Oops: 0003 [#1] PREEMPT SMP KASAN
+CPU: 0 PID: 8403 Comm: syz-executor112 Not tainted 5.12.0-syzkaller #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+RIP: 0010:writeb arch/x86/include/asm/io.h:65 [inline]
+RIP: 0010:vga_imageblit_expand drivers/video/fbdev/vga16fb.c:1176 [inline]
+RIP: 0010:vga16fb_imageblit+0xcee/0x1cb0 drivers/video/fbdev/vga16fb.c:1260
+Code: 66 66 2e 0f 1f 84 00 00 00 00 00 90 4c 89 e0 48 c1 e8 03 48 b9 00 00 00 00 00 fc ff df 0f b6 04 08 84 c0 75 1b 41 0f b6 04 24 <41> 88 06 85 ed 74 2b 49 ff c4 49 ff c6 e8 80 ae 43 fd ff cd eb cc
+RSP: 0018:ffffc9000163f0a0 EFLAGS: 00010246
+RAX: 0000000000000000 RBX: ffff888001000040 RCX: dffffc0000000000
+RDX: ffff888022ad54c0 RSI: 0000000000000002 RDI: 0000000000000000
+RBP: 0000000000000001 R08: ffffffff843b289b R09: 0000000000000000
+R10: 0000000000000002 R11: ffff888022ad54c0 R12: ffff8880181bcea8
+R13: ffffc9000163f2cc R14: ffff888001000040 R15: 0000000000000004
+FS:  0000000001207300(0000) GS:ffff8880b9a00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: ffff888001000040 CR3: 0000000028d32000 CR4: 00000000001506f0
+DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400
+Call Trace:
+ bit_putcs+0x18e8/0x1de0 drivers/video/fbdev/core/bitblit.c:105
+ fbcon_putcs+0x2ae/0x430 drivers/video/fbdev/core/fbcon.c:1296
+ do_update_region+0x4d6/0x6a0 drivers/tty/vt/vt.c:676
+ redraw_screen+0x8f6/0x1270 drivers/tty/vt/vt.c:1035
+ fbcon_blank+0x556/0xa50 drivers/video/fbdev/core/fbcon.c:2207
+ do_unblank_screen+0x27e/0xb20 drivers/tty/vt/vt.c:4406
+ vt_kdsetmode drivers/tty/vt/vt_ioctl.c:276 [inline]
+ vt_k_ioctl drivers/tty/vt/vt_ioctl.c:381 [inline]
+ vt_ioctl+0x2a82/0x3180 drivers/tty/vt/vt_ioctl.c:713
+ tty_ioctl+0xf51/0x1720 drivers/tty/tty_io.c:2805
+ vfs_ioctl fs/ioctl.c:51 [inline]
+ __do_sys_ioctl fs/ioctl.c:1069 [inline]
+ __se_sys_ioctl+0xfb/0x170 fs/ioctl.c:1055
+ do_syscall_64+0x3f/0xb0 arch/x86/entry/common.c:47
+ entry_SYSCALL_64_after_hwframe+0x44/0xae
+RIP: 0033:0x43fef9
+Code: 28 00 00 00 75 05 48 83 c4 28 c3 e8 b1 14 00 00 90 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 c0 ff ff ff f7 d8 64 89 01 48
+RSP: 002b:00007ffc931a4c48 EFLAGS: 00000246 ORIG_RAX: 0000000000000010
+RAX: ffffffffffffffda RBX: 0000000000013f84 RCX: 000000000043fef9
+RDX: 0000000000000000 RSI: 0000000000004b3a RDI: 0000000000000003
+RBP: 0000000000000000 R08: 000000000000000d R09: 00007ffc931a4de8
+R10: 0000000000000000 R11: 0000000000000246 R12: 00007ffc931a4c5c
+R13: 431bde82d7b634db R14: 00000000004ae018 R15: 0000000000400488
+Modules linked in:
+CR2: ffff888001000040
+---[ end trace 96734cf7ef5cce91 ]---
+RIP: 0010:writeb arch/x86/include/asm/io.h:65 [inline]
+RIP: 0010:vga_imageblit_expand drivers/video/fbdev/vga16fb.c:1176 [inline]
+RIP: 0010:vga16fb_imageblit+0xcee/0x1cb0 drivers/video/fbdev/vga16fb.c:1260
+Code: 66 66 2e 0f 1f 84 00 00 00 00 00 90 4c 89 e0 48 c1 e8 03 48 b9 00 00 00 00 00 fc ff df 0f b6 04 08 84 c0 75 1b 41 0f b6 04 24 <41> 88 06 85 ed 74 2b 49 ff c4 49 ff c6 e8 80 ae 43 fd ff cd eb cc
+RSP: 0018:ffffc9000163f0a0 EFLAGS: 00010246
+RAX: 0000000000000000 RBX: ffff888001000040 RCX: dffffc0000000000
+RDX: ffff888022ad54c0 RSI: 0000000000000002 RDI: 0000000000000000
+RBP: 0000000000000001 R08: ffffffff843b289b R09: 0000000000000000
+R10: 0000000000000002 R11: ffff888022ad54c0 R12: ffff8880181bcea8
+R13: ffffc9000163f2cc R14: ffff888001000040 R15: 0000000000000004
+FS:  0000000001207300(0000) GS:ffff8880b9a00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: ffff888001000040 CR3: 0000000028d32000 CR4: 00000000001506f0
+DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400

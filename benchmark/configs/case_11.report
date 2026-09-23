@@ -1,0 +1,41 @@
+------------[ cut here ]------------
+WARNING: CPU: 0 PID: 3597 at arch/x86/kvm/../../../virt/kvm/kvm_main.c:529 __kvm_handle_hva_range arch/x86/kvm/../../../virt/kvm/kvm_main.c:529 [inline]
+WARNING: CPU: 0 PID: 3597 at arch/x86/kvm/../../../virt/kvm/kvm_main.c:529 kvm_mmu_notifier_invalidate_range_start+0x97a/0xb20 arch/x86/kvm/../../../virt/kvm/kvm_main.c:714
+Modules linked in:
+CPU: 0 PID: 3597 Comm: syz-executor812 Not tainted 5.17.0-rc8-syzkaller-00003-g56e337f2cf13 #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+RIP: 0010:__kvm_handle_hva_range arch/x86/kvm/../../../virt/kvm/kvm_main.c:529 [inline]
+RIP: 0010:kvm_mmu_notifier_invalidate_range_start+0x97a/0xb20 arch/x86/kvm/../../../virt/kvm/kvm_main.c:714
+Code: 00 48 c7 c2 60 0c a2 89 be b9 01 00 00 48 c7 c7 c0 10 a2 89 c6 05 ed 71 76 0c 01 e8 79 84 ff 07 e9 73 ff ff ff e8 b6 cd 6f 00 <0f> 0b e9 88 fc ff ff e8 aa cd 6f 00 0f 0b e9 58 fc ff ff e8 9e cd
+RSP: 0018:ffffc9000282f948 EFLAGS: 00010293
+RAX: 0000000000000000 RBX: 000000002000d000 RCX: 0000000000000000
+RDX: ffff88807e253a00 RSI: ffffffff8108f27a RDI: 0000000000000003
+RBP: ffffc90002b69290 R08: 000000002000d000 R09: ffffc90002b692e3
+R10: ffffffff8108eb1c R11: 0000000000000001 R12: ffffc90002b72240
+R13: ffffc90002b68000 R14: ffffc9000282fc18 R15: 000000002000d000
+FS:  0000555556fa7300(0000) GS:ffff8880b9c00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: 0000562046d7f058 CR3: 000000001ed76000 CR4: 00000000003526f0
+DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400
+Call Trace:
+ <TASK>
+ mn_hlist_invalidate_range_start mm/mmu_notifier.c:493 [inline]
+ __mmu_notifier_invalidate_range_start+0x2ff/0x800 mm/mmu_notifier.c:548
+ mmu_notifier_invalidate_range_start include/linux/mmu_notifier.h:459 [inline]
+ move_page_tables+0x2642/0x2d20 mm/mremap.c:498
+ move_vma+0x48c/0xf40 mm/mremap.c:629
+ mremap_to mm/mremap.c:862 [inline]
+ __do_sys_mremap+0xf01/0x1560 mm/mremap.c:972
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x35/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x44/0xae
+RIP: 0033:0x7f8be8dec089
+Code: 28 c3 e8 2a 14 00 00 66 2e 0f 1f 84 00 00 00 00 00 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 c0 ff ff ff f7 d8 64 89 01 48
+RSP: 002b:00007ffc5b169b88 EFLAGS: 00000246 ORIG_RAX: 0000000000000019
+RAX: ffffffffffffffda RBX: 0000000000000000 RCX: 00007f8be8dec089
+RDX: 0000000000001000 RSI: fffffffffffffe74 RDI: 000000002000d000
+RBP: 00007f8be8db0070 R08: 0000000020007000 R09: 0000000000000000
+R10: 0000000000000003 R11: 0000000000000246 R12: 00007f8be8db0100
+R13: 0000000000000000 R14: 0000000000000000 R15: 0000000000000000
+ </TASK>

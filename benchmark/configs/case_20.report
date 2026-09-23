@@ -1,0 +1,115 @@
+==================================================================
+BUG: KASAN: use-after-free in __lock_acquire+0x3d86/0x54a0 kernel/locking/lockdep.c:4897
+Read of size 8 at addr ffff888011a36840 by task syz-executor048/3599
+
+CPU: 0 PID: 3599 Comm: syz-executor048 Not tainted 5.16.0-rc5-syzkaller #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+Call Trace:
+ <TASK>
+ __dump_stack lib/dump_stack.c:88 [inline]
+ dump_stack_lvl+0xcd/0x134 lib/dump_stack.c:106
+ print_address_description.constprop.0.cold+0x8d/0x320 mm/kasan/report.c:247
+ __kasan_report mm/kasan/report.c:433 [inline]
+ kasan_report.cold+0x83/0xdf mm/kasan/report.c:450
+ __lock_acquire+0x3d86/0x54a0 kernel/locking/lockdep.c:4897
+ lock_acquire kernel/locking/lockdep.c:5637 [inline]
+ lock_acquire+0x1ab/0x510 kernel/locking/lockdep.c:5602
+ __raw_spin_lock_irqsave include/linux/spinlock_api_smp.h:110 [inline]
+ _raw_spin_lock_irqsave+0x39/0x50 kernel/locking/spinlock.c:162
+ remove_wait_queue+0x1d/0x180 kernel/sched/wait.c:55
+ ep_remove_wait_queue+0x88/0x1a0 fs/eventpoll.c:545
+ ep_unregister_pollwait fs/eventpoll.c:561 [inline]
+ ep_remove+0x106/0x9c0 fs/eventpoll.c:690
+ eventpoll_release_file+0xe1/0x130 fs/eventpoll.c:923
+ eventpoll_release include/linux/eventpoll.h:53 [inline]
+ __fput+0x87b/0x9f0 fs/file_table.c:271
+ task_work_run+0xdd/0x1a0 kernel/task_work.c:164
+ tracehook_notify_resume include/linux/tracehook.h:189 [inline]
+ exit_to_user_mode_loop kernel/entry/common.c:175 [inline]
+ exit_to_user_mode_prepare+0x27e/0x290 kernel/entry/common.c:207
+ __syscall_exit_to_user_mode_work kernel/entry/common.c:289 [inline]
+ syscall_exit_to_user_mode+0x19/0x60 kernel/entry/common.c:300
+ do_syscall_64+0x42/0xb0 arch/x86/entry/common.c:86
+ entry_SYSCALL_64_after_hwframe+0x44/0xae
+RIP: 0033:0x7fe98399eef3
+Code: c7 c2 c0 ff ff ff f7 d8 64 89 02 48 c7 c0 ff ff ff ff eb ba 0f 1f 00 64 8b 04 25 18 00 00 00 85 c0 75 14 b8 03 00 00 00 0f 05 <48> 3d 00 f0 ff ff 77 45 c3 0f 1f 40 00 48 83 ec 18 89 7c 24 0c e8
+RSP: 002b:00007ffe94b8f958 EFLAGS: 00000246 ORIG_RAX: 0000000000000003
+RAX: 0000000000000000 RBX: 0000000000000005 RCX: 00007fe98399eef3
+RDX: 000000000000002f RSI: 0000000020001340 RDI: 0000000000000004
+RBP: 0000000000000000 R08: 0000000000000014 R09: 00007ffe94b8f980
+R10: 0000000000000000 R11: 0000000000000246 R12: 00007ffe94b8f97c
+R13: 00007ffe94b8f990 R14: 00007ffe94b8f9d0 R15: 0000000000000000
+ </TASK>
+
+Allocated by task 3599:
+ kasan_save_stack+0x1e/0x50 mm/kasan/common.c:38
+ kasan_set_track mm/kasan/common.c:46 [inline]
+ set_alloc_info mm/kasan/common.c:434 [inline]
+ ____kasan_kmalloc mm/kasan/common.c:513 [inline]
+ ____kasan_kmalloc mm/kasan/common.c:472 [inline]
+ __kasan_kmalloc+0xa9/0xd0 mm/kasan/common.c:522
+ kmalloc include/linux/slab.h:590 [inline]
+ psi_trigger_create.part.0+0x15e/0x7f0 kernel/sched/psi.c:1141
+ cgroup_pressure_write+0x15d/0x6b0 kernel/cgroup/cgroup.c:3645
+ cgroup_file_write+0x1ec/0x780 kernel/cgroup/cgroup.c:3852
+ kernfs_fop_write_iter+0x342/0x500 fs/kernfs/file.c:296
+ call_write_iter include/linux/fs.h:2162 [inline]
+ new_sync_write+0x429/0x660 fs/read_write.c:503
+ vfs_write+0x7cd/0xae0 fs/read_write.c:590
+ ksys_write+0x12d/0x250 fs/read_write.c:643
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x35/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x44/0xae
+
+Freed by task 3599:
+ kasan_save_stack+0x1e/0x50 mm/kasan/common.c:38
+ kasan_set_track+0x21/0x30 mm/kasan/common.c:46
+ kasan_set_free_info+0x20/0x30 mm/kasan/generic.c:370
+ ____kasan_slab_free mm/kasan/common.c:366 [inline]
+ ____kasan_slab_free mm/kasan/common.c:328 [inline]
+ __kasan_slab_free+0xff/0x130 mm/kasan/common.c:374
+ kasan_slab_free include/linux/kasan.h:235 [inline]
+ slab_free_hook mm/slub.c:1723 [inline]
+ slab_free_freelist_hook+0x8b/0x1c0 mm/slub.c:1749
+ slab_free mm/slub.c:3513 [inline]
+ kfree+0xf6/0x560 mm/slub.c:4561
+ cgroup_pressure_write+0x18d/0x6b0 kernel/cgroup/cgroup.c:3651
+ cgroup_file_write+0x1ec/0x780 kernel/cgroup/cgroup.c:3852
+ kernfs_fop_write_iter+0x342/0x500 fs/kernfs/file.c:296
+ call_write_iter include/linux/fs.h:2162 [inline]
+ new_sync_write+0x429/0x660 fs/read_write.c:503
+ vfs_write+0x7cd/0xae0 fs/read_write.c:590
+ ksys_write+0x12d/0x250 fs/read_write.c:643
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x35/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x44/0xae
+
+The buggy address belongs to the object at ffff888011a36800
+ which belongs to the cache kmalloc-192 of size 192
+The buggy address is located 64 bytes inside of
+ 192-byte region [ffff888011a36800, ffff888011a368c0)
+The buggy address belongs to the page:
+page:ffffea0000468d80 refcount:1 mapcount:0 mapping:0000000000000000 index:0x0 pfn:0x11a36
+flags: 0xfff00000000200(slab|node=0|zone=1|lastcpupid=0x7ff)
+raw: 00fff00000000200 0000000000000000 dead000000000001 ffff888010c41a00
+raw: 0000000000000000 0000000000100010 00000001ffffffff 0000000000000000
+page dumped because: kasan: bad access detected
+page_owner tracks the page as allocated
+page last allocated via order 0, migratetype Unmovable, gfp_mask 0x0(), pid 1, ts 1906309021, free_ts 0
+ create_dummy_stack mm/page_owner.c:59 [inline]
+ register_early_stack+0x66/0xb0 mm/page_owner.c:75
+ init_page_owner mm/page_owner.c:85 [inline]
+ init_page_owner+0x4e/0x920 mm/page_owner.c:78
+ invoke_init_callbacks mm/page_ext.c:108 [inline]
+ page_ext_init+0x4c9/0x4dc mm/page_ext.c:415
+ kernel_init_freeable+0x48b/0x73a init/main.c:1608
+page_owner free stack trace missing
+
+Memory state around the buggy address:
+ ffff888011a36700: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ ffff888011a36780: 00 00 00 fc fc fc fc fc fc fc fc fc fc fc fc fc
+>ffff888011a36800: fa fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+                                           ^
+ ffff888011a36880: fb fb fb fb fb fb fb fb fc fc fc fc fc fc fc fc
+ ffff888011a36900: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+==================================================================

@@ -1,0 +1,52 @@
+F2FS-fs (loop0): Can't find valid F2FS filesystem in 2th superblock
+F2FS-fs (loop0): invalid crc_offset: 0
+F2FS-fs (loop0): Disable nat_bits due to incorrect cp_ver (2180456663747935446, 0)
+F2FS-fs (loop0): access invalid blkaddr:1
+------------[ cut here ]------------
+WARNING: CPU: 1 PID: 3605 at fs/f2fs/checkpoint.c:199 arch_set_bit include/linux/instrumented.h:86 [inline]
+WARNING: CPU: 1 PID: 3605 at fs/f2fs/checkpoint.c:199 set_bit include/asm-generic/bitops/instrumented-atomic.h:29 [inline]
+WARNING: CPU: 1 PID: 3605 at fs/f2fs/checkpoint.c:199 set_sbi_flag fs/f2fs/f2fs.h:2046 [inline]
+WARNING: CPU: 1 PID: 3605 at fs/f2fs/checkpoint.c:199 f2fs_is_valid_blkaddr+0xc2c/0x11f0 fs/f2fs/checkpoint.c:198
+Modules linked in:
+CPU: 1 PID: 3605 Comm: syz-executor118 Not tainted 5.18.0-syzkaller-00161-g1e57930e9f40 #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+RIP: 0010:f2fs_is_valid_blkaddr+0xc2c/0x11f0 fs/f2fs/checkpoint.c:199
+Code: c6 20 34 dd 8a 8b 54 24 04 31 c0 e8 2e c4 fc ff 49 8d bd b8 00 00 00 be 08 00 00 00 e8 bd 52 12 fe f0 41 80 8d b8 00 00 00 04 <0f> 0b e9 b0 fc ff ff e8 e8 68 c1 fd 31 db e9 a4 fc ff ff e8 dc 68
+RSP: 0018:ffffc90002fcf480 EFLAGS: 00010206
+RAX: f962e36f077dbd01 RBX: 0000000000000000 RCX: ffffffff83c4ce23
+RDX: 0000000000000001 RSI: 0000000000000008 RDI: ffff888076ebc0b8
+RBP: 0000000000001400 R08: dffffc0000000000 R09: ffffed100edd7818
+R10: ffffed100edd7818 R11: 1ffff1100edd7817 R12: 1ffff1100edd79a8
+R13: ffff888076ebc000 R14: 0000000000000007 R15: ffff888079fbe0bf
+FS:  000055555578b300(0000) GS:ffff8880b9b00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: 0000562192a01b98 CR3: 000000002102a000 CR4: 00000000003506e0
+DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400
+Call Trace:
+ <TASK>
+ f2fs_get_node_info+0x8fc/0x1720 fs/f2fs/node.c:613
+ read_node_page+0x29a/0xeb0 fs/f2fs/node.c:1356
+ __get_node_page+0x417/0x11b0 fs/f2fs/node.c:1417
+ do_read_inode fs/f2fs/inode.c:350 [inline]
+ f2fs_iget+0x702/0x4940 fs/f2fs/inode.c:506
+ f2fs_fill_super+0x6bd0/0x84c0 fs/f2fs/super.c:4245
+ mount_bdev+0x26c/0x3a0 fs/super.c:1367
+ legacy_get_tree+0xea/0x180 fs/fs_context.c:610
+ vfs_get_tree+0x88/0x270 fs/super.c:1497
+ do_new_mount+0x289/0xad0 fs/namespace.c:3040
+ do_mount fs/namespace.c:3383 [inline]
+ __do_sys_mount fs/namespace.c:3591 [inline]
+ __se_sys_mount+0x2e3/0x3d0 fs/namespace.c:3568
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x2b/0x70 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x44/0xae
+RIP: 0033:0x7ff4faece9fa
+Code: 83 c4 08 5b 5d c3 66 2e 0f 1f 84 00 00 00 00 00 c3 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 49 89 ca b8 a5 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 c0 ff ff ff f7 d8 64 89 01 48
+RSP: 002b:00007fff47e75e78 EFLAGS: 00000286 ORIG_RAX: 00000000000000a5
+RAX: ffffffffffffffda RBX: 00007fff47e75ed0 RCX: 00007ff4faece9fa
+RDX: 0000000020000000 RSI: 0000000020000100 RDI: 00007fff47e75e90
+RBP: 00007fff47e75e90 R08: 00007fff47e75ed0 R09: 0000000000000000
+R10: 0000000000000000 R11: 0000000000000286 R12: 0000000020000650
+R13: 0000000000000003 R14: 0000000000000004 R15: 000000000000002e
+ </TASK>

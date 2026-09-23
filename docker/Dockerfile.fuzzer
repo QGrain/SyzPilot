@@ -1,0 +1,34 @@
+# syntax=docker/dockerfile:1
+# The default base is published on Docker Hub and pins upstream syzkaller at
+# 6e83b42dcfcd13c3b8e0d5c803cdcc424c0fbff9. A verified 2204_v3 image
+# can be substituted with --build-arg KERNEL_FUZZ_IMAGE=... after publication.
+ARG KERNEL_FUZZ_IMAGE=qgrain/kernel-fuzz:2204_v2@sha256:4756c08cf252a76dce12496e643b3b1109d9722d204b53f9540cf0600ce06f34
+FROM ${KERNEL_FUZZ_IMAGE}
+
+ARG MAKE_JOBS=8
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libprotobuf-dev protobuf-compiler && rm -rf /var/lib/apt/lists/*
+ENV GOROOT=/root/software/go1.24.8 \
+    GOPATH=/root/software/gopath-common \
+    PATH=/root/software/go1.24.8/bin:/root/software/gopath-common/bin:${PATH}
+
+COPY fuzzer/SyzPilot-fuzzer.diff /tmp/SyzPilot-fuzzer.diff
+RUN set -eux; \
+    upstream=/root/fuzzers/syzkaller-6e83b42-20250630; \
+    test "$(git -C "$upstream" rev-parse HEAD)" = 6e83b42dcfcd13c3b8e0d5c803cdcc424c0fbff9; \
+    cp -a "$upstream" /root/SyzPilot-fuzzer; \
+    git -C /root/SyzPilot-fuzzer apply --check /tmp/SyzPilot-fuzzer.diff; \
+    git -C /root/SyzPilot-fuzzer apply /tmp/SyzPilot-fuzzer.diff; \
+    cd /root/SyzPilot-fuzzer; \
+    CI=1 make -j"${MAKE_JOBS}" manager executor execprog syzpilot-manifest \
+      TARGETOS=linux TARGETARCH=amd64; \
+    ./bin/syzpilot-manifest -os linux -arch amd64 \
+      -output ./bin/linux-amd64-syzlang-manifest.json; \
+    test -x bin/syz-manager; \
+    test -x bin/linux_amd64/syz-executor; \
+    test -x bin/linux_amd64/syz-execprog; \
+    test -s bin/linux-amd64-syzlang-manifest.json; \
+    rm /tmp/SyzPilot-fuzzer.diff
+
+WORKDIR /root/SyzPilot-fuzzer
+CMD ["/bin/bash"]

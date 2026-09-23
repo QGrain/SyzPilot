@@ -1,0 +1,3 @@
+# Minimal functional target; only the first three columns are used by compile_kernel.py.
+# Relative config paths are resolved against this CSV's directory.
+case_36,6207214a70bfaec7b41f39502353fd3ca89df68c,../assets/case_36/configs/case_36.config

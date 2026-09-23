@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SyzPilot Brain - Login</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body class="bg-light">
+    <div class="container">
+        <div class="row justify-content-center align-items-center min-vh-100">
+            <div class="col-md-6 col-lg-4">
+                <div class="card shadow">
+                    <div class="card-body p-5">
+                        <div class="text-center mb-4">
+                            <h3 class="mb-1">🧠 SyzPilot Brain</h3>
+                            <p class="text-muted">Dashboard Login</p>
+                        </div>
+
+                        <form id="loginForm">
+                            <div class="mb-3">
+                                <label for="token" class="form-label">Access Token</label>
+                                <input
+                                    type="password"
+                                    class="form-control"
+                                    id="token"
+                                    placeholder="Enter your access token"
+                                    required
+                                >
+                            </div>
+
+                            <div class="d-grid">
+                                <button type="submit" class="btn btn-primary">
+                                    <span id="loginText">Login</span>
+                                    <span id="loginSpinner" class="spinner-border spinner-border-sm d-none" role="status"></span>
+                                </button>
+                            </div>
+                        </form>
+
+                        <div id="errorMessage" class="alert alert-danger mt-3 d-none" role="alert"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const token = document.getElementById('token').value;
+            const errorDiv = document.getElementById('errorMessage');
+            const loginText = document.getElementById('loginText');
+            const loginSpinner = document.getElementById('loginSpinner');
+
+            // Show loading state
+            loginText.classList.add('d-none');
+            loginSpinner.classList.remove('d-none');
+            errorDiv.classList.add('d-none');
+
+            try {
+                const response = await fetch('/api/verify_token', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.valid) {
+                        // Store token in localStorage
+                        localStorage.setItem('dashboardToken', token);
+                        // Redirect to dashboard
+                        window.location.href = '/dashboard';
+                    } else {
+                        throw new Error('Invalid token');
+                    }
+                } else {
+                    throw new Error('Authentication failed');
+                }
+            } catch (error) {
+                errorDiv.textContent = 'Invalid access token. Please try again.';
+                errorDiv.classList.remove('d-none');
+            } finally {
+                loginText.classList.remove('d-none');
+                loginSpinner.classList.add('d-none');
+            }
+        });
+    </script>
+</body>
+</html>

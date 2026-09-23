@@ -1,0 +1,50 @@
+==================================================================
+BUG: KASAN: vmalloc-out-of-bounds in fast_imageblit drivers/video/fbdev/core/sysimgblt.c:229 [inline]
+BUG: KASAN: vmalloc-out-of-bounds in sys_imageblit+0x12f4/0x1430 drivers/video/fbdev/core/sysimgblt.c:275
+Write of size 4 at addr ffffc9000bc91000 by task syz-executor566/8649
+
+CPU: 3 PID: 8649 Comm: syz-executor566 Not tainted 5.11.0-syzkaller #0
+Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.14.0-2 04/01/2014
+Call Trace:
+ __dump_stack lib/dump_stack.c:79 [inline]
+ dump_stack+0x107/0x163 lib/dump_stack.c:120
+ print_address_description.constprop.0.cold+0x5/0x2c6 mm/kasan/report.c:230
+ __kasan_report mm/kasan/report.c:396 [inline]
+ kasan_report.cold+0x79/0xd5 mm/kasan/report.c:413
+ fast_imageblit drivers/video/fbdev/core/sysimgblt.c:229 [inline]
+ sys_imageblit+0x12f4/0x1430 drivers/video/fbdev/core/sysimgblt.c:275
+ drm_fb_helper_sys_imageblit drivers/gpu/drm/drm_fb_helper.c:794 [inline]
+ drm_fbdev_fb_imageblit+0x15c/0x350 drivers/gpu/drm/drm_fb_helper.c:2266
+ bit_putcs_unaligned drivers/video/fbdev/core/bitblit.c:139 [inline]
+ bit_putcs+0x6e1/0xd20 drivers/video/fbdev/core/bitblit.c:188
+ fbcon_putcs+0x35a/0x450 drivers/video/fbdev/core/fbcon.c:1304
+ do_update_region+0x399/0x630 drivers/tty/vt/vt.c:676
+ redraw_screen+0x658/0x790 drivers/tty/vt/vt.c:1035
+ fbcon_modechanged+0x593/0x6d0 drivers/video/fbdev/core/fbcon.c:2656
+ fbcon_update_vcs+0x3a/0x50 drivers/video/fbdev/core/fbcon.c:2701
+ do_fb_ioctl+0x62e/0x690 drivers/video/fbdev/core/fbmem.c:1110
+ fb_ioctl+0xe7/0x150 drivers/video/fbdev/core/fbmem.c:1185
+ vfs_ioctl fs/ioctl.c:48 [inline]
+ __do_sys_ioctl fs/ioctl.c:753 [inline]
+ __se_sys_ioctl fs/ioctl.c:739 [inline]
+ __x64_sys_ioctl+0x193/0x200 fs/ioctl.c:739
+ do_syscall_64+0x2d/0x70 arch/x86/entry/common.c:46
+ entry_SYSCALL_64_after_hwframe+0x44/0xa9
+RIP: 0033:0x43fd49
+Code: 28 00 00 00 75 05 48 83 c4 28 c3 e8 b1 14 00 00 90 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 c0 ff ff ff f7 d8 64 89 01 48
+RSP: 002b:00007fff0eaf1448 EFLAGS: 00000246 ORIG_RAX: 0000000000000010
+RAX: ffffffffffffffda RBX: 0000000000019c10 RCX: 000000000043fd49
+RDX: 0000000020000080 RSI: 0000000000004601 RDI: 0000000000000003
+RBP: 0000000000000000 R08: 00007fff0eaf15e8 R09: 00007fff0eaf15e8
+R10: 00007fff0eaf0ec0 R11: 0000000000000246 R12: 00007fff0eaf145c
+R13: 431bde82d7b634db R14: 00000000004ae018 R15: 0000000000400488
+
+
+Memory state around the buggy address:
+ ffffc9000bc90f00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ ffffc9000bc90f80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+>ffffc9000bc91000: f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8
+                   ^
+ ffffc9000bc91080: f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8
+ ffffc9000bc91100: f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8 f8
+==================================================================

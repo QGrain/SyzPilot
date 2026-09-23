@@ -1,0 +1,21 @@
+Index,Syzbot Bug ID,Title,Affected Version,Affected Commit,Bug Position
+1,7787ea8a8ec228b5ea0acb1e9ac8373271ef8bdd,kernel BUG in validate_xmit_skb,5.14.0-rc5,761c6d7ec820,net/core/dev.c:3763
+2,e3cd8df8330f976efd72c1a562e96c44a1f2431f,WARNING: ODEBUG bug in qdisc_create,5.15.0-rc2,e8f71f89236e,net/sched/sch_api.c:1299
+3,31216a0f4941f9e070a4ba59723ddd50c355fe24,BUG: unable to handle kernel NULL pointer dereference in fifo_set_limit,5.15-rc3,02d5e016800d,net/sched/sch_fifo.c:242
+4,6bf42326e0930f0a844a1d53256c0fb15423dda1,KASAN: slab-use-after-free Read in tcf_action_destroy,6.2.0,1ec35eadc3b4,net/sched/act_api.c:1121
+5,d894f245105f59f788177ae2f53df8ffce3ec1ac,KASAN: slab-out-of-bounds Read in vxlan_vnifilter_dump_dev,5.17.0,d888c83fcec7,drivers/net/vxlan/vxlan_vnifilter.c:349
+6,b32fa08468c9e84e361296e1bc502283ea202ec6,KASAN: invalid-free in packet_set_ring,5.16.0-rc4,a763d5a5abd6,net/packet/af_packet.c:4495
+7,f5697a2cc8cc739814a87d3755258160e812c9dd,KASAN: use-after-free Read in ipvlan_queue_xmit,5.19.0,200e340f2196,drivers/net/ipvlan/ipvlan_core.c:598
+8,24a275e91595279d28038eb72a64fe00143fd2a4,KASAN: slab-out-of-bounds Read in squashfs_export_iget,5.11-rc1,5c8fe583cce5,fs/squashfs/export.c:44
+9,f381deedf1e8d44b545a5ab112c1747f75fb57d6,KASAN: use-after-free Read in snd_seq_timer_interrupt,5.13-rc4,e5220dd16778,sound/core/seq/seq_timer.c:130
+10,67c06f27e8efe15830eb8ff6ee742380e18c3d9b,WARNING in __dma_map_sg_attrs,5.17-rc2,0457e5153e0e,kernel/dma/mapping.c:264
+11,4d666adb3fbcfe329b8cc75958b976aea0a3c48a,WARNING in kvm_mmu_notifier_invalidate_range_start,5.17-rc8,56e337f2cf13,virt/kvm/kvm_main.c:714
+12,a25ae9cae4c5adffac5364e5f8aea4a098d01f41,KASAN: use-after-free Write in io_submit_one,5.16-rc4,6f513529296f,fs/aio.c:2000
+13,6dc9ae7ccfcf2d2e5237d4e68f1c9f63e866d0ef,KASAN: use-after-free Read in madvise_update_vma,5.17-rc3,dfd42facf1e4,mm/madvise.c:212
+14,62d6a292ad633abc9ce6159dec8e8ac5b0455b19,KASAN: use-after-free Read in disk_part_iter_next,5.12-rc3,1c273e10bc0c,block/genhd.c:206
+15,517fa734b92b7db404c409b924cf5c997640e324,KASAN: use-after-free Write in null_skcipher_crypt,5.14.0,78e709522d2c,crypto/crypto_null.c:85
+16,59a8b2b621a7e8fb23ac85cd5f125f504cebfee9,BUG: unable to handle kernel paging request in vga16fb_imageblit,5.12.0,d2b6f8a17919,drivers/video/fbdev/vga16fb.c:1176
+17,41f4318cf01762389f4d1c1c459da4f542fe5153,WARNING in tracepoint_add_func,5.12.0,d2b6f8a17919,kernel/tracepoint.c:291
+18,0be4824a86385f022a4f6f5104bcb9246032fdd9,WARNING: kmalloc bug in snd_pcm_plugin_alloc,5.17-rc7,68453767131a,sound/core/oss/pcm_plugin.c:71
+19,bcc246d137428d00ed14b476c2068579515fe2bc,KASAN: use-after-free Write in sco_sock_timeout,5.15-rc2,cf1d2c3e7e2f,net/bluetooth/sco.c:88
+20,4b1e9cf490ffaaa8d9b87c2db04490923603aedd,KASAN: use-after-free Read in remove_wait_queue,5.16-rc5,2585cf9dfaad,kernel/cgroup/cgroup.c:3645

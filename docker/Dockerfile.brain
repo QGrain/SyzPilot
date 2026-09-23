@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1
+# Builds the Brain software environment. Kernel cases and host-specific
+# analysis inputs are not embedded. Model weights are included only when
+# INCLUDE_SYZENCODER=true and the public Hugging Face release is accessible.
+FROM pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime@sha256:11691e035a3651d25a87116b4f6adc113a27a29d8f5a6a583f8569e0ee5ff897
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    TOKENIZERS_PARALLELISM=false \
+    SYZPILOT_DIRECT_ONLY=true
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    autossh build-essential curl git libaio-dev make openjdk-17-jre-headless \
+    openssh-client && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/syzpilot
+COPY requirements/requirements-brain.txt requirements/requirements-brain.txt
+RUN python -m pip install --no-cache-dir \
+    -r requirements/requirements-brain.txt \
+    --extra-index-url https://download.pytorch.org/whl/cu121
+
+COPY brain/ brain/
+COPY filter/ filter/
+COPY analyzer/ analyzer/
+COPY common/ common/
+COPY benchmark/ benchmark/
+COPY scripts/ scripts/
+RUN make -C brain && python -m compileall -q brain filter analyzer common
+
+# Set INCLUDE_SYZENCODER=true for the published, self-contained Brain image.
+# The public repository must contain config.json and model.safetensors at its root.
+ARG INCLUDE_SYZENCODER=false
+ARG SYZENCODER_REPO_ID=zzra1n/SyzEncoder
+ARG SYZENCODER_REVISION=main
+RUN if [ "$INCLUDE_SYZENCODER" = true ]; then \
+      python -c 'import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ["SYZENCODER_REPO_ID"], revision=os.environ["SYZENCODER_REVISION"], local_dir="/opt/syzpilot/models/SyzEncoder_224w_full/best_model")'; \
+      test -s /opt/syzpilot/models/SyzEncoder_224w_full/best_model/config.json; \
+      test -s /opt/syzpilot/models/SyzEncoder_224w_full/best_model/model.safetensors; \
+      python -c 'import json; from pathlib import Path; p = Path("/opt/syzpilot/models/SyzEncoder_224w_full/best_model/config.json"); config = json.loads(p.read_text()); config["_name_or_path"] = str(p.parent); p.write_text(json.dumps(config, indent=2) + "\n")'; \
+    fi
+ENV SYZPILOT_BASE_MODEL_PATH=/opt/syzpilot/models/SyzEncoder_224w_full/best_model
+
+EXPOSE 48000 37030 37031 37032 37033 37034
+CMD ["python", "brain/controller.py", "--host", "0.0.0.0", "--port", "48000"]

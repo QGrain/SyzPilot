@@ -1,0 +1,908 @@
+diff --git a/.gitignore b/.gitignore
+index bce8f0e..9da6db3 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -3,9 +3,4 @@ target/
+ Cargo.lock
+ **/*.rs.bk
+ *.pdb
+-/.idea
+-docs/
+-docker/.tmp
+-
+-__pycache__/
+-mock.tar.gz
+\ No newline at end of file
++/.idea
+\ No newline at end of file
+diff --git a/healer_core/src/lang_mod/model.rs b/healer_core/src/lang_mod/model.rs
+index f71c6c8..95ca383 100644
+--- a/healer_core/src/lang_mod/model.rs
++++ b/healer_core/src/lang_mod/model.rs
+@@ -1,23 +1,19 @@
+-use log::{debug, error, info, warn};
++use std::{sync::RwLock, collections::HashMap, time::Duration};
+ use reqwest;
+-use std::time::Instant;
+-use std::{collections::HashMap, sync::RwLock, time::Duration};
+-use tch::{CModule, Device, Tensor};
++use tch::{CModule, Tensor, Device};
+ 
+ #[derive(Default, Debug)]
+ pub struct ModelWrapper {
+     pub inner: RwLock<Model>,
+-    pub model_server: Option<String>,
+ }
+ 
+ impl ModelWrapper {
+-    pub fn new<P: AsRef<std::path::Path>>(path: P) -> Self {
++    pub fn new <P: AsRef<std::path::Path>>(path: P) -> Self {
+         Self {
+-            inner: RwLock::new(Model::new(path)),
+-            model_server: None,
++            inner:  RwLock::new(Model::new(path))
+         }
+     }
+-
++    
+     #[inline]
+     pub fn load<P: AsRef<std::path::Path>>(&self, path: P) {
+         let mut inner = self.inner.write().unwrap();
+@@ -29,56 +25,12 @@ impl ModelWrapper {
+         params.insert("corpus", corpus.clone());
+         params.insert("testcase", testcase.clone());
+ 
+-        // allow overriding model server via ModelWrapper.model_server if present
+-        let server_base = match &self.model_server {
+-            Some(s) => s.clone(),
+-            None => "http://127.0.0.1:8000".to_string(),
+-        };
+-        let server_base = server_base.trim_end_matches('/');
+-        let url = format!("{}/api/model", server_base);
+-
+-        info!(
+-            "Sending training request to {} (corpus='{}', testcase='{}')",
+-            url, corpus, testcase
+-        );
+-        let start = Instant::now();
+-
+         let client = reqwest::blocking::Client::new();
+-        let request = client
+-            .post(&url)
+-            .timeout(Duration::from_secs(60 * 60))
+-            .form(&params);
+-        match request.send() {
+-            Ok(res) => {
+-                let status = res.status();
+-                match res.text() {
+-                    Ok(text) => {
+-                        info!(
+-                            "Training request finished: status={}, elapsed_ms={}",
+-                            status,
+-                            start.elapsed().as_millis()
+-                        );
+-                        debug!(
+-                            "Model server response (first 200 chars): {}",
+-                            if text.len() > 200 {
+-                                &text[..200]
+-                            } else {
+-                                &text
+-                            }
+-                        );
+-                        text
+-                    }
+-                    Err(e) => {
+-                        error!("Failed to read response text from {}: {}", url, e);
+-                        String::new()
+-                    }
+-                }
+-            }
+-            Err(e) => {
+-                error!("Failed to send training request to {}: {}", url, e);
+-                String::new()
+-            }
+-        }
++        let res = client.post("http://127.0.0.1:8000/api/model")
++            .timeout(Duration::from_secs(60*60))
++            .form(&params).send().unwrap();
++        let model_file = res.text().unwrap();
++        model_file
+     }
+ 
+     #[inline]
+@@ -113,75 +65,39 @@ impl Model {
+         if tch::Cuda::is_available() {
+             device = Device::Cuda(0);
+         }
+-        // try to load model but handle errors gracefully and log them
+-        let loaded = match tch::CModule::load_on_device(path, device) {
+-            Ok(m) => {
+-                info!("Model loaded on device: {:?}", device);
+-                Some(m)
+-            }
+-            Err(e) => {
+-                error!("Failed to load model on device {:?}: {}", device, e);
+-                None
+-            }
+-        };
+         Self {
+-            model: loaded,
++            model: Some(tch::CModule::load_on_device(path, device).unwrap()),
+             device: Some(device),
+             update_num: 0,
+         }
+     }
+-
++    
+     pub fn load<P: AsRef<std::path::Path>>(&mut self, path: P) {
+         let mut device = Device::Cpu;
+         if tch::Cuda::is_available() {
+             device = Device::Cuda(0);
+         }
+         self.device = Some(device);
+-        match tch::CModule::load_on_device(path, device) {
+-            Ok(m) => {
+-                self.model = Some(m);
+-                self.update_num = self.update_num + 1;
+-                info!(
+-                    "Model reloaded successfully; update_num={}",
+-                    self.update_num
+-                );
+-            }
+-            Err(e) => {
+-                error!("Failed to reload model on device {:?}: {}", device, e);
+-            }
+-        }
++        self.model = Some(tch::CModule::load_on_device(path, device).unwrap());
++        self.update_num = self.update_num + 1;
+     }
+ 
+     pub fn eval(&self, inputs: &[usize]) -> Option<Tensor> {
+         if self.model.is_none() {
+-            warn!("Attempted to eval but model is not loaded");
+             None
+-        } else {
++        }
++        else {
+             let length = Tensor::of_slice(&[inputs.len() as u8]).to_device(self.device.unwrap());
+             let inputs_i32 = inputs.into_iter().map(|i| *i as i32).collect::<Vec<i32>>();
+-            let inputs_i32 =
+-                Tensor::stack(&[Tensor::of_slice(&inputs_i32)], 0).to_device(self.device.unwrap());
+-            match self
+-                .model
+-                .as_ref()
+-                .unwrap()
+-                .forward_ts(&[inputs_i32, length])
+-            {
+-                Ok(out) => {
+-                    let outputs = out.softmax(-1, tch::Kind::Float);
+-                    debug!("Model eval produced tensor of sizes: {:?}", outputs.size());
+-                    Some(outputs)
+-                }
+-                Err(e) => {
+-                    error!("Model forward failed: {}", e);
+-                    None
+-                }
+-            }
++            let inputs_i32 = Tensor::stack(&[Tensor::of_slice(&inputs_i32)], 0).to_device(self.device.unwrap());
++            let outputs = self.model.as_ref().unwrap().forward_ts(&[inputs_i32, length]).unwrap().softmax(-1, tch::Kind::Float);
++            Some(outputs)
+         }
+     }
+ 
+     #[inline]
+     pub fn update_num(&self) -> u32 {
+         self.update_num
++
+     }
+ }
+diff --git a/healer_fuzzer/src/config.rs b/healer_fuzzer/src/config.rs
+index 8aba678..f6948cf 100644
+--- a/healer_fuzzer/src/config.rs
++++ b/healer_fuzzer/src/config.rs
+@@ -39,21 +39,8 @@ pub struct Config {
+     pub report_config: ReportConfig,
+     pub exec_config: Option<ExecConfig>,
+     pub use_unix_sock: bool,
+-    pub model_server: Option<String>,
+     pub bench: bool,
+     pub debug: bool,
+-    // Targets to monitor: list of 64-bit addresses (PCs) parsed from CLI.
+-    pub target_pcs: Option<Vec<u64>>,
+-    // Optional log file path to append per-testcase hits.
+-    pub target_log: Option<PathBuf>,
+-    // Heartbeat interval in seconds for periodic logs.
+-    pub target_heartbeat_secs: Option<u64>,
+-    // Explicit target mode: Some("auto"|"ia"|"pc")
+-    pub target_mode: Option<String>,
+-    // Enable dumping testcase cover files for debugging (disabled by default).
+-    pub enable_testcase_cover_dump: bool,
+-    // Optional runtime limit in seconds; when set, fuzzer will stop after this many seconds.
+-    pub run_secs: Option<u64>,
+ }
+ 
+ impl Default for Config {
+@@ -81,15 +68,8 @@ impl Default for Config {
+             repro_config: ReproConfig::default(),
+             report_config: ReportConfig::default(),
+             use_unix_sock: true,
+-            model_server: None,
+             bench: false,
+             debug: false,
+-            target_pcs: None,
+-            target_log: None,
+-            target_heartbeat_secs: None,
+-            target_mode: None,
+-            enable_testcase_cover_dump: false,
+-            run_secs: None,
+         }
+     }
+ }
+diff --git a/healer_fuzzer/src/fuzzer.rs b/healer_fuzzer/src/fuzzer.rs
+index e02bbe8..6f3176c 100644
+--- a/healer_fuzzer/src/fuzzer.rs
++++ b/healer_fuzzer/src/fuzzer.rs
+@@ -6,35 +6,35 @@ use anyhow::Context;
+ use healer_core::{
+     corpus::CorpusWrapper,
+     gen::{gen_prog, minimize},
+-    lang_mod::model::ModelWrapper,
+     mutation::mutate,
+     prog::Prog,
+     relation::RelationWrapper,
+-    scheduler::Scheduler,
+     target::Target,
+     HashSet, RngType,
++    lang_mod::model::ModelWrapper, 
++    scheduler::Scheduler
+ };
+ use healer_vm::qemu::QemuHandle;
+ use sha1::Digest;
+-use std::collections::HashMap;
+ use std::{
+     cell::Cell,
+     collections::VecDeque,
+     fs::{create_dir_all, write, File},
+     io::{ErrorKind, Write},
+-    path::PathBuf,
+     sync::Arc,
+-    thread::sleep,
+     time::{Duration, Instant},
++    path::PathBuf,
++    thread::sleep
+ };
+ use syz_wrapper::{
+     exec::{
+         features::FEATURE_FAULT, ExecError, ExecOpt, ExecutorHandle, CALL_FAULT_INJECTED,
+-        FLAG_COLLECT_COVER, FLAG_COLLIDE, FLAG_INJECT_FAULT,
++        FLAG_COLLIDE, FLAG_INJECT_FAULT,
+     },
+     report::extract_report,
+     repro::repro,
+ };
++use rand::Rng;
+ 
+ pub struct SharedState {
+     pub(crate) target: Arc<Target>,
+@@ -72,8 +72,7 @@ impl SharedState {
+             }
+         }
+ 
+-        let syscall_names: String = self
+-            .target
++        let syscall_names: String = self.target
+             .enabled_syscalls()
+             .iter()
+             .map(|syscall| format!("{}:{}", syscall.name().to_string(), syscall.id()))
+@@ -96,16 +95,14 @@ impl SharedState {
+ 
+         let mut last_dump = Instant::now();
+         let mut index = 0;
+-        self.relation
+-            .dump(dir.join(format!("{}.rl", index)).as_path());
++        self.relation.dump(dir.join(format!("{}.rl", index)).as_path());
+ 
+         while !stop_soon() {
+             sleep(duration);
+             let du = last_dump.elapsed();
+             if du >= duration {
+                 index += 1;
+-                self.relation
+-                    .dump(dir.join(format!("{}.rl", index)).as_path());
++                self.relation.dump(dir.join(format!("{}.rl", index)).as_path());
+                 last_dump = Instant::now();
+             }
+         }
+@@ -113,12 +110,7 @@ impl SharedState {
+         Ok(())
+     }
+ 
+-    pub fn try_update_model(
+-        &self,
+-        duration: Duration,
+-        corpus: PathBuf,
+-        testcase: PathBuf,
+-    ) -> anyhow::Result<()> {
++    pub fn try_update_model(&self, duration: Duration, corpus: PathBuf, testcase: PathBuf) -> anyhow::Result<()> {
+         let corpus = corpus.into_os_string().into_string().unwrap();
+         let testcase = testcase.into_os_string().into_string().unwrap();
+ 
+@@ -131,17 +123,15 @@ impl SharedState {
+                 let model_file = self.model.train(&corpus, &testcase);
+                 self.model.load(model_file);
+                 last_update = Instant::now();
+-                log::info!("relation model updated");
++                log::info!(
++                    "relation model updated"
++                );
+             }
+         }
+         Ok(())
+     }
+ 
+-    pub fn try_update_scheduler(
+-        &self,
+-        explore_du: Duration,
+-        exploit_du: Duration,
+-    ) -> anyhow::Result<()> {
++    pub fn try_update_scheduler(&self, explore_du: Duration, exploit_du: Duration) -> anyhow::Result<()> {
+         let mut last_update = Instant::now();
+         while !stop_soon() {
+             if self.model.exists() {
+@@ -153,7 +143,8 @@ impl SharedState {
+                     sleep(exploit_du);
+                     last_update = Instant::now();
+                 }
+-            } else {
++            }
++            else {
+                 sleep(Duration::from_secs(5 * 60));
+             }
+         }
+@@ -172,16 +163,6 @@ pub struct Fuzzer {
+     pub last_reboot: Instant,
+     pub run_history: VecDeque<(ExecOpt, Prog)>,
+     pub config: Config,
+-    // target monitoring
+-    pub target_pcs: Vec<u64>,
+-    pub target_log: Option<PathBuf>,
+-    // Heartbeat interval seconds for periodic logs
+-    pub target_heartbeat_secs: Option<u64>,
+-    // detected mode: "ia" or "pc"
+-    pub target_mode_detected: Option<String>,
+-    pub target_counts: HashMap<u64, u64>,
+-    // last heartbeat timestamp
+-    pub last_heartbeat: Instant,
+ }
+ 
+ pub const HISTORY_CAPACITY: usize = 1024;
+@@ -262,9 +243,8 @@ impl Fuzzer {
+                     &mut self.rng,
+                     &mut p,
+                 );
+-
+-                let new = self
+-                    .execute_one(p)
++                
++                let new = self.execute_one(p)
+                     .context("failed to execute mutated prog")?;
+                 if mutated && op < 2 && self.shared_state.model.exists() {
+                     self.shared_state.scheduler.inc_exec_total(op);
+@@ -283,12 +263,7 @@ impl Fuzzer {
+     }
+ 
+     pub fn execute_one(&mut self, p: Prog) -> anyhow::Result<bool> {
+-        let mut opt = ExecOpt::new();
+-        // Collect "cover" (blocks/PCs) only when we actually need it.
+-        // Otherwise blocks will be empty and `testcase_cover` dumps will show len=0.
+-        if !self.target_pcs.is_empty() {
+-            opt.enable(FLAG_COLLECT_COVER);
+-        }
++        let opt = ExecOpt::new();
+         self.record_execution(&p, &opt);
+         let ret = self
+             .executor
+@@ -300,7 +275,6 @@ impl Fuzzer {
+                 let mut new_cov = false;
+                 let mut calls: Vec<(usize, HashSet<u32>)> = Vec::with_capacity(p.calls().len());
+                 let mut all_calls: Vec<HashSet<u32>> = Vec::with_capacity(p.calls().len());
+-                let mut all_blocks: Vec<HashSet<u32>> = Vec::with_capacity(p.calls().len());
+ 
+                 for (idx, call_info) in prog_info.call_infos.into_iter().enumerate() {
+                     let new = self
+@@ -314,47 +288,13 @@ impl Fuzzer {
+                         calls.push((idx, call_info.branches.iter().copied().collect()));
+                     }
+                     all_calls.push(call_info.branches.iter().copied().collect());
+-                    all_blocks.push(call_info.blocks.iter().copied().collect());
+                 }
+-
+-                if let Some(ref extra) = prog_info.extra {
+-                    self.shared_state
+-                        .feedback
+-                        .check_max_cov(extra.branches.iter().copied());
++                
++                if let Some(extra) = prog_info.extra {
++                    self.shared_state.feedback.check_max_cov(extra.branches);
+                     // TODO handle extra
+                 }
+ 
+-                // Check target PCs coverage for this testcase (union of all calls + extra)
+-                if !self.target_pcs.is_empty() {
+-                    // signal: executor "branches" (feedback signal)
+-                    let mut testcase_signal: HashSet<u32> = HashSet::new();
+-                    for s in &all_calls {
+-                        for v in s.iter() {
+-                            testcase_signal.insert(*v);
+-                        }
+-                    }
+-                    if let Some(extra) = prog_info.extra.as_ref() {
+-                        for v in extra.branches.iter() {
+-                            testcase_signal.insert(*v);
+-                        }
+-                    }
+-
+-                    // cover: executor "blocks" (basic blocks / PCs)
+-                    let mut testcase_cover: HashSet<u32> = HashSet::new();
+-                    for s in &all_blocks {
+-                        for v in s.iter() {
+-                            testcase_cover.insert(*v);
+-                        }
+-                    }
+-                    if let Some(extra) = prog_info.extra.as_ref() {
+-                        for v in extra.blocks.iter() {
+-                            testcase_cover.insert(*v);
+-                        }
+-                    }
+-
+-                    self.check_targets(&testcase_signal, &testcase_cover)?;
+-                }
+-
+                 // if self.rng.gen_ratio(1, 30) {
+                 //    let idx = p.calls().len()-1;
+                 //    let brs: HashSet<u32> = all_calls[idx].clone();
+@@ -743,167 +683,4 @@ impl Fuzzer {
+         }
+         Ok(())
+     }
+-
+-    fn check_targets(
+-        &mut self,
+-        testcase_signal: &HashSet<u32>,
+-        testcase_cover: &HashSet<u32>,
+-    ) -> anyhow::Result<()> {
+-        use std::fs::OpenOptions;
+-        use std::time::SystemTime;
+-
+-        // optionally dump testcase cover for debugging (controlled by config)
+-        if self.config.enable_testcase_cover_dump {
+-            let _ = self.dump_testcase_cover(testcase_cover);
+-        }
+-
+-        // resolve initial config-provided targets and heartbeat settings
+-        if self.target_pcs.is_empty() {
+-            // populate from config once
+-            if let Some(ref v) = self.config.target_pcs {
+-                self.target_pcs = v.clone();
+-            }
+-            self.target_log = self.config.target_log.clone();
+-            self.target_heartbeat_secs = self.config.target_heartbeat_secs;
+-            if let Some(ref mode) = self.config.target_mode {
+-                if mode != "auto" {
+-                    self.target_mode_detected = Some(mode.clone());
+-                }
+-            }
+-            self.last_heartbeat = Instant::now();
+-        }
+-
+-        if self.target_pcs.is_empty() {
+-            return Ok(());
+-        }
+-
+-        // evaluate coverage and update counts
+-        let mut any_covered = false;
+-        for t in &self.target_pcs {
+-            let t32 = *t as u32;
+-
+-            // detect mode if still unknown
+-            if self.target_mode_detected.is_none() {
+-                if testcase_cover.contains(&t32) {
+-                    self.target_mode_detected = Some("pc".to_string());
+-                } else if testcase_cover.contains(&t32.wrapping_sub(5)) {
+-                    self.target_mode_detected = Some("ia".to_string());
+-                }
+-            }
+-
+-            let covered = match self.target_mode_detected.as_deref() {
+-                Some("pc") => testcase_cover.contains(&t32),
+-                Some("ia") => testcase_cover.contains(&t32.wrapping_sub(5)),
+-                _ => testcase_cover.contains(&t32) || testcase_cover.contains(&t32.wrapping_sub(5)),
+-            };
+-
+-            if covered {
+-                any_covered = true;
+-                *self.target_counts.entry(*t).or_insert(0) += 1;
+-            }
+-        }
+-
+-        // decide whether to write a CSV log line: on any hit or on heartbeat interval
+-        if let Some(ref path) = self.target_log {
+-            let mut do_write = any_covered;
+-            let mut heartbeat_due = false;
+-            if !do_write {
+-                if let Some(secs) = self.target_heartbeat_secs {
+-                    if self.last_heartbeat.elapsed() >= Duration::from_secs(secs) {
+-                        do_write = true;
+-                        heartbeat_due = true;
+-                    }
+-                }
+-            }
+-
+-            if do_write {
+-                let ts = SystemTime::now()
+-                    .duration_since(SystemTime::UNIX_EPOCH)
+-                    .unwrap()
+-                    .as_millis();
+-
+-                // build CSV: ts_ms,fuzzer_id,pid,tid,addr1,addr1_total_cnt,addr2,addr2_total_cnt,...
+-                let mut fields: Vec<String> = Vec::new();
+-                fields.push(ts.to_string());
+-                // fuzzer id and pid and thread id
+-                fields.push(self.id.to_string());
+-                fields.push(std::process::id().to_string());
+-                let tid = format!("{:?}", std::thread::current().id());
+-                fields.push(tid.clone());
+-
+-                for t in &self.target_pcs {
+-                    let cnt = self.target_counts.get(t).copied().unwrap_or(0);
+-                    fields.push(format!("{:#x}", t));
+-                    fields.push(cnt.to_string());
+-                }
+-
+-                // ensure header exists when file is newly created
+-                let write_header = match std::fs::metadata(path) {
+-                    Ok(m) => m.len() == 0,
+-                    Err(_) => true,
+-                };
+-
+-                let mut f = OpenOptions::new()
+-                    .create(true)
+-                    .append(true)
+-                    .open(path)
+-                    .with_context(|| format!("failed to open target log: {}", path.display()))?;
+-
+-                if write_header {
+-                    // header: ts_ms,fuzzer_id,pid,tid,addr,addr_total,...
+-                    let mut header: Vec<String> = vec![
+-                        "ts_ms".to_string(),
+-                        "fuzzer_id".to_string(),
+-                        "pid".to_string(),
+-                        "tid".to_string(),
+-                    ];
+-                    for t in &self.target_pcs {
+-                        header.push(format!("{:#x}", t));
+-                        header.push(format!("{:#x}_total", t));
+-                    }
+-                    let hline = format!("{}\n", header.join(","));
+-                    f.write_all(hline.as_bytes())
+-                        .context("failed to write target log header")?;
+-                }
+-
+-                let line = format!("{}\n", fields.join(","));
+-                f.write_all(line.as_bytes())
+-                    .context("failed to write target log")?;
+-
+-                if heartbeat_due {
+-                    self.last_heartbeat = Instant::now();
+-                }
+-            }
+-        }
+-
+-        Ok(())
+-    }
+-
+-    // NOTE: testcase signal dump was removed; only cover dump is available
+-
+-    /// Dump executor "cover" (blocks/PCs) for debugging.
+-    fn dump_testcase_cover(&self, cover: &HashSet<u32>) -> anyhow::Result<()> {
+-        use std::fs::{create_dir_all, File};
+-        use std::io::Write;
+-        use std::time::SystemTime;
+-
+-        let outdir = &self.config.output;
+-        if !outdir.exists() {
+-            create_dir_all(outdir).context("failed to create output dir for cover dump")?;
+-        }
+-        let ts = SystemTime::now()
+-            .duration_since(SystemTime::UNIX_EPOCH)
+-            .unwrap()
+-            .as_millis();
+-        let fname = outdir.join(format!("testcase_cover_{}_{}.txt", self.id, ts));
+-        let mut f = File::create(&fname)
+-            .with_context(|| format!("failed to create cover dump file: {}", fname.display()))?;
+-        writeln!(f, "count={}", cover.len())?;
+-        let mut vals: Vec<u32> = cover.iter().copied().collect();
+-        vals.sort_unstable();
+-        for v in vals {
+-            writeln!(f, "0x{:08x}", v)?;
+-        }
+-        Ok(())
+-    }
+ }
+diff --git a/healer_fuzzer/src/lib.rs b/healer_fuzzer/src/lib.rs
+index 234d88b..d0686eb 100644
+--- a/healer_fuzzer/src/lib.rs
++++ b/healer_fuzzer/src/lib.rs
+@@ -21,13 +21,12 @@ use crate::{
+ use anyhow::Context;
+ use healer_core::{
+     corpus::CorpusWrapper,
+-    lang_mod::model::ModelWrapper,
+     parse::parse_prog,
+     prog::Prog,
+     relation::{Relation, RelationWrapper},
+-    scheduler::Scheduler,
+     target::Target,
+     HashSet,
++    lang_mod::model::ModelWrapper, scheduler::Scheduler
+ };
+ use healer_vm::{qemu::QemuHandle, ssh::ssh_basic_cmd};
+ use rand::{
+@@ -147,11 +146,9 @@ pub fn boot(mut config: Config) -> anyhow::Result<()> {
+     let crash = CrashManager::with_whitelist(known_crashes, config.output.clone());
+ 
+     // let model = ModelWrapper::new("/home/model_manager/api/lang_model/checkpoints/syscall_model_jit_best.pt");
+-    let mut mw = ModelWrapper::default();
+-    mw.model_server = config.model_server.clone();
+     let shared_state = SharedState {
+         target: Arc::new(target),
+-        model: Arc::new(mw),
++        model: Arc::new(ModelWrapper::default()),
+         // model: Arc::new(model),
+         relation: Arc::new(RelationWrapper::new(relation)),
+         scheduler: Arc::new(Scheduler::new()),
+@@ -191,13 +188,8 @@ pub fn boot(mut config: Config) -> anyhow::Result<()> {
+     let ssh_syz = ssh_syz_cmd(&remote_exec_path, &qemu);
+     setup_features(ssh_syz, features).context("failed to setup features")?;
+     features_to_env_flags(features, &mut config.exec_config.as_mut().unwrap().env);
+-
+-    // TEMP: disable cgroups to avoid kernel handshake issues during testing
+-    config.exec_config.as_mut().unwrap().env &= !(1u64 << 9);
+-
+     let exec_config = config.exec_config.take().unwrap();
+     config.exec_config = Some(exec_config.clone()); // clear the shm
+-
+     let mut executor = ExecutorHandle::with_config(exec_config);
+     spawn_syz(&remote_exec_path, &mut qemu, &mut executor, &config)
+         .context("failed to spawn executor for fuzzer-0")?;
+@@ -222,22 +214,25 @@ pub fn boot(mut config: Config) -> anyhow::Result<()> {
+     let corpus_dir = config.output.clone().join("corpus");
+     let testcase_dir = config.output.clone().join("testcase");
+     thread::spawn(move || {
+-        if let Err(e) =
+-            shared_state2.try_update_model(Duration::from_secs(60 * 60), corpus_dir, testcase_dir)
+-        {
++        if let Err(e) = shared_state2.try_update_model(
++        Duration::from_secs(60 * 60),
++                corpus_dir,
++                testcase_dir,
++            ) {
+             // Handle this more carefully
+             log::error!("failed to update model: {}", e);
+-        }
++        }        
+     });
+ 
+     let shared_state3 = SharedState::clone(&shared_state);
+     thread::spawn(move || {
+-        if let Err(e) = shared_state3
+-            .try_update_scheduler(Duration::from_secs(15 * 60), Duration::from_secs(5 * 60))
+-        {
++        if let Err(e) = shared_state3.try_update_scheduler(
++        Duration::from_secs(15 * 60),
++        Duration::from_secs(5 * 60),
++            ) {
+             // Handle this more carefully
+             log::error!("failed to update scheduler: {}", e);
+-        }
++        }        
+     });
+ 
+     let mut fuzzers = Vec::with_capacity(config.job as usize);
+@@ -246,9 +241,6 @@ pub fn boot(mut config: Config) -> anyhow::Result<()> {
+     let config1 = config.clone();
+     let shared_state1 = SharedState::clone(&shared_state);
+     let handle = thread::spawn(move || {
+-        let tp = config.target_pcs.clone().unwrap_or_default();
+-        let tl = config.target_log.clone();
+-        let hb = config.target_heartbeat_secs;
+         let mut fuzzer = Fuzzer {
+             shared_state: shared_state1,
+             id: 0,
+@@ -257,13 +249,7 @@ pub fn boot(mut config: Config) -> anyhow::Result<()> {
+             qemu,
+             run_history: VecDeque::with_capacity(HISTORY_CAPACITY),
+             config,
+-            target_pcs: tp,
+-            target_log: tl,
+-            target_heartbeat_secs: hb,
+-            target_mode_detected: None,
+-            target_counts: std::collections::HashMap::new(),
+             last_reboot: Instant::now(),
+-            last_heartbeat: Instant::now(),
+         };
+         fuzzer.fuzz_loop(progs)
+     });
+@@ -290,9 +276,6 @@ pub fn boot(mut config: Config) -> anyhow::Result<()> {
+             fuzzer_config.exec_config = Some(exec_config.clone());
+             let mut executor = ExecutorHandle::with_config(exec_config);
+             prepare_exec_env(&mut fuzzer_config, &mut qemu, &mut executor)?;
+-            let tp = fuzzer_config.target_pcs.clone().unwrap_or_default();
+-            let tl = fuzzer_config.target_log.clone();
+-            let hb = fuzzer_config.target_heartbeat_secs;
+             let mut fuzzer = Fuzzer {
+                 shared_state,
+                 id,
+@@ -301,13 +284,7 @@ pub fn boot(mut config: Config) -> anyhow::Result<()> {
+                 qemu,
+                 run_history: VecDeque::with_capacity(HISTORY_CAPACITY),
+                 config: fuzzer_config,
+-                target_pcs: tp,
+-                target_log: tl,
+-                target_heartbeat_secs: hb,
+-                target_mode_detected: None,
+-                target_counts: std::collections::HashMap::new(),
+                 last_reboot: Instant::now(),
+-                last_heartbeat: Instant::now(),
+             };
+             fuzzer.fuzz_loop(progs)
+         });
+diff --git a/healer_fuzzer/src/main.rs b/healer_fuzzer/src/main.rs
+index 3b4243e..fdfeb31 100644
+--- a/healer_fuzzer/src/main.rs
++++ b/healer_fuzzer/src/main.rs
+@@ -73,28 +73,8 @@ struct Settings {
+     /// Debug mode.
+     #[structopt(long)]
+     debug: bool,
+-    /// Target PCs (hex), space separated. e.g. "0xffffdeadbeef 0xffffcafebabe"
+-    #[structopt(long)]
+-    target_pcs: Option<String>,
+-    /// Path to write target coverage log (appended).
+-    #[structopt(long)]
+-    target_log: Option<PathBuf>,
+-    /// Target mode: auto|ia|pc
+-    #[structopt(long, default_value = "auto")]
+-    target_mode: String,
+-    /// Heartbeat interval in seconds for periodic target logs (0 to disable).
+-    #[structopt(long)]
+-    target_heartbeat_secs: Option<u64>,
+-    /// Enable dumping testcase cover files for debugging.
+-    #[structopt(long)]
+-    enable_testcase_cover_dump: bool,
+-    /// Run duration in seconds; if set, fuzzer will stop after this many seconds.
+-    #[structopt(long)]
+-    run_secs: Option<u64>,
+-    /// Model server base URL (e.g. http://127.0.0.1:8000)
+-    #[structopt(long)]
+-    model_server: Option<String>,
+ }
++
+ fn main() -> anyhow::Result<()> {
+     let settings = Settings::from_args();
+ 
+@@ -143,32 +123,8 @@ fn main() -> anyhow::Result<()> {
+         },
+         bench: settings.bench,
+         debug: settings.debug,
+-        model_server: settings.model_server,
+-        target_pcs: settings.target_pcs.as_ref().map(|s| {
+-            s.split_whitespace()
+-                .filter_map(|p| {
+-                    let s = p.trim_start_matches("0x");
+-                    u64::from_str_radix(s, 16).ok()
+-                })
+-                .collect()
+-        }),
+-        target_log: settings.target_log,
+-        target_heartbeat_secs: settings.target_heartbeat_secs,
+-        enable_testcase_cover_dump: settings.enable_testcase_cover_dump,
+-        target_mode: Some(settings.target_mode),
+-        run_secs: settings.run_secs,
+         ..Default::default()
+     };
+ 
+-    // If run_secs is set, spawn a thread to stop the fuzzer after the given duration.
+-    let stopper_secs = config.run_secs;
+-    if let Some(s) = stopper_secs {
+-        std::thread::spawn(move || {
+-            std::thread::sleep(std::time::Duration::from_secs(s));
+-            log::info!("run_secs expired ({}s): requesting stop", s);
+-            healer_fuzzer::util::stop_req();
+-        });
+-    }
+-
+     boot(config)
+ }
+diff --git a/syz_wrapper/Cargo.toml b/syz_wrapper/Cargo.toml
+index 566496f..272f25d 100644
+--- a/syz_wrapper/Cargo.toml
++++ b/syz_wrapper/Cargo.toml
+@@ -15,7 +15,6 @@ shared_memory = "0.12"
+ timeout-readwrite = "0.3.1"
+ nix = "0.22"
+ log = "0.4"
+-serde_json = "1.0"
+ 
+ [dependencies.simd-json]
+ version = "0.4"
+diff --git a/syz_wrapper/src/exec/mod.rs b/syz_wrapper/src/exec/mod.rs
+index b77274a..d6f0d3f 100644
+--- a/syz_wrapper/src/exec/mod.rs
++++ b/syz_wrapper/src/exec/mod.rs
+@@ -141,15 +141,9 @@ iota! {
+ #[derive(Debug, Default, Clone)]
+ pub struct CallExecInfo<'a, 'b> {
+     pub flags: CallFlags,
+-    /// Coverage "signal" (feedback signal).
+-    ///
+-    /// Note: despite the historical name, this is *not* raw PC addresses.
+-    /// In the executor protocol this corresponds to `branch_size` and is
+-    /// used for coverage feedback/dedup.
++    /// Branch coverage.
+     pub branches: &'a [u32],
+-    /// Coverage "cover" (basic blocks / PCs as reported by executor).
+-    ///
+-    /// In the executor protocol this corresponds to `block_size`.
++    /// Block converage.
+     pub blocks: &'b [u32],
+     /// per-call comparison operands
+     pub comp_map: HashMap<u64, HashSet<u64>>,
+@@ -159,9 +153,9 @@ pub struct CallExecInfo<'a, 'b> {
+ 
+ #[derive(Debug, Default, Clone)]
+ pub struct ExtraCallExecInfo {
+-    /// Coverage "signal" merged from extra replies.
++    /// Branch coverage.
+     pub branches: HashSet<u32>,
+-    /// Coverage "cover" merged from extra replies.
++    /// Block converage.
+     pub blocks: HashSet<u32>,
+ }
+ 
+@@ -529,7 +523,7 @@ impl ExecutorHandle {
+         }
+     }
+ 
+-    fn parse_output(&self, p: &Prog) -> Result<ProgExecInfo<'_, '_>, ExecError> {
++    fn parse_output(&self, p: &Prog) -> Result<ProgExecInfo, ExecError> {
+         const EXTRA_REPLY_INDEX: u32 = 0xffffffff;
+ 
+         let mut out_buf = self
+diff --git a/syz_wrapper/src/repro.rs b/syz_wrapper/src/repro.rs
+index 9043c67..be6e657 100644
+--- a/syz_wrapper/src/repro.rs
++++ b/syz_wrapper/src/repro.rs
+@@ -1,6 +1,6 @@
+ use crate::exec::{ExecOpt, FLAG_INJECT_FAULT};
+ use healer_core::{prog::Prog, target::Target};
+-use serde_json::{json, to_string};
++use simd_json::{json, to_string};
+ use std::env::temp_dir;
+ use std::fmt::Write;
+ use std::fs::write;
+diff --git a/tools/model_manager/api/lang_model/dataset.py b/tools/model_manager/api/lang_model/dataset.py
+index 000e566..61877b8 100644
+--- a/tools/model_manager/api/lang_model/dataset.py
++++ b/tools/model_manager/api/lang_model/dataset.py
+@@ -44,8 +44,8 @@ class SysDataset(Dataset):
+         self.seq_len = []
+         self.corpus = []
+         if corpus and vocab:
+-            self.corpus = np.array([self._sent2data(sent) for sent in corpus], dtype=int)
+-            self.seq_len = np.array(self.seq_len, dtype=int)
++            self.corpus = np.array([self._sent2data(sent) for sent in corpus], dtype=np.int)
++            self.seq_len = np.array(self.seq_len, dtype=np.int)
+ 
+     
+     def _sent2data(self, sent):

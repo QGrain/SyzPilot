@@ -1,0 +1,67 @@
+general protection fault, probably for non-canonical address 0xfbd59c0000000020: 0000 [#1] PREEMPT SMP KASAN
+KASAN: maybe wild-memory-access in range [0xdead000000000100-0xdead000000000107]
+CPU: 1 PID: 8395 Comm: syz-executor137 Not tainted 5.12.0-rc4-syzkaller #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+RIP: 0010:ieee80211_chanctx_num_assigned net/mac80211/chan.c:22 [inline]
+RIP: 0010:ieee80211_assign_vif_chanctx+0x6a7/0xa80 net/mac80211/chan.c:746
+Code: f8 48 83 7c 24 08 00 0f 85 91 00 00 00 e9 f2 00 00 00 e8 6c 74 7e f8 49 83 c6 20 31 db 4c 89 f5 0f 1f 00 48 89 e8 48 c1 e8 03 <42> 80 3c 28 00 74 08 48 89 ef e8 ea 4a c2 f8 48 8b 6d 00 4c 39 f5
+RSP: 0018:ffffc9000167f670 EFLAGS: 00010a02
+RAX: 1bd5a00000000020 RBX: 0000000000000002 RCX: ffff888020cc1c40
+RDX: 0000000000000000 RSI: 0000000000000001 RDI: 0000000000000000
+RBP: dead000000000100 R08: ffffffff88fa99ba R09: fffffbfff1b6b276
+R10: fffffbfff1b6b276 R11: 0000000000000000 R12: 0000000000000000
+R13: dffffc0000000000 R14: ffff888013f5e220 R15: ffff88801b86cc00
+FS:  0000000001cd3300(0000) GS:ffff8880b9d00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: 00007f6c9d6cc710 CR3: 000000001c8af000 CR4: 00000000001506e0
+DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400
+Call Trace:
+ __ieee80211_vif_release_channel+0x279/0x540 net/mac80211/chan.c:1619
+ ieee80211_vif_release_channel+0x13e/0x1a0 net/mac80211/chan.c:1833
+ ieee80211_ibss_disconnect+0x6ef/0x870 net/mac80211/ibss.c:735
+ ieee80211_ibss_leave+0x26/0xf0 net/mac80211/ibss.c:1871
+ rdev_leave_ibss net/wireless/rdev-ops.h:545 [inline]
+ __cfg80211_leave_ibss+0x11c/0x200 net/wireless/ibss.c:213
+ cfg80211_leave_ibss+0x5c/0x70 net/wireless/ibss.c:231
+ cfg80211_change_iface+0x46c/0xb40 net/wireless/util.c:1047
+ nl80211_set_interface+0x497/0x7f0 net/wireless/nl80211.c:3912
+ genl_family_rcv_msg_doit net/netlink/genetlink.c:739 [inline]
+ genl_family_rcv_msg net/netlink/genetlink.c:783 [inline]
+ genl_rcv_msg+0xe4e/0x1280 net/netlink/genetlink.c:800
+ netlink_rcv_skb+0x190/0x3a0 net/netlink/af_netlink.c:2502
+ genl_rcv+0x24/0x40 net/netlink/genetlink.c:811
+ netlink_unicast_kernel net/netlink/af_netlink.c:1312 [inline]
+ netlink_unicast+0x786/0x940 net/netlink/af_netlink.c:1338
+ netlink_sendmsg+0x9ae/0xd50 net/netlink/af_netlink.c:1927
+ sock_sendmsg_nosec net/socket.c:654 [inline]
+ sock_sendmsg net/socket.c:674 [inline]
+ ____sys_sendmsg+0x519/0x800 net/socket.c:2350
+ ___sys_sendmsg net/socket.c:2404 [inline]
+ __sys_sendmsg+0x2bf/0x370 net/socket.c:2433
+ do_syscall_64+0x2d/0x70 arch/x86/entry/common.c:46
+ entry_SYSCALL_64_after_hwframe+0x44/0xae
+RIP: 0033:0x448179
+Code: 28 00 00 00 75 05 48 83 c4 28 c3 e8 d1 17 00 00 90 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 c0 ff ff ff f7 d8 64 89 01 48
+RSP: 002b:00007fffd32c7b08 EFLAGS: 00000246 ORIG_RAX: 000000000000002e
+RAX: ffffffffffffffda RBX: 000000000000b608 RCX: 0000000000448179
+RDX: 0000000000000000 RSI: 0000000020000340 RDI: 0000000000000003
+RBP: 0000000000000000 R08: 00007fffd32c7ca8 R09: 00007fffd32c7ca8
+R10: 0000000000000000 R11: 0000000000000246 R12: 00007fffd32c7b1c
+R13: 431bde82d7b634db R14: 00000000004b5018 R15: 00000000004004b8
+Modules linked in:
+---[ end trace 9283e7dc6160772c ]---
+RIP: 0010:ieee80211_chanctx_num_assigned net/mac80211/chan.c:22 [inline]
+RIP: 0010:ieee80211_assign_vif_chanctx+0x6a7/0xa80 net/mac80211/chan.c:746
+Code: f8 48 83 7c 24 08 00 0f 85 91 00 00 00 e9 f2 00 00 00 e8 6c 74 7e f8 49 83 c6 20 31 db 4c 89 f5 0f 1f 00 48 89 e8 48 c1 e8 03 <42> 80 3c 28 00 74 08 48 89 ef e8 ea 4a c2 f8 48 8b 6d 00 4c 39 f5
+RSP: 0018:ffffc9000167f670 EFLAGS: 00010a02
+RAX: 1bd5a00000000020 RBX: 0000000000000002 RCX: ffff888020cc1c40
+RDX: 0000000000000000 RSI: 0000000000000001 RDI: 0000000000000000
+RBP: dead000000000100 R08: ffffffff88fa99ba R09: fffffbfff1b6b276
+R10: fffffbfff1b6b276 R11: 0000000000000000 R12: 0000000000000000
+R13: dffffc0000000000 R14: ffff888013f5e220 R15: ffff88801b86cc00
+FS:  0000000001cd3300(0000) GS:ffff8880b9c00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: 00007f852003d078 CR3: 000000001c8af000 CR4: 00000000001506f0
+DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400

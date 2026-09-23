@@ -1,0 +1,142 @@
+==================================================================
+BUG: KASAN: use-after-free in radix_tree_next_slot include/linux/radix-tree.h:422 [inline]
+BUG: KASAN: use-after-free in idr_for_each+0x206/0x220 lib/idr.c:202
+Read of size 8 at addr ffff88803da186b8 by task syz-executor716/4856
+
+CPU: 0 PID: 4856 Comm: syz-executor716 Not tainted 5.11.0-rc6-syzkaller #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+Call Trace:
+ __dump_stack lib/dump_stack.c:79 [inline]
+ dump_stack+0x107/0x163 lib/dump_stack.c:120
+ print_address_description.constprop.0.cold+0x5b/0x2c6 mm/kasan/report.c:230
+ __kasan_report mm/kasan/report.c:396 [inline]
+ kasan_report.cold+0x79/0xd5 mm/kasan/report.c:413
+ radix_tree_next_slot include/linux/radix-tree.h:422 [inline]
+ idr_for_each+0x206/0x220 lib/idr.c:202
+ io_ring_ctx_wait_and_kill+0x1bd/0x600 fs/io_uring.c:8795
+ io_uring_release+0x3e/0x50 fs/io_uring.c:8820
+ __fput+0x283/0x920 fs/file_table.c:280
+ task_work_run+0xdd/0x190 kernel/task_work.c:140
+ exit_task_work include/linux/task_work.h:30 [inline]
+ do_exit+0xc5c/0x2ae0 kernel/exit.c:825
+ do_group_exit+0x125/0x310 kernel/exit.c:922
+ get_signal+0x427/0x20f0 kernel/signal.c:2773
+ arch_do_signal_or_restart+0x2a8/0x1eb0 arch/x86/kernel/signal.c:811
+ handle_signal_work kernel/entry/common.c:147 [inline]
+ exit_to_user_mode_loop kernel/entry/common.c:171 [inline]
+ exit_to_user_mode_prepare+0x148/0x250 kernel/entry/common.c:201
+ irqentry_exit_to_user_mode+0x5/0x30 kernel/entry/common.c:315
+ exc_page_fault+0xc6/0x180 arch/x86/mm/fault.c:1509
+ asm_exc_page_fault+0x1e/0x30 arch/x86/include/asm/idtentry.h:580
+RIP: 0033:0x401994
+Code: Unable to access opcode bytes at RIP 0x40196a.
+RSP: 002b:00007ffcab01c3f0 EFLAGS: 00010206
+RAX: 0000000000000000 RBX: 0000000000000003 RCX: 0000000000000010
+RDX: 0000000000000007 RSI: 0000000000000000 RDI: 00000000000001c0
+RBP: 0000000000000000 R08: 0000000020ffc000 R09: 0000000000100140
+R10: 0000000000000000 R11: 0000000000000246 R12: 000000000003373e
+R13: 00007ffcab01c3fc R14: 00007ffcab01c410 R15: 00007ffcab01c400
+
+Allocated by task 4856:
+ kasan_save_stack+0x1b/0x40 mm/kasan/common.c:38
+ kasan_set_track mm/kasan/common.c:46 [inline]
+ set_alloc_info mm/kasan/common.c:401 [inline]
+ ____kasan_kmalloc.constprop.0+0x7f/0xa0 mm/kasan/common.c:429
+ kasan_slab_alloc include/linux/kasan.h:209 [inline]
+ slab_post_alloc_hook mm/slab.h:512 [inline]
+ slab_alloc mm/slab.c:3315 [inline]
+ kmem_cache_alloc+0x1ab/0x4c0 mm/slab.c:3486
+ radix_tree_node_alloc.constprop.0+0x7c/0x350 lib/radix-tree.c:274
+ idr_get_free+0x554/0xa60 lib/radix-tree.c:1504
+ idr_alloc_u32+0x170/0x2d0 lib/idr.c:46
+ idr_alloc_cyclic+0x102/0x230 lib/idr.c:125
+ io_register_personality fs/io_uring.c:9873 [inline]
+ __io_uring_register fs/io_uring.c:10102 [inline]
+ __do_sys_io_uring_register+0x162f/0x4080 fs/io_uring.c:10152
+ do_syscall_64+0x2d/0x70 arch/x86/entry/common.c:46
+ entry_SYSCALL_64_after_hwframe+0x44/0xa9
+
+Freed by task 12:
+ kasan_save_stack+0x1b/0x40 mm/kasan/common.c:38
+ kasan_set_track+0x1c/0x30 mm/kasan/common.c:46
+ kasan_set_free_info+0x20/0x30 mm/kasan/generic.c:356
+ ____kasan_slab_free+0xb0/0xe0 mm/kasan/common.c:362
+ kasan_slab_free include/linux/kasan.h:192 [inline]
+ __cache_free mm/slab.c:3424 [inline]
+ kmem_cache_free+0x58/0x1c0 mm/slab.c:3697
+ rcu_do_batch kernel/rcu/tree.c:2489 [inline]
+ rcu_core+0x5eb/0xf00 kernel/rcu/tree.c:2723
+ __do_softirq+0x29b/0x9f6 kernel/softirq.c:343
+
+Last potentially related work creation:
+ kasan_save_stack+0x1b/0x40 mm/kasan/common.c:38
+ kasan_record_aux_stack+0x87/0xb0 mm/kasan/generic.c:344
+ __call_rcu kernel/rcu/tree.c:2965 [inline]
+ call_rcu+0xbb/0x700 kernel/rcu/tree.c:3038
+ radix_tree_node_free lib/radix-tree.c:308 [inline]
+ delete_node+0x591/0x8c0 lib/radix-tree.c:571
+ __radix_tree_delete+0x190/0x370 lib/radix-tree.c:1377
+ radix_tree_delete_item+0xe7/0x230 lib/radix-tree.c:1428
+ io_remove_personalities+0x1d/0x170 fs/io_uring.c:8740
+ idr_for_each+0x113/0x220 lib/idr.c:208
+ io_ring_ctx_wait_and_kill+0x1bd/0x600 fs/io_uring.c:8795
+ io_uring_release+0x3e/0x50 fs/io_uring.c:8820
+ __fput+0x283/0x920 fs/file_table.c:280
+ task_work_run+0xdd/0x190 kernel/task_work.c:140
+ exit_task_work include/linux/task_work.h:30 [inline]
+ do_exit+0xc5c/0x2ae0 kernel/exit.c:825
+ do_group_exit+0x125/0x310 kernel/exit.c:922
+ get_signal+0x427/0x20f0 kernel/signal.c:2773
+ arch_do_signal_or_restart+0x2a8/0x1eb0 arch/x86/kernel/signal.c:811
+ handle_signal_work kernel/entry/common.c:147 [inline]
+ exit_to_user_mode_loop kernel/entry/common.c:171 [inline]
+ exit_to_user_mode_prepare+0x148/0x250 kernel/entry/common.c:201
+ irqentry_exit_to_user_mode+0x5/0x30 kernel/entry/common.c:315
+ exc_page_fault+0xc6/0x180 arch/x86/mm/fault.c:1509
+ asm_exc_page_fault+0x1e/0x30 arch/x86/include/asm/idtentry.h:580
+
+Second to last potentially related work creation:
+ kasan_save_stack+0x1b/0x40 mm/kasan/common.c:38
+ kasan_record_aux_stack+0x87/0xb0 mm/kasan/generic.c:344
+ __call_rcu kernel/rcu/tree.c:2965 [inline]
+ call_rcu+0xbb/0x700 kernel/rcu/tree.c:3038
+ xa_node_free lib/xarray.c:258 [inline]
+ xas_delete_node lib/xarray.c:494 [inline]
+ update_node lib/xarray.c:756 [inline]
+ xas_store+0xbcc/0x1bb0 lib/xarray.c:841
+ __xa_erase lib/xarray.c:1489 [inline]
+ xa_erase+0xb0/0x170 lib/xarray.c:1510
+ io_uring_del_task_file fs/io_uring.c:9044 [inline]
+ io_uring_remove_task_files+0xc8/0x1a0 fs/io_uring.c:9055
+ __io_uring_files_cancel+0x15a/0x1b0 fs/io_uring.c:9071
+ io_uring_files_cancel include/linux/io_uring.h:51 [inline]
+ do_exit+0x2fe/0x2ae0 kernel/exit.c:780
+ do_group_exit+0x125/0x310 kernel/exit.c:922
+ get_signal+0x427/0x20f0 kernel/signal.c:2773
+ arch_do_signal_or_restart+0x2a8/0x1eb0 arch/x86/kernel/signal.c:811
+ handle_signal_work kernel/entry/common.c:147 [inline]
+ exit_to_user_mode_loop kernel/entry/common.c:171 [inline]
+ exit_to_user_mode_prepare+0x148/0x250 kernel/entry/common.c:201
+ irqentry_exit_to_user_mode+0x5/0x30 kernel/entry/common.c:315
+ exc_page_fault+0xc6/0x180 arch/x86/mm/fault.c:1509
+ asm_exc_page_fault+0x1e/0x30 arch/x86/include/asm/idtentry.h:580
+
+The buggy address belongs to the object at ffff88803da18680
+ which belongs to the cache radix_tree_node of size 576
+The buggy address is located 56 bytes inside of
+ 576-byte region [ffff88803da18680, ffff88803da188c0)
+The buggy address belongs to the page:
+page:000000006c86c827 refcount:1 mapcount:0 mapping:0000000000000000 index:0xffff88803da18ffb pfn:0x3da18
+flags: 0xfff00000000200(slab)
+raw: 00fff00000000200 ffffea0000f685c8 ffffea0000f68688 ffff888010c6f000
+raw: ffff88803da18ffb ffff88803da18100 0000000100000005 0000000000000000
+page dumped because: kasan: bad access detected
+
+Memory state around the buggy address:
+ ffff88803da18580: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+ ffff88803da18600: fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc fc
+>ffff88803da18680: fa fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+                                        ^
+ ffff88803da18700: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+ ffff88803da18780: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+==================================================================

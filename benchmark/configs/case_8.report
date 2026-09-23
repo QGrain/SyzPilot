@@ -1,0 +1,88 @@
+loop0: detected capacity change from 264192 to 0
+==================================================================
+BUG: KASAN: slab-out-of-bounds in squashfs_inode_lookup fs/squashfs/export.c:44 [inline]
+BUG: KASAN: slab-out-of-bounds in squashfs_export_iget+0x274/0x2a0 fs/squashfs/export.c:69
+Read of size 8 at addr ffff88801ba96700 by task syz-executor172/8473
+
+CPU: 0 PID: 8473 Comm: syz-executor172 Not tainted 5.11.0-rc1-syzkaller #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+Call Trace:
+ __dump_stack lib/dump_stack.c:79 [inline]
+ dump_stack+0x107/0x163 lib/dump_stack.c:120
+ print_address_description.constprop.0.cold+0x5b/0x2f8 mm/kasan/report.c:230
+ __kasan_report mm/kasan/report.c:396 [inline]
+ kasan_report.cold+0x79/0xd5 mm/kasan/report.c:413
+ squashfs_inode_lookup fs/squashfs/export.c:44 [inline]
+ squashfs_export_iget+0x274/0x2a0 fs/squashfs/export.c:69
+ squashfs_fh_to_dentry fs/squashfs/export.c:84 [inline]
+ squashfs_fh_to_dentry+0x78/0xb0 fs/squashfs/export.c:77
+ exportfs_decode_fh_raw+0x127/0x7a0 fs/exportfs/expfs.c:436
+ exportfs_decode_fh+0x38/0x90 fs/exportfs/expfs.c:575
+ do_handle_to_path fs/fhandle.c:152 [inline]
+ handle_to_path fs/fhandle.c:207 [inline]
+ do_handle_open+0x2b6/0x7f0 fs/fhandle.c:223
+ do_syscall_64+0x2d/0x70 arch/x86/entry/common.c:46
+ entry_SYSCALL_64_after_hwframe+0x44/0xa9
+RIP: 0033:0x4443d9
+Code: 8d d7 fb ff c3 66 2e 0f 1f 84 00 00 00 00 00 66 90 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 0f 83 5b d7 fb ff c3 66 2e 0f 1f 84 00 00 00 00
+RSP: 002b:00007fffc3d35ac8 EFLAGS: 00000246 ORIG_RAX: 0000000000000130
+RAX: ffffffffffffffda RBX: 00000000004002e0 RCX: 00000000004443d9
+RDX: 0000000000000000 RSI: 0000000020000280 RDI: 0000000000000005
+RBP: 00000000006cf018 R08: 00007fff00000015 R09: 00000000004002e0
+R10: 00007fffc3d35970 R11: 0000000000000246 R12: 0000000000401fc0
+R13: 0000000000402050 R14: 0000000000000000 R15: 0000000000000000
+
+Allocated by task 6487:
+ kasan_save_stack+0x1b/0x40 mm/kasan/common.c:38
+ kasan_set_track mm/kasan/common.c:46 [inline]
+ set_alloc_info mm/kasan/common.c:401 [inline]
+ ____kasan_kmalloc.constprop.0+0x82/0xa0 mm/kasan/common.c:429
+ kmalloc include/linux/slab.h:557 [inline]
+ kzalloc include/linux/slab.h:682 [inline]
+ lsm_cred_alloc security/security.c:534 [inline]
+ security_prepare_creds+0x10e/0x190 security/security.c:1633
+ prepare_creds+0x509/0x730 kernel/cred.c:285
+ access_override_creds fs/open.c:353 [inline]
+ do_faccessat+0x3d7/0x820 fs/open.c:417
+ do_syscall_64+0x2d/0x70 arch/x86/entry/common.c:46
+ entry_SYSCALL_64_after_hwframe+0x44/0xa9
+
+Freed by task 6487:
+ kasan_save_stack+0x1b/0x40 mm/kasan/common.c:38
+ kasan_set_track+0x1c/0x30 mm/kasan/common.c:46
+ kasan_set_free_info+0x20/0x30 mm/kasan/generic.c:354
+ ____kasan_slab_free+0xe1/0x110 mm/kasan/common.c:362
+ kasan_slab_free include/linux/kasan.h:188 [inline]
+ slab_free_hook mm/slub.c:1547 [inline]
+ slab_free_freelist_hook+0x5d/0x150 mm/slub.c:1580
+ slab_free mm/slub.c:3143 [inline]
+ kfree+0xdb/0x360 mm/slub.c:4125
+ security_cred_free+0xc3/0x130 security/security.c:1627
+ put_cred_rcu+0x122/0x4e0 kernel/cred.c:114
+ __put_cred+0x1de/0x250 kernel/cred.c:148
+ put_cred include/linux/cred.h:287 [inline]
+ put_cred include/linux/cred.h:280 [inline]
+ revert_creds+0x1a8/0x1f0 kernel/cred.c:598
+ do_faccessat+0x2ca/0x820 fs/open.c:464
+ do_syscall_64+0x2d/0x70 arch/x86/entry/common.c:46
+ entry_SYSCALL_64_after_hwframe+0x44/0xa9
+
+The buggy address belongs to the object at ffff88801ba966e0
+ which belongs to the cache kmalloc-8 of size 8
+The buggy address is located 24 bytes to the right of
+ 8-byte region [ffff88801ba966e0, ffff88801ba966e8)
+The buggy address belongs to the page:
+page:00000000327c546f refcount:1 mapcount:0 mapping:0000000000000000 index:0xffff88801ba965a0 pfn:0x1ba96
+flags: 0xfff00000000200(slab)
+raw: 00fff00000000200 ffffea0000793300 0000000d0000000d ffff888010041c80
+raw: ffff88801ba965a0 000000008066005f 00000001ffffffff 0000000000000000
+page dumped because: kasan: bad access detected
+
+Memory state around the buggy address:
+ ffff88801ba96600: fc fc fc fa fc fc fc fc fb fc fc fc fc fa fc fc
+ ffff88801ba96680: fc fc fa fc fc fc fc 00 fc fc fc fc fa fc fc fc
+>ffff88801ba96700: fc 00 fc fc fc fc fb fc fc fc fc fa fc fc fc fc
+                   ^
+ ffff88801ba96780: fa fc fc fc fc fa fc fc fc fc fa fc fc fc fc fa
+ ffff88801ba96800: fc fc fc fc fa fc fc fc fc fb fc fc fc fc fa fc
+==================================================================

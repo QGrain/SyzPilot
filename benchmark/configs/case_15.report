@@ -1,0 +1,180 @@
+netdevsim netdevsim0 netdevsim1: set [1, 0] type 2 family 0 port 6081 - 0
+netdevsim netdevsim0 netdevsim2: set [1, 0] type 2 family 0 port 6081 - 0
+netdevsim netdevsim0 netdevsim3: set [1, 0] type 2 family 0 port 6081 - 0
+==================================================================
+BUG: KASAN: use-after-free in memcpy include/linux/fortify-string.h:191 [inline]
+BUG: KASAN: use-after-free in null_skcipher_crypt+0xa8/0x120 crypto/crypto_null.c:85
+Write of size 4096 at addr ffff888073a98000 by task syz-executor890/6542
+
+CPU: 1 PID: 6542 Comm: syz-executor890 Not tainted 5.14.0-syzkaller #0
+Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 01/01/2011
+Call Trace:
+ __dump_stack lib/dump_stack.c:88 [inline]
+ dump_stack_lvl+0xcd/0x134 lib/dump_stack.c:106
+ print_address_description.constprop.0.cold+0x6c/0x309 mm/kasan/report.c:256
+ __kasan_report mm/kasan/report.c:442 [inline]
+ kasan_report.cold+0x83/0xdf mm/kasan/report.c:459
+ check_region_inline mm/kasan/generic.c:183 [inline]
+ kasan_check_range+0x13d/0x180 mm/kasan/generic.c:189
+ memcpy+0x39/0x60 mm/kasan/shadow.c:66
+ memcpy include/linux/fortify-string.h:191 [inline]
+ null_skcipher_crypt+0xa8/0x120 crypto/crypto_null.c:85
+ crypto_skcipher_encrypt+0xaa/0xf0 crypto/skcipher.c:630
+ crypto_authenc_encrypt+0x3b4/0x510 crypto/authenc.c:222
+ crypto_aead_encrypt+0xaa/0xf0 crypto/aead.c:94
+ esp6_output_tail+0x777/0x1a90 net/ipv6/esp6.c:659
+ esp6_output+0x4af/0x8a0 net/ipv6/esp6.c:735
+ xfrm_output_one net/xfrm/xfrm_output.c:552 [inline]
+ xfrm_output_resume+0x29f5/0x5be0 net/xfrm/xfrm_output.c:587
+ xfrm_output2 net/xfrm/xfrm_output.c:614 [inline]
+ xfrm_output+0x2e7/0xff0 net/xfrm/xfrm_output.c:744
+ __xfrm6_output+0x4c3/0x1260 net/ipv6/xfrm6_output.c:87
+ NF_HOOK_COND include/linux/netfilter.h:296 [inline]
+ xfrm6_output+0x117/0x550 net/ipv6/xfrm6_output.c:92
+ dst_output include/net/dst.h:450 [inline]
+ ip6_local_out+0xaf/0x1a0 net/ipv6/output_core.c:161
+ ip6_send_skb+0xb7/0x340 net/ipv6/ip6_output.c:1911
+ ip6_push_pending_frames+0xdd/0x100 net/ipv6/ip6_output.c:1931
+ rawv6_push_pending_frames net/ipv6/raw.c:613 [inline]
+ rawv6_sendmsg+0x2b0c/0x3a20 net/ipv6/raw.c:956
+ inet_sendmsg+0x99/0xe0 net/ipv4/af_inet.c:821
+ sock_sendmsg_nosec net/socket.c:704 [inline]
+ sock_sendmsg+0xcf/0x120 net/socket.c:724
+ ____sys_sendmsg+0x6e8/0x810 net/socket.c:2409
+ ___sys_sendmsg+0xf3/0x170 net/socket.c:2463
+ __sys_sendmsg+0xf3/0x1c0 net/socket.c:2492
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x35/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x44/0xae
+RIP: 0033:0x445099
+Code: 38 01 00 85 c0 b8 00 00 00 00 48 0f 44 c3 5b c3 90 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 c4 ff ff ff f7 d8 64 89 01 48
+RSP: 002b:00000000005cff28 EFLAGS: 00000246 ORIG_RAX: 000000000000002e
+RAX: ffffffffffffffda RBX: 00000000024eb384 RCX: 0000000000445099
+RDX: 0000000000000000 RSI: 0000000020000500 RDI: 0000000000000004
+RBP: 00000000005cff70 R08: 00000000004004f0 R09: 00000000004004f0
+R10: 00000000000000e8 R11: 0000000000000246 R12: 00000000005cff70
+R13: 00000000005cff50 R14: 00000000004ba018 R15: 00000000004004f0
+
+Allocated by task 1:
+ kasan_save_stack+0x1b/0x40 mm/kasan/common.c:38
+ kasan_set_track mm/kasan/common.c:46 [inline]
+ set_alloc_info mm/kasan/common.c:434 [inline]
+ ____kasan_kmalloc mm/kasan/common.c:513 [inline]
+ ____kasan_kmalloc mm/kasan/common.c:472 [inline]
+ __kasan_kmalloc+0xa4/0xd0 mm/kasan/common.c:522
+ kmalloc include/linux/slab.h:596 [inline]
+ tomoyo_realpath_from_path+0xc3/0x620 security/tomoyo/realpath.c:254
+ tomoyo_get_realpath security/tomoyo/file.c:151 [inline]
+ tomoyo_path_perm+0x21b/0x400 security/tomoyo/file.c:822
+ security_inode_getattr+0xcf/0x140 security/security.c:1333
+ vfs_getattr fs/stat.c:157 [inline]
+ vfs_statx+0x164/0x390 fs/stat.c:225
+ vfs_fstatat fs/stat.c:243 [inline]
+ vfs_lstat include/linux/fs.h:3356 [inline]
+ __do_sys_newlstat+0x91/0x110 fs/stat.c:398
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x35/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x44/0xae
+
+Freed by task 1:
+ kasan_save_stack+0x1b/0x40 mm/kasan/common.c:38
+ kasan_set_track+0x1c/0x30 mm/kasan/common.c:46
+ kasan_set_free_info+0x20/0x30 mm/kasan/generic.c:360
+ ____kasan_slab_free mm/kasan/common.c:366 [inline]
+ ____kasan_slab_free mm/kasan/common.c:328 [inline]
+ __kasan_slab_free+0xff/0x130 mm/kasan/common.c:374
+ kasan_slab_free include/linux/kasan.h:230 [inline]
+ slab_free_hook mm/slub.c:1700 [inline]
+ slab_free_freelist_hook+0x81/0x190 mm/slub.c:1725
+ slab_free mm/slub.c:3483 [inline]
+ kfree+0xe4/0x530 mm/slub.c:4543
+ tomoyo_realpath_from_path+0x191/0x620 security/tomoyo/realpath.c:291
+ tomoyo_get_realpath security/tomoyo/file.c:151 [inline]
+ tomoyo_path_perm+0x21b/0x400 security/tomoyo/file.c:822
+ security_inode_getattr+0xcf/0x140 security/security.c:1333
+ vfs_getattr fs/stat.c:157 [inline]
+ vfs_statx+0x164/0x390 fs/stat.c:225
+ vfs_fstatat fs/stat.c:243 [inline]
+ vfs_lstat include/linux/fs.h:3356 [inline]
+ __do_sys_newlstat+0x91/0x110 fs/stat.c:398
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x35/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x44/0xae
+
+The buggy address belongs to the object at ffff888073a98000
+ which belongs to the cache kmalloc-4k of size 4096
+The buggy address is located 0 bytes inside of
+ 4096-byte region [ffff888073a98000, ffff888073a99000)
+The buggy address belongs to the page:
+page:ffffea0001cea600 refcount:1 mapcount:0 mapping:0000000000000000 index:0x0 pfn:0x73a98
+head:ffffea0001cea600 order:3 compound_mapcount:0 compound_pincount:0
+flags: 0xfff00000010200(slab|head|node=0|zone=1|lastcpupid=0x7ff)
+raw: 00fff00000010200 dead000000000100 dead000000000122 ffff888010c42140
+raw: 0000000000000000 0000000000040004 00000001ffffffff 0000000000000000
+page dumped because: kasan: bad access detected
+page_owner tracks the page as allocated
+page last allocated via order 3, migratetype Unmovable, gfp_mask 0xd2040(__GFP_IO|__GFP_NOWARN|__GFP_NORETRY|__GFP_COMP|__GFP_NOMEMALLOC), pid 4495, ts 42414259104, free_ts 42390576276
+ prep_new_page mm/page_alloc.c:2424 [inline]
+ get_page_from_freelist+0xa72/0x2f80 mm/page_alloc.c:4153
+ __alloc_pages+0x1b2/0x500 mm/page_alloc.c:5375
+ alloc_pages+0x1a7/0x300 mm/mempolicy.c:2197
+ alloc_slab_page mm/slub.c:1763 [inline]
+ allocate_slab mm/slub.c:1900 [inline]
+ new_slab+0x319/0x490 mm/slub.c:1963
+ ___slab_alloc+0x921/0xfe0 mm/slub.c:2994
+ __slab_alloc.constprop.0+0x4d/0xa0 mm/slub.c:3081
+ slab_alloc_node mm/slub.c:3172 [inline]
+ slab_alloc mm/slub.c:3214 [inline]
+ __kmalloc+0x305/0x320 mm/slub.c:4387
+ kmalloc include/linux/slab.h:596 [inline]
+ tomoyo_realpath_from_path+0xc3/0x620 security/tomoyo/realpath.c:254
+ tomoyo_get_realpath security/tomoyo/file.c:151 [inline]
+ tomoyo_check_open_permission+0x272/0x380 security/tomoyo/file.c:771
+ tomoyo_file_open security/tomoyo/tomoyo.c:311 [inline]
+ tomoyo_file_open+0xa3/0xd0 security/tomoyo/tomoyo.c:306
+ security_file_open+0x45/0xb0 security/security.c:1634
+ do_dentry_open+0x353/0x11d0 fs/open.c:809
+ do_open fs/namei.c:3426 [inline]
+ path_openat+0x1c9a/0x2740 fs/namei.c:3559
+ do_filp_open+0x1aa/0x400 fs/namei.c:3586
+ do_sys_openat2+0x16d/0x4d0 fs/open.c:1200
+ do_sys_open fs/open.c:1216 [inline]
+ __do_sys_open fs/open.c:1224 [inline]
+ __se_sys_open fs/open.c:1220 [inline]
+ __x64_sys_open+0x119/0x1c0 fs/open.c:1220
+page last free stack trace:
+ reset_page_owner include/linux/page_owner.h:24 [inline]
+ free_pages_prepare mm/page_alloc.c:1338 [inline]
+ free_pcp_prepare+0x2c5/0x780 mm/page_alloc.c:1389
+ free_unref_page_prepare mm/page_alloc.c:3315 [inline]
+ free_unref_page+0x19/0x690 mm/page_alloc.c:3394
+ __unfreeze_partials+0x340/0x360 mm/slub.c:2495
+ qlink_free mm/kasan/quarantine.c:146 [inline]
+ qlist_free_all+0x5a/0xc0 mm/kasan/quarantine.c:165
+ kasan_quarantine_reduce+0x180/0x200 mm/kasan/quarantine.c:272
+ __kasan_slab_alloc+0x95/0xb0 mm/kasan/common.c:444
+ kasan_slab_alloc include/linux/kasan.h:254 [inline]
+ slab_post_alloc_hook mm/slab.h:519 [inline]
+ slab_alloc_node mm/slub.c:3206 [inline]
+ slab_alloc mm/slub.c:3214 [inline]
+ __kmalloc+0x1e7/0x320 mm/slub.c:4387
+ kmalloc include/linux/slab.h:596 [inline]
+ tomoyo_realpath_from_path+0xc3/0x620 security/tomoyo/realpath.c:254
+ tomoyo_get_realpath security/tomoyo/file.c:151 [inline]
+ tomoyo_path_perm+0x21b/0x400 security/tomoyo/file.c:822
+ security_inode_getattr+0xcf/0x140 security/security.c:1333
+ vfs_getattr fs/stat.c:157 [inline]
+ vfs_fstat+0x43/0xb0 fs/stat.c:182
+ __do_sys_newfstat+0x81/0x100 fs/stat.c:422
+ do_syscall_x64 arch/x86/entry/common.c:50 [inline]
+ do_syscall_64+0x35/0xb0 arch/x86/entry/common.c:80
+ entry_SYSCALL_64_after_hwframe+0x44/0xae
+
+Memory state around the buggy address:
+ ffff888073a97f00: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ ffff888073a97f80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+>ffff888073a98000: fa fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+                   ^
+ ffff888073a98080: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+ ffff888073a98100: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+==================================================================

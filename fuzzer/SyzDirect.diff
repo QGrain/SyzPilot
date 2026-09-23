@@ -1,0 +1,482 @@
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 000000000..b09c02930
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,3 @@
++source/syzdirect/syzdirect_function_model/build/
++source/syzdirect/syzdirect_kernel_analysis/build/
++**/__pycache__/
+\ No newline at end of file
+diff --git a/source/syzdirect/Runner/Compilation.py b/source/syzdirect/Runner/Compilation.py
+index cd7e8fdc3..96be2ddc2 100644
+--- a/source/syzdirect/Runner/Compilation.py
++++ b/source/syzdirect/Runner/Compilation.py
+@@ -18,7 +18,7 @@ def PrepareSourceCode():
+         checkoutcmd=f"cd {caseSrcDir} && git checkout -f {kernel_commit}"
+         Config.ExecuteCMD(checkoutcmd)
+         
+-        applykcovcmd=f"cd {caseSrcDir} && git apply {Config.KcovPatchPath}"
++        applykcovcmd=f"cd {caseSrcDir} && git apply --3way --whitespace=fix {Config.KcovPatchPath}"
+         if Config.ExecuteCMD(applykcovcmd)[1].find("patch failed") != -1:
+             Config.logging.error(f"[case {caseIdx}] Fail to apply kcov patch!!! Please manually apply!!!")
+         
+@@ -83,7 +83,7 @@ exec $CLANG "$@"
+ 
+         
+         
+-        compile_command = f"cd {Config.getSrcDirByCase(caseIdx)} && git checkout -- scripts/Makefile.kcov && make clean && make mrproper && yes | make CC={Config.EmitScriptPath} O={caseBCDir} oldconfig && make CC=\'{Config.EmitScriptPath}\' O={caseBCDir} -j{Config.CPUNum}"
++        compile_command = f"cd {Config.getSrcDirByCase(caseIdx)} && git checkout -- scripts/Makefile.kcov && make clean && make mrproper && make CC={Config.EmitScriptPath} O={caseBCDir} olddefconfig && make CC=\'{Config.EmitScriptPath}\' O={caseBCDir} -j{Config.CPUNum}"
+         # print(Config.ExecuteCMD(compile_command))
+         os.system(compile_command)
+         if IsCompilationSuccessfulByCase(caseBCDir):
+diff --git a/source/syzdirect/Runner/Fuzz.py b/source/syzdirect/Runner/Fuzz.py
+index a686fa09a..ff8695c5a 100644
+--- a/source/syzdirect/Runner/Fuzz.py
++++ b/source/syzdirect/Runner/Fuzz.py
+@@ -13,13 +13,13 @@ import Config
+ def MultirunFuzzer():
+     runItems=[]
+     CLEAN_IMAGE_PATH = Config.CleanImageTemplatePath
++    runCount = 1
+     for datapoint in Config.datapoints:
+     
+         caseIdx=datapoint['idx']
+         template_config=Config.LoadJson(Config.TemplateConfigPath)
+         assert template_config, "Fail to load fuzzing config template "
+         template_config["sshkey"]=Config.KeyPath
+-        runCount = 1
+ 
+         # first build it again
+         syzdirect_path = Config.FuzzerDir
+@@ -64,7 +64,7 @@ def MultirunFuzzer():
+ 
+                 config["image"] = CLEAN_IMAGE_PATH
+                 config["workdir"] = subWorkDir
+-                config["http"] = f"0.0.0.0:{2345+runCount}"
++                config["http"] = f"0.0.0.0:{12345+runCount}"
+                 config['vm']['kernel'] = kernelImage
+                 config['syzkaller'] = syzkaller_path
+                 config['hitindex']=int(xidx)
+diff --git a/source/syzdirect/requirements.txt b/source/syzdirect/requirements.txt
+new file mode 100644
+index 000000000..a06d233c5
+--- /dev/null
++++ b/source/syzdirect/requirements.txt
+@@ -0,0 +1,4 @@
++pandas==2.3.3
++pycparser==2.21
++python_Levenshtein==0.27.3
++tqdm==4.65.0
+diff --git a/source/syzdirect/syzdirect_function_model/Makefile b/source/syzdirect/syzdirect_function_model/Makefile
+index f99794dba..f8e4fddc8 100644
+--- a/source/syzdirect/syzdirect_function_model/Makefile
++++ b/source/syzdirect/syzdirect_function_model/Makefile
+@@ -24,7 +24,7 @@ build_analyzer_func = \
+ 			cmake ${1}	\
+ 				-DCMAKE_BUILD_TYPE=Release \
+ 				-DLLVM_ENABLE_ASSERTIONS=ON \
+-				-DCMAKE_CXX_FLAGS_RELEASE="-std=c++17 -fno-rtti -fpic -g" \
++				-DCMAKE_CXX_FLAGS_RELEASE="-std=c++17 -fno-rtti -fpic -g0" \
+ 		&& make -j${NPROC})
+ 
+ all: interface_generator
+diff --git a/source/syzdirect/syzdirect_function_model/src/lib/DeviceExtractor.cc b/source/syzdirect/syzdirect_function_model/src/lib/DeviceExtractor.cc
+index f1f7b29f6..3bc48fa9b 100644
+--- a/source/syzdirect/syzdirect_function_model/src/lib/DeviceExtractor.cc
++++ b/source/syzdirect/syzdirect_function_model/src/lib/DeviceExtractor.cc
+@@ -234,7 +234,7 @@ void DeviceExtractorPass::ProcessMiscDeviceInit(CallInst* callInst) {
+     deviceInfoItem->name = "";
+     auto arg = callInst->getArgOperand(0);
+     if (auto gv = dyn_cast<GlobalVariable>(arg)) {
+-        if (gv->getValueType()->isStructTy()) {
++        if (gv->getValueType()->isStructTy() && gv->hasInitializer()) {
+             if (auto constStruct = dyn_cast<ConstantStruct>(gv->getInitializer())) {
+                 outs() << *constStruct << "\n";
+                 auto minorVal = constStruct->getOperand(0);
+diff --git a/source/syzdirect/syzdirect_function_model/src/lib/FilesystemExtractor.cc b/source/syzdirect/syzdirect_function_model/src/lib/FilesystemExtractor.cc
+index 1c777e102..62696eb0c 100644
+--- a/source/syzdirect/syzdirect_function_model/src/lib/FilesystemExtractor.cc
++++ b/source/syzdirect/syzdirect_function_model/src/lib/FilesystemExtractor.cc
+@@ -229,8 +229,8 @@ Function* FilesystemExtractorPass::findGetTreeFromInitFsCtx(Function* initFsCtx)
+         if(globalVar != nullptr)
+         {
+             ConstantStruct* constStruct = dyn_cast<ConstantStruct>(globalVar->getInitializer());
+-            Constant* getTreeFuncPtr = constStruct->getOperand(Ctx->StructFieldIdx["fs_context_operations"]["get_tree"]);
+-            if(!getTreeFuncPtr->isNullValue())
++            Constant* getTreeFuncPtr = SafeConstStructGetOperand(constStruct, Ctx->StructFieldIdx["fs_context_operations"]["get_tree"]);
++            if(getTreeFuncPtr && !getTreeFuncPtr->isNullValue())
+             {
+                 Function* getTree = dyn_cast<Function>(getTreeFuncPtr);
+                 if(getTree->getInstructionCount() == 0)
+@@ -360,14 +360,14 @@ void FilesystemExtractorPass::HandleFsTypeStruct(GlobalVariable* globalVar, File
+     outs() << "[+] global variable defination: " << *globalVar << "\n";
+     outs() << "[+] type: " << globalVar->getValueType()->getStructName() << "\n";
+     // constStruct->ge
+-    Constant* filesystemNameVal = constStruct->getOperand(Ctx->StructFieldIdx["file_system_type"]["name"]);
+-    string filesystemName = getFilesystemNameString(filesystemNameVal);
++    Constant* filesystemNameVal = SafeConstStructGetOperand(constStruct, Ctx->StructFieldIdx["file_system_type"]["name"]);
++    string filesystemName = filesystemNameVal ? getFilesystemNameString(filesystemNameVal) : "FAIL_TO_GET_FSNAME";
+     outs() << "str: " << filesystemName << "\n";
+     filesystemInfoItem->name = filesystemName;
+     filesystemInfoItem->filesystemTypeStruct = globalVar;
+-    Constant* mountFuncPtr = constStruct->getOperand(Ctx->StructFieldIdx["file_system_type"]["mount"]);
+-    Constant* initfsctxFuncPtr = constStruct->getOperand(Ctx->StructFieldIdx["file_system_type"]["init_fs_context"]);
+-    if(!mountFuncPtr->isNullValue())
++    Constant* mountFuncPtr = SafeConstStructGetOperand(constStruct, Ctx->StructFieldIdx["file_system_type"]["mount"]);
++    Constant* initfsctxFuncPtr = SafeConstStructGetOperand(constStruct, Ctx->StructFieldIdx["file_system_type"]["init_fs_context"]);
++    if(mountFuncPtr && !mountFuncPtr->isNullValue())
+     {
+         Function* mountFunc = dyn_cast<Function>(mountFuncPtr);
+         if(mountFunc->getInstructionCount() == 0)
+@@ -423,7 +423,7 @@ void FilesystemExtractorPass::HandleFsTypeStruct(GlobalVariable* globalVar, File
+             }
+         }
+     }
+-    if(!initfsctxFuncPtr->isNullValue())
++    if(initfsctxFuncPtr && !initfsctxFuncPtr->isNullValue())
+     {
+         Function* initfsctxFunc = dyn_cast<Function>(initfsctxFuncPtr);
+         if(initfsctxFunc->getInstructionCount() == 0)
+@@ -501,11 +501,11 @@ vector<pair<string, Function*>> FilesystemExtractorPass::getHandlerFromFileOpera
+         constStruct = dyn_cast<ConstantStruct>(Ctx->GlobalStructMap[globalVar->getName().str()]);
+     } 
+     if (!constStruct) return res;
+-    Constant* handlerRead = constStruct->getOperand(Ctx->StructFieldIdx["file_operations"]["read"]);
+-    Constant* handlerWrite = constStruct->getOperand(Ctx->StructFieldIdx["file_operations"]["write"]);
+-    Constant* handlerIoctl = constStruct->getOperand(Ctx->StructFieldIdx["file_operations"]["unlocked_ioctl"]);
+-    Constant* handlerOpen = constStruct->getOperand(Ctx->StructFieldIdx["file_operations"]["open"]);
+-    Constant* handlerMmap = constStruct->getOperand(Ctx->StructFieldIdx["file_operations"]["mmap"]);
++    Constant* handlerRead = SafeConstStructGetOperand(constStruct, Ctx->StructFieldIdx["file_operations"]["read"]);
++    Constant* handlerWrite = SafeConstStructGetOperand(constStruct, Ctx->StructFieldIdx["file_operations"]["write"]);
++    Constant* handlerIoctl = SafeConstStructGetOperand(constStruct, Ctx->StructFieldIdx["file_operations"]["unlocked_ioctl"]);
++    Constant* handlerOpen = SafeConstStructGetOperand(constStruct, Ctx->StructFieldIdx["file_operations"]["open"]);
++    Constant* handlerMmap = SafeConstStructGetOperand(constStruct, Ctx->StructFieldIdx["file_operations"]["mmap"]);
+     if (handlerRead && isa<Function>(handlerRead))
+     {
+         Function* readFunc = dyn_cast<Function>(handlerRead);
+@@ -540,7 +540,7 @@ vector<pair<string, Function*>> FilesystemExtractorPass::getHandlerFromFileOpera
+     }
+     else
+     {
+-        handlerWrite = constStruct->getOperand(Ctx->StructFieldIdx["file_operations"]["write_iter"]);
++        handlerWrite = SafeConstStructGetOperand(constStruct, Ctx->StructFieldIdx["file_operations"]["write_iter"]);
+         if(handlerWrite && isa<Function>(handlerWrite))
+         {
+             Function* writeFunc = dyn_cast<Function>(handlerWrite);
+@@ -627,7 +627,8 @@ vector<pair<string, Function*>> FilesystemExtractorPass::getHandlerFromASOperati
+     auto &asStructMap = Ctx->StructFieldIdx["address_space_operations"];
+ 
+     for (auto readFuncName: {"readpage", "readpages"}) {
+-        Constant* handler = constStruct->getOperand(asStructMap[readFuncName]);
++        Constant* handler = SafeConstStructGetOperand(constStruct, asStructMap[readFuncName]);
++        
+         if (!handler || !isa<Function>(handler)) {
+             continue;
+         }
+@@ -938,15 +939,17 @@ bool FilesystemExtractorPass::doModulePass(Module* M)
+             outs() << "what???? should have " << handler->getName().str() << " in module: " << M->getName() << '\n' ;
+             continue;
+         }
+-        Constant* handlerGet = constStruct->getOperand(xattrHandlerStruc["get"]);
+-        Constant* handlerSet = constStruct->getOperand(xattrHandlerStruc["set"]);
++        Constant* handlerGet = SafeConstStructGetOperand(constStruct, xattrHandlerStruc["get"]);
++        
++        Constant* handlerSet = SafeConstStructGetOperand(constStruct, xattrHandlerStruc["set"]);
+ 
+         for (auto iterIdx: {0, 1}) {
+             auto fieldName = "name"; 
+             if (iterIdx == 1) {
+                 fieldName = "prefix";
+             }
+-            Constant* strConst = constStruct->getOperand(xattrHandlerStruc[fieldName]);
++            Constant* strConst = SafeConstStructGetOperand(constStruct, xattrHandlerStruc[fieldName]);
++            
+             if (!strConst) {
+                 outs() << "no field: " << fieldName << '\n';
+                 continue;
+@@ -982,7 +985,7 @@ bool FilesystemExtractorPass::doModulePass(Module* M)
+             }
+             vector<pair<string, Function*>> SyscallHandler; 
+             for (auto &handlerItem: xattrHandlerSyscallMap) {
+-                Constant* handlerPtr = constStruct->getOperand(xattrHandlerStruc[handlerItem.first]);
++                Constant* handlerPtr = SafeConstStructGetOperand(constStruct, xattrHandlerStruc[handlerItem.first]);
+                 if (!handlerPtr || !isa<Function>(handlerPtr)) {
+                     continue;
+                 }
+diff --git a/source/syzdirect/syzdirect_function_model/src/lib/NetworkInterfaceExtractor.cc b/source/syzdirect/syzdirect_function_model/src/lib/NetworkInterfaceExtractor.cc
+index db0baa0b5..0776044f4 100644
+--- a/source/syzdirect/syzdirect_function_model/src/lib/NetworkInterfaceExtractor.cc
++++ b/source/syzdirect/syzdirect_function_model/src/lib/NetworkInterfaceExtractor.cc
+@@ -857,7 +857,8 @@ map<unsigned, Function*> NetworkInterfaceExtractorPass::getNfSubsysHandlers(Cons
+             if(cbStruct == nullptr)
+                 continue;
+             Function* handler = dyn_cast<Function>(cbStruct->getOperand(Ctx->StructFieldIdx["nfnl_callback"]["call"]));
+-            res[i] = handler;
++            if(handler != nullptr)
++                res[i] = handler;
+         }
+     }
+     return res;
+@@ -1131,6 +1132,11 @@ void NetworkInterfaceExtractorPass::ProcessInetRegisterProtosw(CallInst* callIns
+     // struct inet_protosw *
+     auto protoswPtr = callInst->getArgOperand(0);
+     outs() << "protoswPtr: " << *protoswPtr << "\n";
++    // skip non constant (such as PHI)
++    if (!isa<Constant>(protoswPtr)) {
++        outs() << "[-] skip non-constant protoswPtr\n";
++        return;
++    }
+     if (auto protoswGV = dyn_cast<GlobalVariable>(protoswPtr)) {
+         if (protoswGV->hasInitializer()) {
+             auto initializer = protoswGV->getInitializer();
+@@ -1451,6 +1457,10 @@ bool NetworkInterfaceExtractorPass::doFinalization(Module * M) {
+         }
+         if (g->getName() == "inetsw_array") {
+             auto inetswArray = dyn_cast<ConstantArray>(g->getInitializer());
++            if (!inetswArray) {
++                outs() << "[-] inetsw_array initializer is not ConstantArray: " << *g->getInitializer() << "\n";
++                continue;
++            }
+             for (int i = 0; i < inetswArray->getNumOperands(); i++) {
+                 auto inetsw = dyn_cast<ConstantStruct>(inetswArray->getOperand(i));
+                 ProcessInetProtosw(inetsw);
+diff --git a/source/syzdirect/syzdirect_function_model/src/lib/TypeInitializer.cc b/source/syzdirect/syzdirect_function_model/src/lib/TypeInitializer.cc
+index eb1602065..d2af07a39 100644
+--- a/source/syzdirect/syzdirect_function_model/src/lib/TypeInitializer.cc
++++ b/source/syzdirect/syzdirect_function_model/src/lib/TypeInitializer.cc
+@@ -54,6 +54,8 @@ bool TypeInitializerPass::doInitialization(Module *M) {
+ 
+ 				if (StructType *SVT = dyn_cast<StructType>(VT)) {
+ 					string ValueName = static_cast<string>(VI->getName());
++					if(SVT->isLiteral())
++						continue;
+ 					string StructName = static_cast<string>(SVT->getName());
+ 					VnameToTypenameMap.insert(pair<string, string>(ValueName,StructName));
+ 				}
+diff --git a/source/syzdirect/syzdirect_function_model/src/lib/Utils.cc b/source/syzdirect/syzdirect_function_model/src/lib/Utils.cc
+index b03339126..8abf9d376 100644
+--- a/source/syzdirect/syzdirect_function_model/src/lib/Utils.cc
++++ b/source/syzdirect/syzdirect_function_model/src/lib/Utils.cc
+@@ -7,6 +7,7 @@
+ #include <llvm/IR/Module.h>
+ #include <llvm/IR/Constants.h>
+ #include <llvm/ADT/StringExtras.h>
++#include <llvm/ADT/StringRef.h>
+ #include <llvm/Analysis/CallGraph.h>
+ #include "llvm/IR/Function.h"
+ #include "llvm/Support/raw_ostream.h"  
+@@ -32,6 +33,14 @@ bool endsWith(std::string const & value, std::string const & ending)
+     return std::equal(ending.rbegin(), ending.rend(), value.rbegin());
+ }
+ 
++// Minimal safety wrapper: avoid LLVM abort when struct layout/index mismatches.
++Constant* SafeConstStructGetOperand(ConstantStruct* CS, unsigned Idx) {
++    if (!CS) return nullptr;
++    // ConstantStruct::getOperand will assert if Idx is out of range.
++    if (Idx >= CS->getNumOperands()) return nullptr;
++    return CS->getOperand(Idx);
++}
++
+ int getIntValue(Value* value) {
+     auto constVal = dyn_cast<ConstantInt>(value);
+     if (constVal) {
+diff --git a/source/syzdirect/syzdirect_function_model/src/lib/Utils.h b/source/syzdirect/syzdirect_function_model/src/lib/Utils.h
+index 990754150..d37ad1a4b 100644
+--- a/source/syzdirect/syzdirect_function_model/src/lib/Utils.h
++++ b/source/syzdirect/syzdirect_function_model/src/lib/Utils.h
+@@ -17,6 +17,8 @@
+ 
+ string getValueAsOperand(Value* v);
+ 
++Constant* SafeConstStructGetOperand(ConstantStruct* CS, unsigned Idx);
++
+ int getIntValue(Value* value);
+ 
+ string getDeviceString(Value *currVal);
+diff --git a/source/syzdirect/syzdirect_fuzzer/prog/direct.go b/source/syzdirect/syzdirect_fuzzer/prog/direct.go
+index fcec0cd0f..4cfc8417c 100644
+--- a/source/syzdirect/syzdirect_fuzzer/prog/direct.go
++++ b/source/syzdirect/syzdirect_fuzzer/prog/direct.go
+@@ -442,6 +442,7 @@ type ProgHitCounts map[uint32]ProgHitCountItem
+ 
+ type HitLogItem struct {
+ 	Count        uint32
++	ExecCount    uint32
+ 	HitCalls     []int
+ 	FirstHitTime time.Duration
+ 	Progs        []string
+@@ -479,6 +480,7 @@ func (item *HitLogItem) AddCallIds(callids []int) {
+ func (hitLog GlobalHitLog) CustomMarshal(target *Target) ([]byte, error) {
+ 	outMap := make(map[uint32]struct {
+ 		Count        uint32
++		ExecCount    uint32
+ 		HitCalls     []string
+ 		FirstHitTime time.Duration
+ 		Progs        []string
+@@ -494,11 +496,13 @@ func (hitLog GlobalHitLog) CustomMarshal(target *Target) ([]byte, error) {
+ 		}
+ 		outMap[key] = struct {
+ 			Count        uint32
++			ExecCount    uint32
+ 			HitCalls     []string
+ 			FirstHitTime time.Duration
+ 			Progs        []string
+ 		}{
+ 			Count:        val.Count,
++			ExecCount:    val.ExecCount,
+ 			Progs:        val.Progs,
+ 			HitCalls:     hitCalls,
+ 			FirstHitTime: val.FirstHitTime,
+diff --git a/source/syzdirect/syzdirect_fuzzer/sys/sys.go b/source/syzdirect/syzdirect_fuzzer/sys/sys.go
+index 9400df2f8..10f123e45 100644
+--- a/source/syzdirect/syzdirect_fuzzer/sys/sys.go
++++ b/source/syzdirect/syzdirect_fuzzer/sys/sys.go
+@@ -5,14 +5,14 @@ package sys
+ 
+ import (
+ 	// Import all targets, so that users only need to import sys.
+-	_ "github.com/google/syzkaller/sys/akaros/gen"
+-	_ "github.com/google/syzkaller/sys/darwin/gen"
+-	_ "github.com/google/syzkaller/sys/freebsd/gen"
+-	_ "github.com/google/syzkaller/sys/fuchsia/gen"
++	// _ "github.com/google/syzkaller/sys/akaros/gen"
++	// _ "github.com/google/syzkaller/sys/darwin/gen"
++	// _ "github.com/google/syzkaller/sys/freebsd/gen"
++	// _ "github.com/google/syzkaller/sys/fuchsia/gen"
+ 	_ "github.com/google/syzkaller/sys/linux/gen"
+-	_ "github.com/google/syzkaller/sys/netbsd/gen"
+-	_ "github.com/google/syzkaller/sys/openbsd/gen"
+-	_ "github.com/google/syzkaller/sys/test/gen"
+-	_ "github.com/google/syzkaller/sys/trusty/gen"
+-	_ "github.com/google/syzkaller/sys/windows/gen"
++	// _ "github.com/google/syzkaller/sys/netbsd/gen"
++	// _ "github.com/google/syzkaller/sys/openbsd/gen"
++	// _ "github.com/google/syzkaller/sys/test/gen"
++	// _ "github.com/google/syzkaller/sys/trusty/gen"
++	// _ "github.com/google/syzkaller/sys/windows/gen"
+ )
+diff --git a/source/syzdirect/syzdirect_fuzzer/syz-fuzzer/fuzzer.go b/source/syzdirect/syzdirect_fuzzer/syz-fuzzer/fuzzer.go
+index ef05c5c5b..396fbb6d1 100644
+--- a/source/syzdirect/syzdirect_fuzzer/syz-fuzzer/fuzzer.go
++++ b/source/syzdirect/syzdirect_fuzzer/syz-fuzzer/fuzzer.go
+@@ -115,6 +115,7 @@ type ExtStat int
+ const (
+ 	ExtAllDist ExtStat = iota
+ 	ExtProgCount
++	ExtHitInputCount
+ 	ExtHintCompsCount
+ 	ExtHintCompsSum
+ 	ExtStatCount
+@@ -123,6 +124,7 @@ const (
+ var extStatNames = [ExtStatCount]string{
+ 	ExtAllDist:        "all dist",
+ 	ExtProgCount:      "prog count",
++	ExtHitInputCount:  "hit input count",
+ 	ExtHintCompsCount: "hint comps count",
+ 	ExtHintCompsSum:   "hint comps sum",
+ }
+@@ -538,6 +540,7 @@ func (fuzzer *Fuzzer) handleHitCount(progHitCounts prog.ProgHitCounts, p *prog.P
+ 	for hitIdx, progHitItem := range progHitCounts {
+ 		item, ok := fuzzer.hitLog[hitIdx]
+ 		item.Count += progHitItem.Count
++		item.ExecCount += 1
+ 		if !ok && fuzzer.canLog {
+ 			if rawProg == nil {
+ 				rawProg = p.Serialize()
+@@ -557,6 +560,7 @@ func (fuzzer *Fuzzer) sendHitCountToManager() {
+ 		if item.Count != 0 {
+ 			tmp[hitIdx] = item
+ 			item.Count = 0
++			item.ExecCount = 0
+ 			item.Progs = nil
+ 			item.HitCalls = nil
+ 			fuzzer.hitLog[hitIdx] = item
+diff --git a/source/syzdirect/syzdirect_fuzzer/syz-fuzzer/proc.go b/source/syzdirect/syzdirect_fuzzer/syz-fuzzer/proc.go
+index 1d6afd6ec..eadde0a24 100644
+--- a/source/syzdirect/syzdirect_fuzzer/syz-fuzzer/proc.go
++++ b/source/syzdirect/syzdirect_fuzzer/syz-fuzzer/proc.go
+@@ -185,6 +185,8 @@ func (proc *Proc) triageInput(item *WorkTriage) {
+ 	}
+ 	if len(progHitCounts) == 0 {
+ 		progHitCounts = nil
++	} else {
++		atomic.AddUint64(&proc.fuzzer.extStats[ExtHitInputCount], 1)
+ 	}
+ 	item.p.Dist = progDist
+ 	if progDist != prog.InvalidDist {
+diff --git a/source/syzdirect/syzdirect_fuzzer/syz-manager/rpc.go b/source/syzdirect/syzdirect_fuzzer/syz-manager/rpc.go
+index 7dabaa2e3..b854e5971 100644
+--- a/source/syzdirect/syzdirect_fuzzer/syz-manager/rpc.go
++++ b/source/syzdirect/syzdirect_fuzzer/syz-manager/rpc.go
+@@ -463,6 +463,8 @@ func (serv *RPCServer) LogHitCount(a *rpctype.HitCountArgs, r *int) error {
+ 			continue
+ 		}
+ 		oldItem.Count += newItem.Count
++		oldItem.ExecCount += newItem.ExecCount
++		serv.stats.hitExecCount.set(int(oldItem.ExecCount))
+ 		if len(oldItem.Progs) < 10 {
+ 			oldItem.AddCallIds(newItem.HitCalls)
+ 			oldItem.Progs = append(oldItem.Progs, newItem.Progs...)
+diff --git a/source/syzdirect/syzdirect_fuzzer/syz-manager/stats.go b/source/syzdirect/syzdirect_fuzzer/syz-manager/stats.go
+index e219f1621..abdd682f0 100644
+--- a/source/syzdirect/syzdirect_fuzzer/syz-manager/stats.go
++++ b/source/syzdirect/syzdirect_fuzzer/syz-manager/stats.go
+@@ -33,8 +33,9 @@ type Stats struct {
+ 	corpusSignal        Stat
+ 	maxSignal           Stat
+ 
+-	maxDistance Stat
+-	minDistance Stat
++	maxDistance  Stat
++	minDistance  Stat
++	hitExecCount Stat
+ 
+ 	mu         sync.Mutex
+ 	namedStats map[string]uint64
+@@ -78,6 +79,7 @@ func (stats *Stats) all() map[string]uint64 {
+ 		"max signal":        stats.maxSignal.get(),
+ 		"max distance":      stats.maxDistance.get(),
+ 		"min distance":      stats.minDistance.get(),
++		"hit exec count":    stats.hitExecCount.get(),
+ 	}
+ 	if stats.haveHub {
+ 		m["hub: send prog add"] = stats.hubSendProgAdd.get()
+diff --git a/source/syzdirect/syzdirect_kernel_analysis/Makefile b/source/syzdirect/syzdirect_kernel_analysis/Makefile
+index a18eba3fe..7cad58a6f 100644
+--- a/source/syzdirect/syzdirect_kernel_analysis/Makefile
++++ b/source/syzdirect/syzdirect_kernel_analysis/Makefile
+@@ -25,7 +25,7 @@ build_analyzer_func = \
+ 			cmake ${1}	\
+ 				-DCMAKE_BUILD_TYPE=Release \
+ 				-DLLVM_ENABLE_ASSERTIONS=ON \
+-				-DCMAKE_CXX_FLAGS_RELEASE="-std=c++17 -fno-rtti -fpic -g" \
++				-DCMAKE_CXX_FLAGS_RELEASE="-std=c++17 -fno-rtti -fpic -g0" \
+ 		&& make -j${NPROC})
+ 
+ all: target_analyzer
+diff --git a/source/syzdirect/syzdirect_kernel_analysis/src/lib/Constraint.cc b/source/syzdirect/syzdirect_kernel_analysis/src/lib/Constraint.cc
+index 726833d3d..0ac409786 100644
+--- a/source/syzdirect/syzdirect_kernel_analysis/src/lib/Constraint.cc
++++ b/source/syzdirect/syzdirect_kernel_analysis/src/lib/Constraint.cc
+@@ -180,14 +180,17 @@ bool ConstraintPass::doModulePass(Module * M) {
+             if (funcName=="bt_sock_register"){
+               for(User* user:F->users()) {
+                 if(CallInst* callInst = dyn_cast<CallInst>(user)) {
+-                    auto theProto=dyn_cast<Constant>(callInst->getOperand(0));
+-                    auto theOps=dyn_cast<GlobalVariable>(callInst->getOperand(1));
++                    if (callInst->arg_size() < 2) continue;
++                    auto theProto=dyn_cast<Constant>(callInst->getArgOperand(0));
++                    auto theOps=dyn_cast<GlobalVariable>(callInst->getArgOperand(1));
++                    if(!theProto || !theOps) continue;
+                     OP << "callsite of bt_sock_register: " << *callInst << "\n";
+                     OP << "extracted proto: " << *theProto << "|" << "theOps: " << *theOps << "\n";
+                     if(theOps->hasInitializer()){
+                       auto constStruct = dyn_cast<ConstantStruct>(theOps->getInitializer());
++                      if (constStruct->getNumOperands() <= 1) continue;
+                       Constant* createPtr=constStruct->getOperand(1);
+-                      if(createPtr->isNullValue())
++                      if(createPtr && createPtr->isNullValue())
+                         continue;
+                       Function* funcPtr= dyn_cast<Function>(createPtr);
+                       string functionPointerName = funcPtr->getName().str();

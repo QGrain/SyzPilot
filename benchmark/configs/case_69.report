@@ -1,0 +1,82 @@
+SQUASHFS error: Failed to allocate metadata cache
+BUG: unable to handle page fault for address: fffffffffffffffc
+#PF: supervisor read access in kernel mode
+#PF: error_code(0x0000) - not-present page
+PGD df84067 P4D df84067 PUD df86067 PMD 0
+Oops: Oops: 0000 [#1] PREEMPT SMP KASAN NOPTI
+CPU: 1 UID: 0 PID: 82934 Comm: syz-executor.12 Not tainted 6.14.0-rc2 #1
+Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.15.0-1 04/01/2014
+RIP: 0010:squashfs_cache_delete.part.0+0x41/0x380 fs/squashfs/cache.c:204
+Code: 8d 44 24 08 48 89 c2 48 89 44 24 10 48 b8 00 00 00 00 00 fc ff df 48 c1 ea 03 0f b6 04 02 84 c0 74 08 3c 03 0f 8e 17 03 00 00 <41> 8b 5c 24 08 31 ff 89 de e8 d1 52 30 ff 49 8d 84 24 b8 00 00 00
+RSP: 0018:ffffc9000435fba8 EFLAGS: 00010246
+RAX: 0000000000000000 RBX: fffffffffffffff4 RCX: ffffc9001b032000
+RDX: 1fffffffffffffff RSI: ffffffff828949d6 RDI: fffffffffffffff4
+RBP: ffff88812eb24420 R08: 0000000000000007 R09: fffffffffffff000
+R10: fffffffffffffff4 R11: 00000000002cb7e0 R12: fffffffffffffff4
+R13: ffff88810a918c00 R14: ffff888082b6e000 R15: ffff88805bef6300
+FS:  00007f04d8f25640(0000) GS:ffff888135e00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: fffffffffffffffc CR3: 00000000840f4000 CR4: 0000000000752ef0
+DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400
+PKRU: 55555554
+Call Trace:
+ <TASK>
+ squashfs_cache_delete+0x1f/0x30 fs/squashfs/cache.c:201
+ squashfs_fill_super+0x362/0x2900 fs/squashfs/super.c:470
+ get_tree_bdev_flags+0x38b/0x620 fs/super.c:1636
+ vfs_get_tree+0x8b/0x340 fs/super.c:1814
+ do_new_mount fs/namespace.c:3560 [inline]
+ path_mount+0x14e6/0x1f10 fs/namespace.c:3887
+ do_mount fs/namespace.c:3900 [inline]
+ __do_sys_mount fs/namespace.c:4111 [inline]
+ __se_sys_mount fs/namespace.c:4088 [inline]
+ __x64_sys_mount+0x28f/0x310 fs/namespace.c:4088
+ do_syscall_x64 arch/x86/entry/common.c:52 [inline]
+ do_syscall_64+0xcd/0x250 arch/x86/entry/common.c:83
+ entry_SYSCALL_64_after_hwframe+0x77/0x7f
+RIP: 0033:0x473c9e
+Code: 48 c7 c0 ff ff ff ff eb aa e8 3e 0a 00 00 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 40 00 f3 0f 1e fa 49 89 ca b8 a5 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48
+RSP: 002b:00007f04d8f24e88 EFLAGS: 00000202 ORIG_RAX: 00000000000000a5
+RAX: ffffffffffffffda RBX: 00007f04d8f24f10 RCX: 0000000000473c9e
+RDX: 0000000020000240 RSI: 0000000020000280 RDI: 00007f04d8f24ed0
+RBP: 0000000020000240 R08: 00007f04d8f24f10 R09: 0000000000000000
+R10: 0000000000000000 R11: 0000000000000202 R12: 0000000020000280
+R13: 00007f04d8f24ed0 R14: 0000000000000228 R15: 00000000200002c0
+ </TASK>
+Modules linked in:
+CR2: fffffffffffffffc
+---[ end trace 0000000000000000 ]---
+RIP: 0010:squashfs_cache_delete.part.0+0x41/0x380 fs/squashfs/cache.c:204
+Code: 8d 44 24 08 48 89 c2 48 89 44 24 10 48 b8 00 00 00 00 00 fc ff df 48 c1 ea 03 0f b6 04 02 84 c0 74 08 3c 03 0f 8e 17 03 00 00 <41> 8b 5c 24 08 31 ff 89 de e8 d1 52 30 ff 49 8d 84 24 b8 00 00 00
+RSP: 0018:ffffc9000435fba8 EFLAGS: 00010246
+RAX: 0000000000000000 RBX: fffffffffffffff4 RCX: ffffc9001b032000
+RDX: 1fffffffffffffff RSI: ffffffff828949d6 RDI: fffffffffffffff4
+RBP: ffff88812eb24420 R08: 0000000000000007 R09: fffffffffffff000
+R10: fffffffffffffff4 R11: 00000000002cb7e0 R12: fffffffffffffff4
+R13: ffff88810a918c00 R14: ffff888082b6e000 R15: ffff88805bef6300
+FS:  00007f04d8f25640(0000) GS:ffff888135e00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: fffffffffffffffc CR3: 00000000840f4000 CR4: 0000000000752ef0
+DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400
+PKRU: 55555554
+----------------
+Code disassembly (best guess):
+   0:   8d 44 24 08             lea    0x8(%rsp),%eax
+   4:   48 89 c2                mov    %rax,%rdx
+   7:   48 89 44 24 10          mov    %rax,0x10(%rsp)
+   c:   48 b8 00 00 00 00 00    movabs $0xdffffc0000000000,%rax
+  13:   fc ff df
+  16:   48 c1 ea 03             shr    $0x3,%rdx
+  1a:   0f b6 04 02             movzbl (%rdx,%rax,1),%eax
+  1e:   84 c0                   test   %al,%al
+  20:   74 08                   je     0x2a
+  22:   3c 03                   cmp    $0x3,%al
+  24:   0f 8e 17 03 00 00       jle    0x341
+* 2a:   41 8b 5c 24 08          mov    0x8(%r12),%ebx <-- trapping instruction
+  2f:   31 ff                   xor    %edi,%edi
+  31:   89 de                   mov    %ebx,%esi
+  33:   e8 d1 52 30 ff          call   0xff305309
+  38:   49 8d 84 24 b8 00 00    lea    0xb8(%r12),%rax
+  3f:   00

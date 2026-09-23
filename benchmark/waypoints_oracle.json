@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0",
+  "description": "Versioned human oracle for report-derived waypoint regression. Empty cases mean that no expert verdict has been recorded yet.",
+  "case_schema": {
+    "expected_target": "func@file:line",
+    "allowed_fallback_targets": [],
+    "required_nodes": [],
+    "allowed_nodes": [],
+    "forbidden_nodes": [],
+    "forbidden_report_sections": [],
+    "target_verdict": "",
+    "section_verdict": "",
+    "chain_verdict": "",
+    "reviewer": "",
+    "review_date": "YYYY-MM-DD",
+    "notes": "",
+    "accepted_exception": ""
+  },
+  "cases": {}
+}

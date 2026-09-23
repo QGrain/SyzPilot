@@ -1,0 +1,5 @@
+# Collect the original results of 10 runs and caculate the average results for them.
+# The format or original results is as RUN1/RUN2/RUN3/.../RUN10
+# μTTH is the average of Time-to-Hit, μTTE is the average of Time-to-Expire
+ID,Hit Count(24h),Avg Hit Count(24h),TTH(24h),μTTH(24h),Hit Count(48h),Avg Hit Count(48h),TTH(48h),μTTH(48h),TTE(24h),μTTE(24h),TTE(48h),μTTE(48h)
+example,0/0/0/0/0/0/0/0/0/0,0,...

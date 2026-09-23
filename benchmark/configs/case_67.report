@@ -1,0 +1,81 @@
+general protection fault, probably for non-canonical address 0xdffffc0000000005: 0000 [#1] PREEMPT SMP KASAN PTI
+KASAN: null-ptr-deref in range [0x0000000000000028-0x000000000000002f]
+CPU: 1 PID: 22 Comm: ksoftirqd/1 Not tainted 6.8.0 #1
+Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.13.0-1ubuntu1.1 04/01/2014
+RIP: 0010:ebt_do_table+0x210/0x2a40 net/bridge/netfilter/ebtables.c:220
+Code: ff df 80 3c 08 00 74 08 4c 89 ef e8 aa 07 b4 f7 4d 8b 65 00 49 8d 5c 24 2c 48 89 d8 48 c1 e8 03 48 b9 00 00 00 00 00 fc ff df <0f> b6 04 08 84 c0 0f 85 c4 26 00 00 8b 03 89 44 24 64 4c 89 64 24
+RSP: 0018:ffffc9000019ebc0 EFLAGS: 00010207
+RAX: 0000000000000005 RBX: 000000000000002c RCX: dffffc0000000000
+RDX: 0000000080000301 RSI: 0000000000000002 RDI: 0000000000000006
+RBP: ffffc9000019ed68 R08: ffffffff8a40346f R09: 1ffff11003948868
+R10: dffffc0000000000 R11: ffffed1003948869 R12: 0000000000000000
+R13: ffffc900043b1018 R14: ffffc900043b1000 R15: 000000000000003f
+FS:  0000000000000000(0000) GS:ffff888135c00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: 000000c03e58f1c8 CR3: 000000000df34000 CR4: 00000000003506f0
+DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400
+Call Trace:
+ <TASK>
+ nf_hook_entry_hookfn include/linux/netfilter.h:154 [inline]
+ nf_hook_slow+0xc5/0x220 net/netfilter/core.c:626
+ nf_hook include/linux/netfilter.h:269 [inline]
+ NF_HOOK+0x2a7/0x460 include/linux/netfilter.h:312
+ __br_forward+0x489/0x660 net/bridge/br_forward.c:115
+ br_handle_frame_finish+0x1887/0x1f80 net/bridge/br_input.c:210
+ br_nf_hook_thresh+0x474/0x590
+ br_nf_pre_routing_finish_ipv6+0xa9e/0xdd0
+ NF_HOOK include/linux/netfilter.h:314 [inline]
+ br_nf_pre_routing_ipv6+0x370/0x760 net/bridge/br_netfilter_ipv6.c:184
+ nf_hook_entry_hookfn include/linux/netfilter.h:154 [inline]
+ nf_hook_bridge_pre net/bridge/br_input.c:272 [inline]
+ br_handle_frame+0x9f5/0x14d0 net/bridge/br_input.c:417
+ __netif_receive_skb_core+0x139c/0x43e0 net/core/dev.c:5428
+ __netif_receive_skb_one_core net/core/dev.c:5532 [inline]
+ __netif_receive_skb+0x12f/0x6a0 net/core/dev.c:5648
+ process_backlog+0x385/0x760 net/core/dev.c:5976
+ __napi_poll+0xcd/0x490 net/core/dev.c:6576
+ napi_poll net/core/dev.c:6645 [inline]
+ net_rx_action+0x78b/0x1010 net/core/dev.c:6778
+ __do_softirq+0x2bd/0x942 kernel/softirq.c:553
+ run_ksoftirqd+0xc5/0x130 kernel/softirq.c:921
+ smpboot_thread_fn+0x545/0xa30 kernel/smpboot.c:164
+ kthread+0x2f1/0x390 kernel/kthread.c:388
+ ret_from_fork+0x4d/0x80 arch/x86/kernel/process.c:147
+ ret_from_fork_asm+0x1b/0x30 arch/x86/entry/entry_64.S:243
+ </TASK>
+Modules linked in:
+---[ end trace 0000000000000000 ]---
+RIP: 0010:ebt_do_table+0x210/0x2a40 net/bridge/netfilter/ebtables.c:220
+Code: ff df 80 3c 08 00 74 08 4c 89 ef e8 aa 07 b4 f7 4d 8b 65 00 49 8d 5c 24 2c 48 89 d8 48 c1 e8 03 48 b9 00 00 00 00 00 fc ff df <0f> b6 04 08 84 c0 0f 85 c4 26 00 00 8b 03 89 44 24 64 4c 89 64 24
+RSP: 0018:ffffc9000019ebc0 EFLAGS: 00010207
+RAX: 0000000000000005 RBX: 000000000000002c RCX: dffffc0000000000
+RDX: 0000000080000301 RSI: 0000000000000002 RDI: 0000000000000006
+RBP: ffffc9000019ed68 R08: ffffffff8a40346f R09: 1ffff11003948868
+R10: dffffc0000000000 R11: ffffed1003948869 R12: 0000000000000000
+R13: ffffc900043b1018 R14: ffffc900043b1000 R15: 000000000000003f
+FS:  0000000000000000(0000) GS:ffff888135c00000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: 000000c03e58f1c8 CR3: 000000000df34000 CR4: 00000000003506f0
+DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+DR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400
+----------------
+Code disassembly (best guess), 1 bytes skipped:
+   0:	df 80 3c 08 00 74    	filds  0x7400083c(%rax)
+   6:	08 4c 89 ef          	or     %cl,-0x11(%rcx,%rcx,4)
+   a:	e8 aa 07 b4 f7       	callq  0xf7b407b9
+   f:	4d 8b 65 00          	mov    0x0(%r13),%r12
+  13:	49 8d 5c 24 2c       	lea    0x2c(%r12),%rbx
+  18:	48 89 d8             	mov    %rbx,%rax
+  1b:	48 c1 e8 03          	shr    $0x3,%rax
+  1f:	48 b9 00 00 00 00 00 	movabs $0xdffffc0000000000,%rcx
+  26:	fc ff df
+* 29:	0f b6 04 08          	movzbl (%rax,%rcx,1),%eax <-- trapping instruction
+  2d:	84 c0                	test   %al,%al
+  2f:	0f 85 c4 26 00 00    	jne    0x26f9
+  35:	8b 03                	mov    (%rbx),%eax
+  37:	89 44 24 64          	mov    %eax,0x64(%rsp)
+  3b:	4c                   	rex.WR
+  3c:	89                   	.byte 0x89
+  3d:	64                   	fs
+  3e:	24                   	.byte 0x24
