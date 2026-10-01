@@ -16,7 +16,10 @@ from transformers import AutoTokenizer
 ########## CONFIG ##########
 TOKEN = ''
 config = {
-    "tokenizer": os.getenv("TOKENIZER_PATH", "/artifact/assets/models/SyzTokenizer_224w/"),
+    "tokenizer": os.getenv(
+        "SYZPILOT_TOKENIZER_PATH",
+        os.getenv("TOKENIZER_PATH", "/artifact/assets/models/SyzTokenizer_224w/"),
+    ),
     "max_length": 1024  # MUST SAME AS THE TRAINING
 }
 debug_log_file = os.getenv("SERVE_LOG_PATH", "./torchserve_debug.log") # log path

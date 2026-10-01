@@ -18,7 +18,7 @@ class AttributionCancellationTests(unittest.TestCase):
     def test_final_target_filter_and_internal_batch_size_reach_captum(self):
         module_names = (
             "attribution_guidance", "model_v2", "dataset_v2",
-            "attribution_wrapped", "model", "dataset", "config", "utils",
+            "config", "utils",
         )
         saved_modules = {
             name: sys.modules.get(name) for name in module_names
@@ -162,7 +162,7 @@ class AttributionCancellationTests(unittest.TestCase):
     def test_internal_batch_size_must_be_positive(self):
         module_names = (
             "attribution_guidance", "model_v2", "dataset_v2",
-            "attribution_wrapped", "model", "dataset", "config", "utils",
+            "config", "utils",
         )
         saved_modules = {
             name: sys.modules.get(name) for name in module_names
@@ -199,7 +199,7 @@ class AttributionCancellationTests(unittest.TestCase):
     def test_pre_canceled_run_does_not_load_training_data(self):
         module_names = (
             "attribution_guidance", "model_v2", "dataset_v2",
-            "attribution_wrapped", "model", "dataset", "config", "utils",
+            "config", "utils",
         )
         saved_modules = {
             name: sys.modules.get(name) for name in module_names

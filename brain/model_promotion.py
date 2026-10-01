@@ -274,3 +274,70 @@ def decide_model_promotion(
         "validation_signature_count": signature_count,
         "validation_signature_sha256": signature_digest,
     }
+
+
+def decide_stage1_bootstrap(
+        metrics: Mapping[str, Any],
+        thresholds: Optional[PromotionThresholds] = None) -> Dict[str, Any]:
+    """Apply the production Stage-1 gate to in-memory evaluation metrics."""
+    counts = {
+        int(class_index): int(count)
+        for class_index, count in metrics["class_counts"].items()
+    }
+    recalls = {
+        int(class_index): float(recall)
+        for class_index, recall in metrics["per_class_recall"].items()
+    }
+    if set(counts) != {0, 1} or set(recalls) != {0, 1}:
+        raise ValueError("Stage-1 bootstrap metrics require classes 0 and 1")
+    manifest = {
+        "validation_signature_count": sum(counts.values()),
+        # Deployment independently verifies the real validation fingerprint.
+        # This training-time probe only reuses the identical quality gate.
+        "validation_signature_sha256": "0" * 64,
+        "best_eval_loss": metrics["eval_loss"],
+        "best_eval_accuracy": metrics["accuracy"],
+        "best_eval_macro_f1": metrics["macro_f1"],
+        "validation_class_counts": counts,
+        "validation_per_class_recall": recalls,
+        "loaded_checkpoint": None,
+        "loaded_checkpoint_stage": 0,
+    }
+    return decide_model_promotion(
+        manifest,
+        stage=1,
+        num_classes=2,
+        thresholds=thresholds,
+    )
+
+
+def decide_stage2_bootstrap(
+        metrics: Mapping[str, Any], num_classes: int,
+        thresholds: Optional[PromotionThresholds] = None) -> Dict[str, Any]:
+    """Apply absolute production Stage-2 gates to in-memory metrics."""
+    manifest = {
+        "validation_signature_count": sum(
+            int(count) for count in metrics["class_counts"].values()
+        ),
+        "validation_signature_sha256": "0" * 64,
+        "best_eval_loss": metrics["eval_loss"],
+        "best_eval_accuracy": metrics["accuracy"],
+        "best_eval_macro_f1": metrics["macro_f1"],
+        "validation_class_counts": metrics["class_counts"],
+        "validation_per_class_recall": metrics["per_class_recall"],
+        "binary_eval_loss": metrics["binary_eval_loss"],
+        "binary_eval_accuracy": metrics["binary_accuracy"],
+        "binary_eval_macro_f1": metrics["binary_macro_f1"],
+        "binary_validation_class_counts": metrics["binary_class_counts"],
+        "binary_validation_per_class_recall": metrics[
+            "binary_per_class_recall"
+        ],
+        "loaded_checkpoint": None,
+        "loaded_checkpoint_stage": 0,
+    }
+    return decide_model_promotion(
+        manifest,
+        stage=2,
+        num_classes=num_classes,
+        thresholds=thresholds,
+    )

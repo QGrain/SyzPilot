@@ -5,10 +5,10 @@ import math
 import pickle
 import random
 import re
-from typing import List, Union
+from typing import List
 
 import torch
-from torch.utils.data import IterableDataset, Dataset, DataLoader
+from torch.utils.data import IterableDataset
 
 
 def load_canonical_records(data_root, num_classes, indices, exclude_signatures=None):
@@ -96,42 +96,6 @@ class ProgramDatasetV2(IterableDataset):
 
     def __iter__(self):
         return iter(self.generate())
-
-
-class ProgramDatasetV2_1(ProgramDatasetV2):
-    def __init__(
-            self,
-            data_root,
-            num_classes,
-            prog_filename,
-            label_filename,
-            split="train",
-            train_ratio=0.8,
-    ):
-        super().__init__(data_root, num_classes)
-
-        with open(self.data_dir / prog_filename, 'rb') as fp:
-            self.prog_obj = pickle.load(fp)
-        with open(self.data_dir / label_filename, 'rb') as fp:
-            self.label_obj = pickle.load(fp)
-
-        self.split = split
-        self.keys = list(self.prog_obj.keys())
-        split_index = int(len(self.keys) * train_ratio)
-        if split == "train":
-            self.keys = self.keys[:split_index]
-        else:
-            self.keys = self.keys[split_index:]
-
-    def _refresh_files(self):
-        for prog_id in self.keys:
-            if prog_id in self.label_obj:
-                self.tracking_examples.append((
-                    self.prog_obj[prog_id],
-                    torch.tensor(self.label_obj[prog_id], dtype=torch.int),
-                ))
-        # if self.split == "train":
-        random.shuffle(self.tracking_examples)
 
 
 class ProgramDatasetV2_2(ProgramDatasetV2):

@@ -31,7 +31,7 @@ from fastapi import Request, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from config import ControllerConfig
 from guidance_engine import GuidanceEngine, GuidanceConfig, MutationTemplate
@@ -94,6 +94,7 @@ class FuzzerTask:
     target_revision: str = ""
     producer_revision: str = ""
     descriptions_mode: str = ""
+    enable_online_guidance: bool = True
     # members with default values
     tunnel_port: Optional[int] = None  # isolated
     grpc_port: int = 0
@@ -166,12 +167,6 @@ class FuzzerTask:
                 self.task_id, self.task_name
             )
 
-    def to_dict(self):
-        """Convert to serializable dictionary"""
-        # TODO
-        return {}
-
-
 def next_curriculum_stage(
         requested_stage: int, last_successful_stage: int, num_classes: int) -> int:
     """Return the next mandatory objective for a fixed-width classifier head."""
@@ -211,6 +206,7 @@ class RegistrationPayload(BaseModel):
     target_revision: str
     producer_revision: str
     descriptions_mode: str
+    enable_online_guidance: bool = True
 
 class RegistrationResponse(BaseModel):
     task_id: str
@@ -1333,6 +1329,7 @@ class Controller:
         self.app.add_api_route("/list_tasks", self.list_tasks, methods=["GET"])
         # self.app.add_api_route("/start_trainer/{task_id}", self.start_trainer, methods=["POST"])
         # self.app.add_api_route("/start_attributor/{task_id}", self.start_attributor, methods=["POST"])
+        self.app.add_api_route("/live", self.liveness, methods=["GET"])
         self.app.add_api_route("/health", self.health, methods=["GET"])
 
         # Task log APIs
@@ -1619,11 +1616,22 @@ class Controller:
                     len(entry.encode("utf-8")) for entry in task.attributor_logs
                 ),
             },
+            "model": {
+                "training_round": task.training_round,
+                "deployment_version": task.deployment_version,
+                "name": task.model_name,
+                "version": task.model_version,
+                "stage": task.last_successful_stage,
+                "batch_boundary": task.last_trained_batch,
+                "pending_name": task.pending_model_name,
+                "pending_version": task.pending_model_version,
+            },
             "guidance": {
                 "target_func": task.target_func,
                 "has_engine": task.guidance_engine is not None,
                 "guidance_version": task.guidance_version,
                 "static_analysis_done": task.static_analysis_done,
+                "online_updates_enabled": task.enable_online_guidance,
             },
         }
 
@@ -1720,6 +1728,7 @@ class Controller:
             target_revision=payload.target_revision,
             producer_revision=payload.producer_revision,
             descriptions_mode=payload.descriptions_mode,
+            enable_online_guidance=payload.enable_online_guidance,
         )
 
         # Receiver logs are now written to per-task log file via --log_file
@@ -1812,12 +1821,12 @@ class Controller:
                 raise HTTPException(status_code=404, detail="task not found")
             t.stopping = True
             self._remove_training_waiter(task_id)
-            if not self._stop_task_training(t):
+            if not await self._stop_task_training_async(t):
                 raise HTTPException(
                     status_code=503,
                     detail="trainer cleanup is incomplete; retry unregister",
                 )
-            if not self._stop_task_auxiliary_processes(t):
+            if not await self._stop_task_auxiliary_processes_async(t):
                 raise HTTPException(
                     status_code=503,
                     detail="task subprocess cleanup is incomplete; retry unregister",
@@ -1892,9 +1901,12 @@ class Controller:
                 "receiver_pid": task.receiver_proc.pid if task.receiver_proc else None,
                 "trainer_pid": task.trainer_proc.pid if task.trainer_proc else None,
                 "attributor_pid": task.attributor_proc.pid if task.attributor_proc else None,
+                "deployment_version": task.deployment_version,
+                "model_version": task.model_version,
                 # Guidance status
                 "target_func": task.target_func,
                 "guidance_version": task.guidance_version,
+                "online_guidance": task.enable_online_guidance,
                 "stopping": task.stopping,
             })
 
@@ -2244,15 +2256,38 @@ class Controller:
                 "--log_dir", save_dir,
                 "--session_name", session_name,
                 "--token_cache_entries", str(config.token_cache_entries),
+                "--promotion_majority_margin",
+                str(config.promotion_majority_margin),
+                "--promotion_stage1_min_support",
+                str(config.promotion_stage1_min_support),
+                "--promotion_stage1_min_macro_f1",
+                str(config.promotion_stage1_min_macro_f1),
+                "--promotion_stage1_min_recall",
+                str(config.promotion_stage1_min_recall),
+                "--promotion_stage2_min_support",
+                str(config.promotion_stage2_min_support),
+                "--promotion_stage2_min_macro_f1",
+                str(config.promotion_stage2_min_macro_f1),
+                "--promotion_stage2_min_unreachable_recall",
+                str(config.promotion_stage2_min_unreachable_recall),
+                "--promotion_stage2_min_reached_recall",
+                str(config.promotion_stage2_min_reached_recall),
+                "--promotion_stage2_min_final_recall",
+                str(config.promotion_stage2_min_final_recall),
                 "--disable_wandb",
             ]
-            is_first_train = not load_path
+            # Loading the preceding stage initializes the weights, but the
+            # first optimization run for a new objective still needs the full
+            # profile rather than the shorter same-stage continuation profile.
+            is_first_stage_train = (
+                not load_path or loaded_checkpoint_stage != effective_stage
+            )
             if load_path:
                 cmd.extend([
                     "--load_path", load_path,
                     "--loaded_checkpoint_stage", str(loaded_checkpoint_stage),
                 ])
-            if is_first_train:
+            if is_first_stage_train:
                 cmd.extend([
                     "--total_steps", str(config.first_train_total_steps),
                     "--test_interval", str(config.first_train_test_interval),
@@ -2260,6 +2295,9 @@ class Controller:
                     "--patience", str(config.first_train_patience),
                     "--is_first_train",
                 ])
+                if (config.first_train_exit_on_promotion and
+                        effective_stage == 1):
+                    cmd.append("--exit_on_stage1_promotion")
             else:
                 cmd.extend([
                     "--total_steps", str(config.continued_train_total_steps),
@@ -2274,7 +2312,9 @@ class Controller:
                 f"Starting training for task {t.task_id}: round={next_round}, "
                 f"requested_stage={stage}, effective_stage={effective_stage}, "
                 f"boundary={max(batch_indices)}, train={train_indices}, "
-                f"test={test_indices}, load_path={load_path or 'none'}"
+                f"test={test_indices}, load_path={load_path or 'none'}, "
+                f"training_profile="
+                f"{'first-stage' if is_first_stage_train else 'continued'}"
             )
             logger.info(f"Training command: {' '.join(cmd)}")
 
@@ -2511,6 +2551,44 @@ class Controller:
         if port:
             self._release_port(self.training_port_pool, port)
         return True
+
+    async def _stop_task_training_async(self, task: FuzzerTask) -> bool:
+        """Run launch-barrier cleanup without blocking the ASGI event loop."""
+        worker = asyncio.create_task(asyncio.to_thread(
+            self._stop_task_training, task
+        ))
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError as cancel_error:
+            # The worker may own the launch barrier and task resources. Wait
+            # until it has either reclaimed them or deliberately retained them
+            # before allowing unregister to release the lifecycle locks.
+            while True:
+                try:
+                    await asyncio.shield(worker)
+                    break
+                except asyncio.CancelledError:
+                    continue
+            raise cancel_error
+
+    async def _stop_task_auxiliary_processes_async(
+            self, task: FuzzerTask) -> bool:
+        """Stop receiver and attributor without blocking the ASGI event loop."""
+        worker = asyncio.create_task(asyncio.to_thread(
+            self._stop_task_auxiliary_processes, task
+        ))
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError as cancel_error:
+            # Do not release the task lifecycle locks while the cleanup thread
+            # can still mutate process ownership fields.
+            while True:
+                try:
+                    await asyncio.shield(worker)
+                    break
+                except asyncio.CancelledError:
+                    continue
+            raise cancel_error
 
     @staticmethod
     def _stop_task_auxiliary_processes(task: FuzzerTask) -> bool:
@@ -2891,7 +2969,7 @@ class Controller:
             )
 
     def _retry_pending_deployment(self, task: FuzzerTask, training_id: str):
-        """Retry acknowledgement of a deployed candidate without retraining."""
+        """Retry deployment and acknowledgement of a candidate without retraining."""
         guidance_args = None
         try:
             with task.lifecycle_lock:
@@ -2905,8 +2983,24 @@ class Controller:
                     candidate_version = task.pending_model_version
                     pending_checkpoint = task.pending_checkpoint
                     pending_manifest = task.pending_manifest
+                    pending_torchscript = task.pending_torchscript
                     pending_stage = task.pending_stage
                     pending_num_classes = task.pending_num_classes
+                try:
+                    self._ensure_pending_model_deployed(
+                        task,
+                        candidate_name,
+                        candidate_version,
+                        pending_torchscript,
+                        pending_num_classes,
+                        pending_stage,
+                    )
+                except Exception as error:
+                    logger.error(
+                        f"[{task.task_id}] Pending model remains undeployed: "
+                        f"{error}"
+                    )
+                    return
                 try:
                     self._notify_fuzzer_model_ready(
                         task, candidate_name, candidate_version
@@ -3117,9 +3211,8 @@ class Controller:
                 model_prefix = task.model_name_prefix or (
                     f"reach_filter_{hashlib.sha256(task.task_id.encode()).hexdigest()[:12]}"
                 )
-                candidate_name = f"{model_prefix}_r{next_deployment}"
+                candidate_name = f"{model_prefix}_v{next_deployment}"
                 candidate_version = str(next_deployment)
-                candidate_registered = False
                 try:
                     try:
                         torchscript_path = self._export_torchscript(
@@ -3134,14 +3227,28 @@ class Controller:
                         self._release_training_resources(
                             task, training_id, training_port, training_gpu
                         )
-                    candidate_registered = True
-                    self._deploy_to_torchserve(
-                        task, candidate_name, candidate_version,
-                        torchscript_path, num_classes, stage,
+                except Exception as error:
+                    logger.error(
+                        f"[{task.task_id}] Model export failed: {error}"
                     )
+                    return
+
+                pending_fields = (
+                    "pending_model_name", "pending_model_version",
+                    "pending_checkpoint", "pending_manifest",
+                    "pending_torchscript", "pending_stage", "pending_batch",
+                    "pending_training_round", "pending_num_classes",
+                    "pending_seen_training_batches",
+                )
+                pending_rollback = None
+                try:
                     with task.training_lock:
                         if task.active_training_id != training_id:
                             raise RuntimeError("deployment was canceled")
+                        pending_rollback = {
+                            field_name: getattr(task, field_name)
+                            for field_name in pending_fields
+                        }
                         task.pending_model_name = candidate_name
                         task.pending_model_version = candidate_version
                         task.pending_checkpoint = str(best_checkpoint)
@@ -3159,28 +3266,29 @@ class Controller:
                         )))
                     self._persist_training_state(task)
                 except Exception as error:
+                    with task.training_lock:
+                        if (pending_rollback is not None and
+                                task.pending_model_name == candidate_name):
+                            for field_name, value in pending_rollback.items():
+                                setattr(task, field_name, value)
                     logger.error(
-                        f"[{task.task_id}] Model deployment transaction failed: {error}"
+                        f"[{task.task_id}] Failed to persist pending model: {error}"
                     )
-                    if candidate_registered:
-                        with task.training_lock:
-                            if task.pending_model_name == candidate_name:
-                                task.pending_model_name = ""
-                                task.pending_model_version = ""
-                                task.pending_checkpoint = ""
-                                task.pending_manifest = ""
-                                task.pending_torchscript = ""
-                                task.pending_stage = 0
-                                task.pending_batch = 0
-                                task.pending_training_round = 0
-                                task.pending_num_classes = 0
-                                task.pending_seen_training_batches = []
-                        try:
-                            self.torchserve_operator.unregister_model(
-                                candidate_name, candidate_version
-                            )
-                        except Exception:
-                            pass
+                    return
+
+                try:
+                    self._deploy_to_torchserve(
+                        task, candidate_name, candidate_version,
+                        torchscript_path, num_classes, stage,
+                    )
+                except Exception as error:
+                    # The accepted checkpoint and exported model are already
+                    # durable. Keep them pending so the next Receiver request
+                    # retries serving instead of repeating GPU training.
+                    logger.error(
+                        f"[{task.task_id}] Candidate remains pending after "
+                        f"deployment failure: {error}"
+                    )
                     return
 
                 try:
@@ -3229,6 +3337,47 @@ class Controller:
                     task, training_id, training_port, training_gpu
                 )
                 self._finish_training(task, training_id)
+
+    def _ensure_pending_model_deployed(
+            self, task: FuzzerTask, model_name: str, model_version: str,
+            torchscript_path: str, num_classes: int, stage: int):
+        """Ensure a durable pending candidate has a live TorchServe worker."""
+        try:
+            model_info = self.torchserve_operator.get_model_info(model_name)
+        except Exception as error:
+            status_code = getattr(
+                getattr(error, "response", None), "status_code", None
+            )
+            if status_code != 404:
+                raise RuntimeError(
+                    "failed to query pending TorchServe model"
+                ) from error
+            model_info = None
+        if self._torchserve_model_has_ready_worker(model_info):
+            return
+        if model_info is not None:
+            if not isinstance(model_info, dict) or not model_info:
+                raise RuntimeError(
+                    "TorchServe returned invalid pending model information"
+                )
+            self.torchserve_operator.unregister_model(
+                model_name, model_version
+            )
+        self._deploy_to_torchserve(
+            task, model_name, model_version, torchscript_path,
+            num_classes, stage,
+        )
+
+    @staticmethod
+    def _torchserve_model_has_ready_worker(model_info: Any) -> bool:
+        """Return whether TorchServe reports at least one READY worker."""
+        if not isinstance(model_info, dict):
+            return False
+        return any(
+            isinstance(worker, dict) and
+            str(worker.get("status", "")).upper() == "READY"
+            for worker in model_info.get("workers", [])
+        )
 
     # Module-level lock for sys.modules manipulation (not thread-safe)
     _export_lock = threading.Lock()
@@ -3377,14 +3526,19 @@ class Controller:
         # Verify workers started, fallback to scale_worker if needed
         try:
             model_info = self.torchserve_operator.get_model_info(model_name)
-            if not model_info or not model_info.get('workers'):
-                logger.warning(f"[{task.task_id}] Workers=0 after register, falling back to scale_worker")
+            if not self._torchserve_model_has_ready_worker(model_info):
+                logger.warning(
+                    f"[{task.task_id}] No READY worker after register, "
+                    "falling back to scale_worker"
+                )
                 self.torchserve_operator.scale_worker(
                     model_name=model_name, min_worker=1, sync=True
                 )
                 model_info = self.torchserve_operator.get_model_info(model_name)
-            if not model_info or not model_info.get('workers'):
-                raise RuntimeError(f"TorchServe model {model_name} has no workers")
+            if not self._torchserve_model_has_ready_worker(model_info):
+                raise RuntimeError(
+                    f"TorchServe model {model_name} has no READY workers"
+                )
         except Exception as e:
             raise RuntimeError(f"failed to verify TorchServe workers: {e}") from e
 
@@ -3623,6 +3777,12 @@ class Controller:
         4. Merge all sources via GuidanceEngine
         5. Send guidance to fuzzer via POST /guidance
         """
+        if not task.enable_online_guidance:
+            logger.info(
+                f"[{task.task_id}] Skipping post-model guidance refresh: "
+                "predictor-only mode"
+            )
+            return
         if not self._task_accepts_guidance(task):
             return
         with task.guidance_lock:
@@ -4080,15 +4240,26 @@ class Controller:
             engine.update_sequence_patterns([])
             logger.error(f"[{task.task_id}] Sequence mining failed: {e}")
 
+    async def liveness(self):
+        """Report Controller API liveness without probing dependencies."""
+        return {
+            "alive": True,
+            "active_tasks": len(self.global_tasks),
+        }
+
     async def health(self):
+        """Report full serving readiness, including the owned TorchServe."""
         torchserve_ready = await asyncio.to_thread(
             self.torchserve_operator.is_service_ready
         )
-        return {
+        payload = {
             "healthy": torchserve_ready,
             "torchserve": torchserve_ready,
             "active_tasks": len(self.global_tasks),
         }
+        if not torchserve_ready:
+            return JSONResponse(status_code=503, content=payload)
+        return payload
 
     def shutdown(self):
         cleanup_errors = []

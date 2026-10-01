@@ -48,7 +48,7 @@ class ControllerConfig:
     data_root: str = str(BRAIN_DIR / "receiver_data")   # where shards and merged PKLs live (absolute path)
     min_samples_to_train: int = 1000                      # trigger a train run after this many new samples (matches receiver stage1_threshold)
     training_warmup_seconds: int = int(os.getenv(
-        "SYZPILOT_TRAINING_WARMUP_SECONDS", "1800"
+        "SYZPILOT_TRAINING_WARMUP_SECONDS", "0"
     ))
     base_model: str = field(default_factory=lambda: os.getenv(
         "SYZPILOT_BASE_MODEL_PATH",
@@ -74,14 +74,19 @@ class ControllerConfig:
         "SYZPILOT_FIRST_TRAIN_TOTAL_STEPS", "1000"
     ))
     first_train_test_interval: int = int(os.getenv(
-        "SYZPILOT_FIRST_TRAIN_TEST_INTERVAL", "200"
+        "SYZPILOT_FIRST_TRAIN_TEST_INTERVAL", "100"
     ))
     first_train_min_steps: int = int(os.getenv(
         "SYZPILOT_FIRST_TRAIN_MIN_STEPS", "200"
     ))
     first_train_patience: int = int(os.getenv(
-        "SYZPILOT_FIRST_TRAIN_PATIENCE", "3"
+        "SYZPILOT_FIRST_TRAIN_PATIENCE", "2"
     ))
+    first_train_exit_on_promotion: bool = field(default_factory=lambda:
+        os.getenv(
+            "SYZPILOT_FIRST_TRAIN_EXIT_ON_PROMOTION", "true"
+        ).strip().lower() in ("1", "true", "yes")
+    )
     continued_train_total_steps: int = int(os.getenv(
         "SYZPILOT_CONTINUED_TRAIN_TOTAL_STEPS", "500"
     ))
@@ -167,11 +172,11 @@ class ControllerConfig:
     training_gpu_probe_interval_seconds: float = float(os.getenv(
         "SYZPILOT_TRAINING_GPU_PROBE_INTERVAL_SECONDS", "1.0"
     ))
-    # Receiver retries durable requests every five seconds. A longer lease
-    # preserves FIFO position across normal HTTP/probe jitter while allowing a
-    # dead Receiver or terminal preflight failure to stop blocking the queue.
+    # Receiver retry backoff grows from five seconds to a 120-second cap. Keep
+    # the FIFO lease above that cap so a live request does not lose its place
+    # between retries; dead Receivers are removed immediately by liveness.
     training_waiter_lease_seconds: float = float(os.getenv(
-        "SYZPILOT_TRAINING_WAITER_LEASE_SECONDS", "30.0"
+        "SYZPILOT_TRAINING_WAITER_LEASE_SECONDS", "180.0"
     ))
     tokenizer_rayon_threads: int = int(os.getenv(
         "SYZPILOT_TOKENIZER_THREADS", "8"

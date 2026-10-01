@@ -385,6 +385,60 @@ class ReceiverValidationTest(unittest.TestCase):
         # restart must reject the resulting future watermark.
         self.assertEqual(restarted.last_queued_samples, {})
 
+    def test_training_outbox_backoff_is_capped_and_resets(self):
+        self.receiver.training_outbox = {
+            "stage": 1,
+            "batch_end": 1,
+            "total_samples": 1000,
+        }
+        waits = []
+        drains = 0
+
+        def record_wait(timeout):
+            waits.append(timeout)
+            if len(waits) == 9:
+                self.receiver.outbox_stop.set()
+
+        def drain():
+            nonlocal drains
+            drains += 1
+            if drains == 7:
+                self.receiver.training_outbox = None
+
+        with (
+            mock.patch.object(
+                self.receiver.outbox_wake, "wait", side_effect=record_wait
+            ),
+            mock.patch.object(self.receiver.outbox_wake, "clear"),
+            mock.patch.object(self.receiver, "_schedule_training_safely"),
+            mock.patch.object(
+                self.receiver, "_drain_training_outbox", side_effect=drain
+            ),
+        ):
+            self.receiver._outbox_loop()
+
+        self.assertEqual(waits, [5, 10, 20, 40, 80, 120, 120, 5, 5])
+
+    def test_training_outbox_preexisting_wake_is_consumed_once(self):
+        self.receiver.training_outbox = {
+            "stage": 1,
+            "batch_end": 1,
+            "total_samples": 1000,
+        }
+        self.receiver.outbox_wake.set()
+        with (
+            mock.patch.object(self.receiver, "_schedule_training_safely"),
+            mock.patch.object(
+                self.receiver,
+                "_drain_training_outbox",
+                side_effect=self.receiver.outbox_stop.set,
+            ) as drain,
+        ):
+            self.receiver._outbox_loop()
+
+        drain.assert_called_once_with()
+        self.assertFalse(self.receiver.outbox_wake.is_set())
+
     def test_deferred_training_rebases_on_next_committed_snapshot(self):
         self.receiver.controller_addr = "localhost:1"
         self.receiver.api_token = "token"

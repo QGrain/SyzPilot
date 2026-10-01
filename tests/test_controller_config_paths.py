@@ -1,6 +1,7 @@
 """Regression tests for portable Brain artifact paths."""
 
 import asyncio
+import importlib.util
 import os
 import sys
 import tempfile
@@ -16,6 +17,22 @@ from config import ControllerConfig
 
 
 class ControllerConfigPathsTest(unittest.TestCase):
+    def _load_handler_config(self, environment):
+        handler_path = Path(__file__).resolve().parents[1] / "brain" / "handler.py"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime_environment = {
+                **environment,
+                "SERVE_LOG_PATH": str(Path(temp_dir) / "torchserve.log"),
+            }
+            with mock.patch.dict(os.environ, runtime_environment, clear=True):
+                spec = importlib.util.spec_from_file_location(
+                    f"test_handler_{id(runtime_environment)}", handler_path
+                )
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+            module.file_handler.close()
+            return module.config
+
     def test_defaults_use_artifact_paths(self):
         with mock.patch.dict(os.environ, {}, clear=True):
             config = ControllerConfig()
@@ -70,6 +87,31 @@ class ControllerConfigPathsTest(unittest.TestCase):
             config.guidance_kallgraph_roots, ("/artifact/kallgraph",)
         )
         self.assertEqual(explicit.base_model, "/explicit/model")
+
+    def test_torchserve_handler_uses_controller_tokenizer_environment(self):
+        handler_config = self._load_handler_config({
+            "SYZPILOT_TOKENIZER_PATH": "/runtime/syzpilot-tokenizer",
+            "TOKENIZER_PATH": "/legacy/tokenizer",
+        })
+
+        self.assertEqual(
+            handler_config["tokenizer"], "/runtime/syzpilot-tokenizer"
+        )
+
+    def test_torchserve_handler_supports_legacy_tokenizer_environment(self):
+        handler_config = self._load_handler_config({
+            "TOKENIZER_PATH": "/legacy/tokenizer",
+        })
+
+        self.assertEqual(handler_config["tokenizer"], "/legacy/tokenizer")
+
+    def test_torchserve_handler_uses_artifact_tokenizer_default(self):
+        handler_config = self._load_handler_config({})
+
+        self.assertEqual(
+            handler_config["tokenizer"],
+            "/artifact/assets/models/SyzTokenizer_224w/",
+        )
 
     def test_external_roots_do_not_inject_legacy_benchmark_paths(self):
         import controller

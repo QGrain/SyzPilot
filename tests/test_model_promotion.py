@@ -9,7 +9,11 @@ ROOT = Path(__file__).resolve().parents[1]
 BRAIN = ROOT / "brain"
 sys.path.insert(0, str(BRAIN))
 
-from model_promotion import decide_model_promotion
+from model_promotion import (
+    decide_model_promotion,
+    decide_stage1_bootstrap,
+    decide_stage2_bootstrap,
+)
 
 
 def manifest(stage, counts, recalls, *, accuracy=None, macro_f1=0.85,
@@ -100,10 +104,45 @@ def manifest(stage, counts, recalls, *, accuracy=None, macro_f1=0.85,
 
 
 class ModelPromotionTest(unittest.TestCase):
+    def test_stage_one_bootstrap_reuses_production_gate(self):
+        accepted = decide_stage1_bootstrap({
+            "eval_loss": 0.2,
+            "accuracy": 0.9,
+            "macro_f1": 0.9,
+            "class_counts": {0: 100, 1: 100},
+            "per_class_recall": {0: 0.9, 1: 0.9},
+        })
+        rejected = decide_stage1_bootstrap({
+            "eval_loss": 0.5,
+            "accuracy": 0.9,
+            "macro_f1": 0.47,
+            "class_counts": {0: 100, 1: 900},
+            "per_class_recall": {0: 0.0, 1: 1.0},
+        })
+        self.assertTrue(accepted["accepted"])
+        self.assertFalse(rejected["accepted"])
+        self.assertIn("low_class_recall", rejected["reason_codes"])
+
     def test_stage_one_good_first_model_passes(self):
         decision = decide_model_promotion(
             manifest(1, [100, 100], [0.9, 0.9]), 1, 5
         )
+        self.assertTrue(decision["accepted"])
+
+    def test_stage_two_bootstrap_reuses_absolute_production_gate(self):
+        decision = decide_stage2_bootstrap({
+            "eval_loss": 0.2,
+            "accuracy": 0.85,
+            "macro_f1": 0.8,
+            "class_counts": {0: 100, 1: 100, 2: 100},
+            "per_class_recall": {0: 0.8, 1: 0.85, 2: 0.9},
+            "binary_eval_loss": 0.1,
+            "binary_accuracy": 0.9,
+            "binary_macro_f1": 0.9,
+            "binary_class_counts": {0: 100, 1: 200},
+            "binary_per_class_recall": {0: 0.8, 1: 0.95},
+        }, num_classes=3)
+
         self.assertTrue(decision["accepted"])
 
     def test_majority_predictor_is_rejected(self):

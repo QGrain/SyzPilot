@@ -7,12 +7,11 @@ upstream Syzkaller commit
 `6e83b42dcfcd13c3b8e0d5c803cdcc424c0fbff9`. Use a clean clone and
 apply from the Syzkaller root. Do not apply it to an arbitrary newer
 Syzkaller revision, since its Go APIs and program mutation semantics change.
-The current patch is based on SyzPilot-Fuzzer `4ed993a` (`v0.0.13`)
-and includes the authenticated generic seed catalog, additive cold-start seed
-injection, and the opt-in directed corpus used by the case-25 mini-benchmark.
-The v0.0.13 follow-up changes only public developer-tool hygiene; it does not
-change the v0.0.12 fuzzing runtime semantics. The public artifact copy only
-normalizes the main repository name in documentation embedded by the patch.
+The current patch corresponds to the reviewed SyzPilot-Fuzzer `v0.1.0`
+source release (`653259d`). It includes the authenticated generic seed
+catalog, additive cold-start seed injection, the directed corpus, bounded
+training-data buffering, online model hot replacement, and the reachability
+filter used by the functional pipeline.
 
 ```bash
 git clone https://github.com/google/syzkaller.git SyzPilot-fuzzer
@@ -34,6 +33,14 @@ for **the official upstream checkout**, not that incomplete import. The
 functional workflow uses report-derived guidance only; target PoC injection
 is reserved for offline oracle comparisons and is not part of the artifact
 exercise.
+
+The default performance profile keeps the Collector training queue in memory
+and leaves `SyzPilot.durable_training_wal` disabled. Enable the WAL only for an
+explicit manager-process recovery experiment. For the predictor-only ablation,
+set `SyzPilot.enable_online_guidance=false`: cold-start guidance, online
+training, TorchServe model hot replacement, and reach filtering remain active,
+while post-model sequence and attribution guidance refreshes are disabled.
+Omitting these fields retains the normal full-pipeline behavior.
 
 ## External baseline patches
 

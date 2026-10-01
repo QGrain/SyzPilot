@@ -4,8 +4,8 @@ from collections.abc import Mapping
 
 
 VALID_CURRICULUM_STAGES = (1, 2)
-# Schema 1 was the short-lived three-stage experiment. Schema 2 restores the
-# paper-aligned binary-then-exact objective and must not reuse ternary models.
+# Schema 1 was the short-lived ternary-stage experiment. Schema 2 records the
+# current binary-then-exact implementation and must not reuse ternary models.
 CURRICULUM_SCHEMA_VERSION = 2
 
 

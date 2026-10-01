@@ -61,6 +61,8 @@ required.
 
 The Controller still rechecks the selected training GPU at every training
 request and defers a busy run through the Receiver's durable retry path.
+The default FIFO waiter lease exceeds the Receiver's maximum retry backoff, so
+multiple live tasks retain their order while one training slot is occupied.
 TorchServe stays on the selected serving GPU for the Controller lifetime;
 there is no live migration. Startup checks cannot reserve GPUs. The
 Controller now launches TorchServe in the foreground with a private PID-file
@@ -69,10 +71,12 @@ every live member of its owned process group, escalating to SIGKILL only while
 ownership is still verifiable; an unconfirmed cleanup retains ownership and
 raises an error. Ownership is independent of the successful-start flag, so a
 partially started service is retried during final cleanup. Controller shutdown
-attempts all owned resource classes before reporting aggregated failures, and
-the health endpoint requires both the owned Java process with all five
-listeners and a valid 0.5-second-timeout management response. Readiness
-additionally
+attempts all owned resource classes before reporting aggregated failures.
+The lightweight `/live` endpoint reports Controller API liveness without
+probing TorchServe; supervisors should use it to decide whether the Controller
+process has failed. The `/health` readiness endpoint requires both the owned
+Java process with all five listeners and a valid 0.5-second-timeout management
+response, and returns HTTP 503 until those conditions hold. Readiness additionally
 requires its Java process to own all five configured listening ports; an
 inherited `TS_CONFIG_FILE` cannot override the checked configuration. This
 prevents a competing server's `/models` response from being accepted as our

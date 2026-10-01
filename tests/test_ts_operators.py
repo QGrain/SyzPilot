@@ -48,7 +48,23 @@ class TorchServeOperatorTest(unittest.TestCase):
             },
             None,
             "POST",
+            10,
         )
+
+    def test_synchronous_model_load_uses_worker_startup_timeout(self):
+        response = mock.Mock()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            operator = ServeOperator(temp_dir, disable_auth=True)
+            with mock.patch(
+                    "ts_operators.api_request", return_value=response) as request:
+                register_response = operator.register_model("model", sync=True)
+                scale_response = operator.scale_worker("model", sync=True)
+
+        self.assertIs(register_response, response)
+        self.assertIs(scale_response, response)
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(request.call_args_list[0].args[-1], 120)
+        self.assertEqual(request.call_args_list[1].args[-1], 120)
 
     def test_public_ownership_and_readiness_reflect_owned_process(self):
         with tempfile.TemporaryDirectory() as temp_dir:

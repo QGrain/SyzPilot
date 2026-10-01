@@ -63,16 +63,6 @@ class TraceClassifierV2(nn.Module):
             raise ValueError(f"Invalid output arg: `{output}`")
 
 
-class TraceClassifierV2_2(TraceClassifierV2):
-    def __init__(self, base_model, num_labels, stage = 1):
-        super().__init__(base_model, num_labels, stage)
-        self.classifier = nn.Sequential(
-            nn.Linear(self.base_model.config.hidden_size, self.base_model.config.intermediate_size),
-            nn.ReLU(),
-            nn.Linear(self.base_model.config.intermediate_size, num_labels),
-        )
-
-
 class TraceClassifierServingWrapper(nn.Module):
     """Expose logits with the exact objective semantics used during training."""
 

@@ -11,6 +11,8 @@ from types import SimpleNamespace
 
 import torch
 
+from brain.model_promotion import PromotionThresholds
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FILTER_DIR = REPO_ROOT / "filter"
@@ -23,12 +25,55 @@ for module_name in ("config", "utils"):
 from train_v2 import (
     TrainerV2,
     binary_serving_logits,
+    checkpoint_selection,
     effective_eval_steps,
+    require_single_process,
+    should_evaluate_step,
     write_training_manifest,
 )
 
 
 class TrainingManifestTest(unittest.TestCase):
+    def test_checkpoint_selection_matches_curriculum_objective(self):
+        lower_loss = {"eval_loss": 0.2, "macro_f1": 0.4}
+        higher_macro = {"eval_loss": 0.5, "macro_f1": 0.7}
+
+        self.assertGreater(
+            checkpoint_selection(1, lower_loss)[2],
+            checkpoint_selection(1, higher_macro)[2],
+        )
+        self.assertGreater(
+            checkpoint_selection(2, higher_macro)[2],
+            checkpoint_selection(2, lower_loss)[2],
+        )
+
+    def test_stage_two_selection_prefers_deployable_checkpoint(self):
+        def metrics(macro_f1, recalls):
+            return {
+                "eval_loss": 0.2,
+                "accuracy": sum(recalls) / len(recalls),
+                "macro_f1": macro_f1,
+                "class_counts": {0: 100, 1: 100, 2: 100},
+                "per_class_recall": dict(enumerate(recalls)),
+                "binary_eval_loss": 0.1,
+                "binary_accuracy": (recalls[0] + 2 * 0.95) / 3,
+                "binary_macro_f1": 0.9,
+                "binary_class_counts": {0: 100, 1: 200},
+                "binary_per_class_recall": {0: recalls[0], 1: 0.95},
+            }
+
+        deployable = metrics(0.70, [0.80, 0.65, 0.60])
+        blind_class = metrics(0.80, [0.85, 0.85, 0.0])
+        thresholds = PromotionThresholds()
+
+        self.assertGreater(
+            checkpoint_selection(
+                2, deployable, num_classes=3, thresholds=thresholds
+            )[2],
+            checkpoint_selection(
+                2, blind_class, num_classes=3, thresholds=thresholds
+            )[2],
+        )
     def test_binary_projection_matches_each_serving_stage(self):
         raw_logits = torch.tensor([[0.0, 1.0, -2.0]])
 
@@ -46,6 +91,17 @@ class TrainingManifestTest(unittest.TestCase):
         self.assertEqual(effective_eval_steps(20000, 512, 25), 25)
         with self.assertRaises(ValueError):
             effective_eval_steps(0, 512, 25)
+
+    def test_evaluation_schedule_includes_unaligned_final_step(self):
+        self.assertTrue(should_evaluate_step(200, 200, 100, 250))
+        self.assertFalse(should_evaluate_step(225, 200, 100, 250))
+        self.assertTrue(should_evaluate_step(250, 200, 100, 250))
+        self.assertTrue(should_evaluate_step(250, 300, 100, 250))
+
+    def test_trainer_rejects_multiple_accelerate_processes(self):
+        require_single_process(SimpleNamespace(num_processes=1))
+        with self.assertRaisesRegex(RuntimeError, "exactly one"):
+            require_single_process(SimpleNamespace(num_processes=2))
 
     def test_eval_loss_weights_short_tail_by_example_count(self):
         class FakeModel:
@@ -139,6 +195,8 @@ class TrainingManifestTest(unittest.TestCase):
             self.assertEqual(manifest["best_step"], 200)
             self.assertEqual(manifest["final_step"], 400)
             self.assertEqual(manifest["best_eval_loss"], 0.25)
+            self.assertEqual(manifest["checkpoint_selection_metric"], "eval_loss")
+            self.assertEqual(manifest["checkpoint_selection_value"], 0.25)
             self.assertEqual(manifest["best_eval_accuracy"], 0.9)
             self.assertEqual(manifest["best_eval_weighted_f1"], 0.85)
             self.assertEqual(manifest["best_eval_macro_f1"], 0.75)
@@ -147,6 +205,7 @@ class TrainingManifestTest(unittest.TestCase):
             self.assertEqual(manifest["effective_batch_size"], 128)
             self.assertEqual(manifest["mixed_precision"], "bf16")
             self.assertEqual(manifest["training_profile"], "first")
+            self.assertEqual(manifest["stop_reason"], "total_steps")
             self.assertEqual(manifest["configured_total_steps"], 400)
             self.assertEqual(manifest["test_interval"], 100)
             self.assertEqual(manifest["min_steps"], 100)

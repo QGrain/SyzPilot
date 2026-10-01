@@ -14,7 +14,7 @@ commit `6e83b42dcfcd13c3b8e0d5c803cdcc424c0fbff9` and builds the
 minimal functional runtime: manager, executor, execprog, and a compiled
 Syzlang manifest. It does not claim that every optional `make all` utility
 builds. The default base is the published
-`qgrain/kernel-fuzz:2204_v2` image, pinned to its Docker Hub manifest digest.
+`qgrain/kernel-fuzz:2204_v3` image, pinned to its Docker Hub manifest digest.
 
 ```bash
 docker build -f docker/Dockerfile.fuzzer -t syzpilot-fuzzer:artifact .
@@ -22,16 +22,15 @@ docker run --rm --entrypoint /bin/bash syzpilot-fuzzer:artifact -lc \
   'git rev-parse HEAD; test -x bin/syz-manager; test -x bin/linux_amd64/syz-executor; test -x bin/linux_amd64/syz-execprog; test -s bin/linux-amd64-syzlang-manifest.json'
 ```
 
-If `qgrain/kernel-fuzz:2204_v3` has been independently verified for the
-required upstream revision and toolchain, it can be selected explicitly:
+An alternative compatible base can be selected explicitly:
 
 ```bash
 docker build -f docker/Dockerfile.fuzzer \
-  --build-arg KERNEL_FUZZ_IMAGE=qgrain/kernel-fuzz:2204_v3 \
-  -t syzpilot-fuzzer:artifact-v3 .
+  --build-arg KERNEL_FUZZ_IMAGE=registry.example/kernel-fuzz@sha256:DIGEST \
+  -t syzpilot-fuzzer:artifact-custom .
 ```
 
-The default pinned `2204_v2` image remains the tested build base. Do not
+The default pinned `2204_v3` image remains the tested build base. Do not
 substitute a mutable tag in a reproducibility claim without recording its
 resolved digest.
 

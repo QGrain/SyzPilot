@@ -1,6 +1,7 @@
 """Regression tests for the container's direct-only Brain deployment."""
 
 import asyncio
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -16,6 +17,55 @@ import controller
 
 
 class DirectOnlyControllerTest(unittest.TestCase):
+    def test_liveness_does_not_probe_torchserve(self):
+        instance = controller.Controller()
+        with mock.patch.object(
+            instance.torchserve_operator,
+            "is_service_ready",
+            side_effect=AssertionError("liveness must not probe TorchServe"),
+        ):
+            payload = asyncio.run(instance.liveness())
+
+        self.assertEqual(payload, {"alive": True, "active_tasks": 0})
+
+    def test_liveness_route_is_distinct_from_readiness(self):
+        instance = controller.Controller()
+        routes = {
+            route.path: route.endpoint
+            for route in instance.app.routes
+            if hasattr(route, "endpoint")
+        }
+
+        self.assertEqual(routes["/live"].__self__, instance)
+        self.assertEqual(routes["/live"].__func__, instance.liveness.__func__)
+        self.assertEqual(routes["/health"].__self__, instance)
+        self.assertEqual(routes["/health"].__func__, instance.health.__func__)
+
+    def test_readiness_returns_service_unavailable_until_torchserve_is_ready(self):
+        instance = controller.Controller()
+        with mock.patch.object(
+            instance.torchserve_operator, "is_service_ready", return_value=False
+        ):
+            response = asyncio.run(instance.health())
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            json.loads(response.body),
+            {"healthy": False, "torchserve": False, "active_tasks": 0},
+        )
+
+    def test_readiness_returns_payload_when_torchserve_is_ready(self):
+        instance = controller.Controller()
+        with mock.patch.object(
+            instance.torchserve_operator, "is_service_ready", return_value=True
+        ):
+            payload = asyncio.run(instance.health())
+
+        self.assertEqual(
+            payload,
+            {"healthy": True, "torchserve": True, "active_tasks": 0},
+        )
+
     def test_startup_skips_tunnel_helper_but_starts_torchserve(self):
         instance = controller.Controller()
         with (

@@ -12,17 +12,22 @@ The deployed trainer and serving contract currently support Stages 1 and 2.
 Stage 1 predicts reached versus unreachable; it does not distinguish deeper
 waypoints. No validated Stage-3 model or three-stage serving timeline exists.
 
-| Case | Retained Stage-1 evidence | Reuse status |
+| Case | Retained model evidence | Reuse status |
 | --- | --- | --- |
 | 21 | Accuracy 0.9931, macro F1 0.9845; validation counts 170 unreachable / 1,130 reached | Provisional: an older manifest lacks today's signature-disjoint promotion record. |
 | 25 | Postfix-guided round 14: accuracy 0.8588, macro F1 0.8587; counts 201 / 146 | Provisional: historical promotion evidence is incomplete. |
-| 36 | Accuracy 0.9279, macro F1 0.9241; counts 2,357 / 3,373; class recalls 0.8553 / 0.9787 | First preservation candidate: promotion accepted on 5,730 signature-disjoint validation examples. |
+| 36 | Accepted Stage 1 and sparse Stage 2 now exist from one chronological run. Stage 2 active-class macro F1 is 0.7247 and final-target recall is 0.7677. | Best reuse candidate, but only for an explicitly labeled case-36 diagnostic; intermediate waypoint recalls remain inadequate. |
 
-All 31 retained case-36 Stage-2 promotion decisions were rejected, chiefly
-for low macro F1 and reached-class recall; 30 also lacked sufficient class
-support. Do not choose a model merely because its checkpoint exists, or
-switch stages according to wall-clock time without an accepted chronological
-model from the same training history.
+Earlier, all 31 retained case-36 Stage-2 promotion decisions were rejected,
+chiefly for low macro F1 and reached-class recall; 30 also lacked sufficient
+class support. The 2026-09-26 run produced the first accepted sparse Stage-2
+candidate after Stage 1 in the same chronology. Its active classes were
+unreachable, shallow-reached, and final-target-reached (`[0, 1, 4]`). Classes
+2 and 3 had only 29 and 14 validation examples and recalls of 0.069 and 0.0,
+so this result validates sparse-stage promotion rather than a fully learned
+waypoint classifier. Do not choose a model merely because its checkpoint
+exists, or switch stages according to wall-clock time without an accepted
+chronological model from the same training history.
 
 The accepted case-36 Stage-1 checkpoint and TorchScript artifact are about
 497 MB (474 MiB) each. They are preserved in a local model store outside Git, alongside
@@ -32,6 +37,20 @@ checkpoint SHA-256 is
 the TorchScript SHA-256 is
 `43643a6b1f2ba44fac7ceda41c54dfa9cb15ab9f925d9922409452d674095724`.
 The preservation copy is not a public release or an enabled runtime mode.
+
+The new accepted case-36 Stage-2 checkpoint and TorchScript artifact are also
+about 497 MB each and remain outside Git with the right-censored run evidence.
+Their SHA-256 values are
+`b2a04bdc4bc92582280c0ac5520b3794f8e8fbb02924fa3291815e5816d6e80b`
+and
+`dbc0f6c518ac96a05968ec26e679f9d7f907d60d2366eebc82fa2df3183dd99e`.
+Stage 1 trained for 617 seconds and Stage 2 for 769 seconds; both reserved at
+most about 18.1 GB of CUDA memory. The online lifecycle intentionally removed
+the superseded Stage-1 binaries after committing v2, while retaining its
+manifest and promotion decision. Therefore this run alone cannot replay the
+exact v1-to-v2 serving timeline. The previously preserved Stage-1 diagnostic
+remains a separate historical origin and must not be presented as the v1 from
+this chronology.
 
 ## Mandatory replay gates
 
@@ -47,8 +66,10 @@ Before implementing or enabling replay, require:
    online training as complete. Report its historical training corpus and
    origin, and keep its metrics separate from a cold online-learning arm.
 
-A three-stage time-course replay is not currently possible. Build it only
-after genuine Stage-2/3 snapshots are promoted from a single chronological
-run and their activation times, model versions, and validation provenance are
-retained. Until then, case-36 Stage-1 replay is only a candidate for an
-explicitly labeled Functional warm-start diagnostic.
+A three-stage time-course replay is not currently possible. The current
+implementation and retained chronology contain only Stages 1 and 2, and the
+accepted Stage-2 model does not learn the two sparse intermediate classes well.
+Build time-course replay only after every intended snapshot from one chronology
+is deliberately retained with activation times, model versions, compatibility
+metadata, and validation provenance. Until then, case-36 historical replay is
+only an explicitly labeled Functional warm-start or inference-only diagnostic.

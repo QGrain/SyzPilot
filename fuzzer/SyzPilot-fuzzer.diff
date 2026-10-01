@@ -86,10 +86,10 @@ index d61d27c..871c3ee 100644
  
  # For a tupical Ubuntu/Debian distribution.
 diff --git a/README.md b/README.md
-index a8c48e3..7342fad 100644
+index a8c48e3..e3da718 100644
 --- a/README.md
 +++ b/README.md
-@@ -1,44 +1,306 @@
+@@ -1,44 +1,331 @@
 -# syzkaller - kernel fuzzer
 -
 -[![CI Status](https://github.com/google/syzkaller/workflows/ci/badge.svg)](https://github.com/google/syzkaller/actions?query=workflow/ci)
@@ -155,6 +155,9 @@ index a8c48e3..7342fad 100644
 +**Key features**:
 +- **Reachability filtering** (rfilter) — async ML-based scheduling (skip/smash/pass)
 +- **Guided syscall selection** — 30% bias toward target-relevant syscalls
++- **Preferred argument mutation** — focuses a bounded fraction of native
++  recursive argument mutations on ranked guidance syscalls already present in
++  a program, with native fallback when none is mutable
 +- **Template-guided mutation** — inserts guidance-provided syscall sequences with argument constraints
 +- **Training data collection** — streams labeled programs to Brain via gRPC
 +
@@ -170,6 +173,7 @@ index a8c48e3..7342fad 100644
 +│  │                    Fuzzer                            │    │
 +│  │  ReachFilterSource (async inference pipeline)        │    │
 +│  │  GuidedChoiceTable (30% guided selection)            │    │
++│  │  preferred mutateArg (ranked existing calls)          │    │
 +│  │  templateInsert (template-guided mutation)           │    │
 +│  │  DataCollector (gRPC streaming to Brain)             │    │
 +│  └─────────────────────────────────────────────────────┘    │
@@ -213,10 +217,12 @@ index a8c48e3..7342fad 100644
 +
 +### Plain Fuzzing (no Brain or target observation)
 +
-+This mode rejects `/guidance` even if a client posts to the Manager's HTTP
-+endpoint. Standalone oracle/ablation guidance requires an explicit
-+`"allow_standalone_guidance": true` in the `SyzPilot` object; never set it
-+for a feature-off baseline or a non-oracle functional comparison.
++The ordinary feature-off mode rejects `/guidance` even if a client posts to
++the Manager's HTTP endpoint. Standalone oracle or component-ablation guidance
++requires an explicit `"allow_standalone_guidance": true` in the `SyzPilot`
++object; never set it for a feature-off baseline. An explicitly labeled
++component ablation may combine this opt-in with `"observe_target_coverage":
++true` so it can measure target hits without enabling the Brain or rfilter.
 +
 +```bash
 +# Run the unassisted Syzkaller baseline.
@@ -263,6 +269,15 @@ index a8c48e3..7342fad 100644
 +derived from the target report and static analysis, then refined from online
 +coverage and model attribution.
 +
++The guidance payload's ranked `generation_hints.preferred_syscalls` and
++`preferred_ratio` also steer argument mutation. When the ratio is sampled,
++the mutator selects the highest-ranked preferred syscall currently present in
++the program and applies Syzkaller's ordinary recursive argument mutation to
++it. This can reach nested structs without embedding target-specific values.
++If no preferred call is present and mutable, mutation falls back to the native
++call selector. A zero ratio, an empty preferred list, or cleared guidance
++preserves the native path.
++
 +For an explicitly labeled oracle diagnostic only:
 +
 +Set `"SyzPilot": {"allow_standalone_guidance": true}` in that run's
@@ -284,8 +299,10 @@ index a8c48e3..7342fad 100644
 +| `task_name` | string | "" | Bug title or patch commit |
 +| `network_mode` | string | "isolated" | "isolated" (SSH tunnel) or "direct" |
 +| `enable_dump` | bool | false | Dump programs and coverage |
-+| `observe_target_coverage` | bool | false | Collect target-PC statistics and final-hit evidence without Brain, training, rfilter, or guidance; use for measurement-matched feature-off controls |
++| `observe_target_coverage` | bool | false | Collect target-PC statistics and final-hit evidence without enabling Brain, training, rfilter, or guidance by itself; measurement-matched feature-off controls leave standalone guidance disabled, while explicitly labeled component ablations may combine both opt-ins |
 +| `allow_standalone_guidance` | bool | false | Accept HTTP guidance without reach filtering only for explicitly labeled oracle/ablation runs; never use for a feature-off baseline |
++| `durable_training_wal` | bool | false | Persist buffered and unacknowledged training batches for manager-process crash recovery; enable only for robustness experiments because synchronous WAL writes reduce fuzzing throughput |
++| `enable_online_guidance` | bool | true | Allow deployed model rounds to refresh sequence/attribution guidance; set false only for a predictor-only ablation that retains cold-start guidance and model/rfilter hot updates |
 +| `dump_dir` | string | "SyzPilot-default-dumpdir" | Dump directory path; observation-only controls require an explicit absolute per-instance path |
 +| `target_pcs` | []string | [] | Target PC addresses (32-bit hex) |
 +| `cold_start_seed_dir` | string | "" | Directory containing generic generated seed programs; must be paired with `cold_start_seed_catalog` |
@@ -389,8 +406,16 @@ index a8c48e3..7342fad 100644
 +- Samples balanced at 10:1 negative:positive ratio
 +- Auto-flush at 100 samples or 5-minute interval
 +- Automatic reconnection on errors
-+- The release configuration syncs the active-buffer WAL for each accepted
-+  sample; a return from the Collector therefore preserves its durable tail.
++- Training batches remain in memory until the Receiver acknowledges them, and
++  normal manager shutdown flushes the partial tail.
++- Process-crash recovery is deliberately opt-in. Set
++  `"durable_training_wal": true` to persist every accepted tail update and
++  unacknowledged batch; the default performance profile performs no Collector
++  WAL writes or filesystem syncs.
++- Use a unique work directory for every experiment. Durable recovery interprets
++  an existing Collector spool as belonging to the same experiment; reusing a
++  work directory across independent runs or changing WAL mode in place can
++  replay stale training batches.
 +- Template mutation outcomes are exported to `-bench` as aggregate counters:
 +  attempts, succeeded, unavailable, no capacity, generation failed,
 +  constraint failed, and too large. `succeeded` means that the mutation
@@ -1117,7 +1142,7 @@ index 0000000..133fe58
 +	return programs
 +}
 diff --git a/pkg/fuzzer/fuzzer.go b/pkg/fuzzer/fuzzer.go
-index 17c5af4..d2f1f51 100644
+index 17c5af4..5f4efb2 100644
 --- a/pkg/fuzzer/fuzzer.go
 +++ b/pkg/fuzzer/fuzzer.go
 @@ -4,21 +4,35 @@
@@ -1156,7 +1181,7 @@ index 17c5af4..d2f1f51 100644
  	"github.com/google/syzkaller/prog"
  )
  
-@@ -39,6 +53,29 @@ type Fuzzer struct {
+@@ -39,6 +53,30 @@ type Fuzzer struct {
  	ctMu         sync.Mutex // TODO: use RWLock.
  	ctRegenerate chan struct{}
  
@@ -1180,13 +1205,14 @@ index 17c5af4..d2f1f51 100644
 +	guidanceWeights   map[string]float64
 +	guidanceTemplates []prog.MutationTemplate
 +	guidanceAnchors   []string
++	guidanceRatio     float64
 +	guidanceResult    syzpilotlib.GuidanceApplyResult
 +	directedCorpus    *directedCorpus
 +
  	execQueues
  }
  
-@@ -54,15 +91,17 @@ func NewFuzzer(ctx context.Context, cfg *Config, rnd *rand.Rand,
+@@ -54,15 +92,17 @@ func NewFuzzer(ctx context.Context, cfg *Config, rnd *rand.Rand,
  		Config: cfg,
  		Cover:  newCover(),
  
@@ -1208,7 +1234,7 @@ index 17c5af4..d2f1f51 100644
  	f.execQueues = newExecQueues(f)
  	f.updateChoiceTable(nil)
  	go f.choiceTableUpdater()
-@@ -72,12 +111,420 @@ func NewFuzzer(ctx context.Context, cfg *Config, rnd *rand.Rand,
+@@ -72,12 +112,442 @@ func NewFuzzer(ctx context.Context, cfg *Config, rnd *rand.Rand,
  	return f
  }
  
@@ -1266,6 +1292,7 @@ index 17c5af4..d2f1f51 100644
 +		collectorCfg := &collector.Config{
 +			ServerAddr:          fuzzer.Config.SyzPilotRTCfg.ReceiverAddr,
 +			BufferSize:          100, // flush after 100 samples
++			DurableWAL:          fuzzer.Config.SyzPilotCfg.DurableTrainingWAL,
 +			BufferWALCheckpoint: 1,
 +			FlushInterval:       5 * time.Minute, // periodic flush every 5 min
 +			TargetAddrs:         fuzzer.TargetAddrVals,
@@ -1334,6 +1361,10 @@ index 17c5af4..d2f1f51 100644
 +		"Number of directed mutations retried after deleting every selected anchor", stat.Simple, stat.NoGraph)
 +	fuzzer.statDirectedAnchorFallbacks = stat.New("directed anchor fallbacks",
 +		"Number of directed mutations restored to their source to preserve an anchor", stat.Simple, stat.NoGraph)
++	fuzzer.statPrefMutationSelected = stat.New("preferred syscall mutation selected",
++		"Number of sampled argument mutations focused on a preferred syscall", stat.Simple, stat.NoGraph)
++	fuzzer.statPrefMutationFallback = stat.New("preferred syscall mutation fallback",
++		"Number of sampled preferred mutations that fell back to native call selection", stat.Simple, stat.NoGraph)
 +	if len(fuzzer.TargetAddrStrs) != 0 {
 +		fuzzer.statReachabilityIncomplete = stat.New("reachability incomplete execution",
 +			"Number of non-successful or unfinished executions excluded from reachability labels",
@@ -1458,6 +1489,13 @@ index 17c5af4..d2f1f51 100644
 +	if guidance.Version <= 0 {
 +		return syzpilotlib.GuidanceApplyResult{}, fmt.Errorf("guidance version must be positive")
 +	}
++	preferredRatio := guidance.GenerationHints.PreferredRatio
++	if math.IsNaN(preferredRatio) || math.IsInf(preferredRatio, 0) ||
++		preferredRatio < 0 || preferredRatio > 1 {
++		return syzpilotlib.GuidanceApplyResult{}, fmt.Errorf(
++			"guidance preferred_ratio must be finite and within [0, 1]",
++		)
++	}
 +	isClear := len(guidance.SyscallWeights) == 0 && len(guidance.MutationTemplates) == 0
 +
 +	fuzzer.guidanceMu.Lock()
@@ -1498,6 +1536,7 @@ index 17c5af4..d2f1f51 100644
 +	fuzzer.guidanceAnchors = fuzzer.convertGuidanceAnchors(
 +		guidance.GenerationHints.PreferredSyscalls,
 +	)
++	fuzzer.guidanceRatio = preferredRatio
 +	fuzzer.directedCorpus.replaceAnchors(fuzzer.guidanceAnchors)
 +	fuzzer.guidanceResult = syzpilotlib.GuidanceApplyResult{
 +		Status:            "applied",
@@ -1519,7 +1558,9 @@ index 17c5af4..d2f1f51 100644
 +	seen := make(map[string]bool, len(names))
 +	anchors := make([]string, 0, len(names))
 +	for _, name := range names {
-+		if seen[name] || fuzzer.target.SyscallMap[name] == nil {
++		call := fuzzer.target.SyscallMap[name]
++		if seen[name] || call == nil || call.Attrs.Disabled ||
++			fuzzer.Config.EnabledCalls != nil && !fuzzer.Config.EnabledCalls[call] {
 +			continue
 +		}
 +		seen[name] = true
@@ -1611,10 +1652,17 @@ index 17c5af4..d2f1f51 100644
 +	opts.TemplateObserver = &fuzzer.Stats
 +	fuzzer.guidanceMu.RLock()
 +	templates := append([]prog.MutationTemplate(nil), fuzzer.guidanceTemplates...)
++	preferred := append([]string(nil), fuzzer.guidanceAnchors...)
++	preferredRatio := fuzzer.guidanceRatio
 +	fuzzer.guidanceMu.RUnlock()
 +	if len(templates) > 0 && fuzzer.Config.SyzPilotCfg.TemplateInsertWeight > 0 {
 +		opts.TemplateInsertWeight = fuzzer.Config.SyzPilotCfg.TemplateInsertWeight
 +		opts.Templates = templates
++	}
++	if len(preferred) != 0 && preferredRatio > 0 {
++		opts.PreferredSyscalls = preferred
++		opts.PreferredRatio = preferredRatio
++		opts.PreferredObserver = &fuzzer.Stats
 +	}
 +	return opts
 +}
@@ -1629,7 +1677,7 @@ index 17c5af4..d2f1f51 100644
  }
  
  func newExecQueues(fuzzer *Fuzzer) execQueues {
-@@ -96,16 +543,107 @@ func newExecQueues(fuzzer *Fuzzer) execQueues {
+@@ -96,16 +566,107 @@ func newExecQueues(fuzzer *Fuzzer) execQueues {
  		skipQueue = 2
  	}
  	// Sources are listed in the order, in which they will be polled.
@@ -1738,7 +1786,7 @@ index 17c5af4..d2f1f51 100644
  func (fuzzer *Fuzzer) CandidatesToTriage() int {
  	return fuzzer.statCandidates.Val() + fuzzer.statJobsTriageCandidate.Val()
  }
-@@ -124,6 +662,17 @@ func (fuzzer *Fuzzer) executeWithFlags(executor queue.Executor, req *queue.Reque
+@@ -124,6 +685,17 @@ func (fuzzer *Fuzzer) executeWithFlags(executor queue.Executor, req *queue.Reque
  }
  
  func (fuzzer *Fuzzer) prepare(req *queue.Request, flags ProgFlags, attempt int) {
@@ -1756,7 +1804,7 @@ index 17c5af4..d2f1f51 100644
  	req.OnDone(func(req *queue.Request, res *queue.Result) bool {
  		return fuzzer.processResult(req, res, flags, attempt)
  	})
-@@ -135,6 +684,15 @@ func (fuzzer *Fuzzer) enqueue(executor queue.Executor, req *queue.Request, flags
+@@ -135,6 +707,15 @@ func (fuzzer *Fuzzer) enqueue(executor queue.Executor, req *queue.Request, flags
  }
  
  func (fuzzer *Fuzzer) processResult(req *queue.Request, res *queue.Result, flags ProgFlags, attempt int) bool {
@@ -1772,7 +1820,7 @@ index 17c5af4..d2f1f51 100644
  	// If we are already triaging this exact prog, this is flaky coverage.
  	// Hanged programs are harmful as they consume executor procs.
  	dontTriage := flags&progInTriage > 0 || res.Status == queue.Hanged
-@@ -172,6 +730,79 @@ func (fuzzer *Fuzzer) processResult(req *queue.Request, res *queue.Result, flags
+@@ -172,6 +753,79 @@ func (fuzzer *Fuzzer) processResult(req *queue.Request, res *queue.Result, flags
  		}
  	}
  
@@ -1852,7 +1900,7 @@ index 17c5af4..d2f1f51 100644
  	if res.Info != nil {
  		fuzzer.statExecTime.Add(int(res.Info.Elapsed / 1e6))
  		for call, info := range res.Info.Calls {
-@@ -200,20 +831,338 @@ func (fuzzer *Fuzzer) processResult(req *queue.Request, res *queue.Result, flags
+@@ -200,20 +854,338 @@ func (fuzzer *Fuzzer) processResult(req *queue.Request, res *queue.Result, flags
  	return true
  }
  
@@ -2204,7 +2252,7 @@ index 17c5af4..d2f1f51 100644
  }
  
  func (fuzzer *Fuzzer) triageProgCall(p *prog.Prog, info *flatrpc.CallInfo, call int, triage *map[int]*triageCall) {
-@@ -286,8 +1235,9 @@ func (fuzzer *Fuzzer) genFuzz() *queue.Request {
+@@ -286,8 +1258,9 @@ func (fuzzer *Fuzzer) genFuzz() *queue.Request {
  	}
  	if fuzzer.Config.Collide && rnd.Intn(3) == 0 {
  		req = &queue.Request{
@@ -2216,7 +2264,7 @@ index 17c5af4..d2f1f51 100644
  		}
  	}
  	fuzzer.prepare(req, 0, 0)
-@@ -320,7 +1270,13 @@ func (fuzzer *Fuzzer) startJob(stat *stat.Val, newJob job) {
+@@ -320,7 +1293,13 @@ func (fuzzer *Fuzzer) startJob(stat *stat.Val, newJob job) {
  }
  
  func (fuzzer *Fuzzer) Next() *queue.Request {
@@ -2231,7 +2279,7 @@ index 17c5af4..d2f1f51 100644
  	if req == nil {
  		// The fuzzer is not supposed to issue nil requests.
  		panic("nil request from the fuzzer")
-@@ -342,7 +1298,6 @@ const (
+@@ -342,7 +1321,6 @@ const (
  	ProgFromCorpus ProgFlags = 1 << iota
  	ProgMinimized
  	ProgSmashed
@@ -2239,7 +2287,7 @@ index 17c5af4..d2f1f51 100644
  	progCandidate
  	progInTriage
  )
-@@ -365,6 +1320,20 @@ func (fuzzer *Fuzzer) AddCandidates(candidates []Candidate) {
+@@ -365,6 +1343,20 @@ func (fuzzer *Fuzzer) AddCandidates(candidates []Candidate) {
  	}
  }
  
@@ -2260,7 +2308,7 @@ index 17c5af4..d2f1f51 100644
  func (fuzzer *Fuzzer) rand() *rand.Rand {
  	fuzzer.mu.Lock()
  	defer fuzzer.mu.Unlock()
-@@ -374,12 +1343,15 @@ func (fuzzer *Fuzzer) rand() *rand.Rand {
+@@ -374,12 +1366,15 @@ func (fuzzer *Fuzzer) rand() *rand.Rand {
  func (fuzzer *Fuzzer) updateChoiceTable(programs []*prog.Prog) {
  	newCt := fuzzer.target.BuildChoiceTable(programs, fuzzer.Config.EnabledCalls)
  
@@ -2278,7 +2326,7 @@ index 17c5af4..d2f1f51 100644
  
  func (fuzzer *Fuzzer) choiceTableUpdater() {
 diff --git a/pkg/fuzzer/fuzzer_test.go b/pkg/fuzzer/fuzzer_test.go
-index b7d8fbe..1ae83c3 100644
+index b7d8fbe..f58d26c 100644
 --- a/pkg/fuzzer/fuzzer_test.go
 +++ b/pkg/fuzzer/fuzzer_test.go
 @@ -8,9 +8,13 @@ import (
@@ -2310,7 +2358,7 @@ index b7d8fbe..1ae83c3 100644
  	"github.com/google/syzkaller/pkg/testutil"
  	"github.com/google/syzkaller/pkg/vminfo"
  	"github.com/google/syzkaller/prog"
-@@ -29,6 +37,485 @@ import (
+@@ -29,6 +37,555 @@ import (
  	"github.com/stretchr/testify/assert"
  )
  
@@ -2398,6 +2446,76 @@ index b7d8fbe..1ae83c3 100644
 +	if len(accepted) != 0 || rejected != 1 {
 +		t.Fatalf("unsafe arg hint was accepted: accepted=%d rejected=%d",
 +			len(accepted), rejected)
++	}
++}
++
++func TestGuidanceConfiguresPreferredArgumentMutation(t *testing.T) {
++	target, err := prog.GetTarget(targets.TestOS, targets.TestArch64Fuzz)
++	if err != nil {
++		t.Fatal(err)
++	}
++	call := target.SyscallMap["syz_test_fuzzer1"]
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	fuzzer := NewFuzzer(ctx, &Config{
++		Corpus:       corpus.NewCorpus(ctx),
++		EnabledCalls: map[*prog.Syscall]bool{call: true},
++		Logf:         func(int, string, ...interface{}) {},
++	}, rand.New(rand.NewSource(1)), target)
++	noGenerate := target.SyscallMap["serialize3"]
++	disabled := target.SyscallMap["disabled0"]
++	unEnabled := target.SyscallMap["test$int"]
++	if noGenerate == nil || !noGenerate.Attrs.NoGenerate || disabled == nil ||
++		!disabled.Attrs.Disabled || unEnabled == nil {
++		t.Fatal("test target does not expose the expected syscall attributes")
++	}
++	fuzzer.Config.EnabledCalls[noGenerate] = true
++	fuzzer.Config.EnabledCalls[disabled] = true
++	anchors := fuzzer.convertGuidanceAnchors([]string{
++		"unknown$call", disabled.Name, unEnabled.Name, noGenerate.Name, call.Name,
++	})
++	if !slices.Equal(anchors, []string{noGenerate.Name, call.Name}) {
++		t.Fatalf("converted guidance anchors = %v", anchors)
++	}
++
++	result, err := fuzzer.ApplyGuidance(&syzpilotlib.GuidancePayload{
++		Version:        1,
++		SyscallWeights: map[string]float64{call.Name: 1},
++		GenerationHints: syzpilotlib.GenerationHints{
++			PreferredSyscalls: []string{"unknown$call", noGenerate.Name, call.Name},
++			PreferredRatio:    0.75,
++		},
++	})
++	if err != nil || result.AcceptedWeights != 1 {
++		t.Fatalf("preferred guidance failed: result=%+v err=%v", result, err)
++	}
++	opts := fuzzer.MutateOpts()
++	if !slices.Equal(opts.PreferredSyscalls, []string{noGenerate.Name, call.Name}) ||
++		opts.PreferredRatio != 0.75 || opts.PreferredObserver == nil {
++		t.Fatalf("preferred mutation options = %+v", opts)
++	}
++
++	for _, ratio := range []float64{-0.1, 1.1, math.Inf(1), math.NaN()} {
++		_, err := fuzzer.ApplyGuidance(&syzpilotlib.GuidancePayload{
++			Version:        2,
++			SyscallWeights: map[string]float64{call.Name: 1},
++			GenerationHints: syzpilotlib.GenerationHints{
++				PreferredSyscalls: []string{call.Name},
++				PreferredRatio:    ratio,
++			},
++		})
++		if err == nil {
++			t.Fatalf("invalid preferred ratio %v was accepted", ratio)
++		}
++	}
++
++	if _, err := fuzzer.ApplyGuidance(&syzpilotlib.GuidancePayload{Version: 2}); err != nil {
++		t.Fatalf("clear guidance failed: %v", err)
++	}
++	opts = fuzzer.MutateOpts()
++	if len(opts.PreferredSyscalls) != 0 || opts.PreferredRatio != 0 ||
++		opts.PreferredObserver != nil {
++		t.Fatalf("clear guidance retained preferred mutation: %+v", opts)
 +	}
 +}
 +
@@ -3998,10 +4116,10 @@ index 0000000..0e10961
 +	}
 +}
 diff --git a/pkg/fuzzer/stats.go b/pkg/fuzzer/stats.go
-index 40c71d3..e406b07 100644
+index 40c71d3..be79de0 100644
 --- a/pkg/fuzzer/stats.go
 +++ b/pkg/fuzzer/stats.go
-@@ -14,25 +14,72 @@ type Stats struct {
+@@ -14,25 +14,89 @@ type Stats struct {
  	// Indexed by prog.Syscall.ID + the last element for extra/remote.
  	Syscalls []SyscallStats
  
@@ -4057,6 +4175,8 @@ index 40c71d3..e406b07 100644
 +	statDirectedCorpusMutations *stat.Val // Mutations whose source came from the directed corpus.
 +	statDirectedAnchorRetries   *stat.Val // Retried mutations that deleted every selected anchor.
 +	statDirectedAnchorFallbacks *stat.Val // Mutations that fell back to the anchored source.
++	statPrefMutationSelected    *stat.Val // Guided argument mutations that selected a preferred syscall.
++	statPrefMutationFallback    *stat.Val // Guided argument mutations that used native fallback selection.
 +
 +	statReachability           []*stat.Val // Number of programs for unreachable and each target address.
 +	statReachabilityTruncated  *stat.Val   // Number of incomplete coverage observations excluded from training.
@@ -4086,6 +4206,21 @@ index 40c71d3..e406b07 100644
 +		counter = stats.statTemplateConstraint
 +	case prog.TemplateMutationTooLarge:
 +		counter = stats.statTemplateTooLarge
++	}
++	if counter != nil {
++		counter.Add(1)
++	}
++}
++
++// ObservePreferredMutation publishes guided argument-mutation outcomes to the
++// standard benchmark statistics stream.
++func (stats *Stats) ObservePreferredMutation(outcome prog.PreferredMutationOutcome) {
++	var counter *stat.Val
++	switch outcome {
++	case prog.PreferredMutationSelected:
++		counter = stats.statPrefMutationSelected
++	case prog.PreferredMutationFallback:
++		counter = stats.statPrefMutationFallback
 +	}
 +	if counter != nil {
 +		counter.Add(1)
@@ -4455,10 +4590,10 @@ index 0deee9e..145cee0 100644
 +	}
 +}
 diff --git a/pkg/mgrconfig/config.go b/pkg/mgrconfig/config.go
-index 6bf88c5..8322153 100644
+index 6bf88c5..fc6455e 100644
 --- a/pkg/mgrconfig/config.go
 +++ b/pkg/mgrconfig/config.go
-@@ -228,10 +228,128 @@ type Config struct {
+@@ -228,10 +228,138 @@ type Config struct {
  	// Experimental options.
  	Experimental Experimental
  
@@ -4480,13 +4615,23 @@ index 6bf88c5..8322153 100644
 +
 +	// ObserveTargetCoverage collects raw coverage for target-PC statistics and
 +	// final-target evidence without enabling Brain registration, training-data
-+	// collection, model inference, rfilter, or guidance. It is intended for
-+	// measurement-matched feature-off control experiments.
++	// collection, model inference, rfilter, or guidance by itself. It is used by
++	// measurement-matched feature-off controls and may be combined with the
++	// explicit standalone-guidance opt-in for component ablations.
 +	ObserveTargetCoverage bool `json:"observe_target_coverage"`
 +	// AllowStandaloneGuidance permits guidance without Brain registration only
 +	// for explicitly configured oracle/ablation runs. The ordinary feature-off
 +	// baseline leaves this false, so an HTTP request cannot change scheduling.
 +	AllowStandaloneGuidance bool `json:"allow_standalone_guidance,omitempty"`
++	// DurableTrainingWAL opts into process-crash recovery for buffered and
++	// unacknowledged training batches. It is disabled by default because the
++	// synchronous filesystem writes reduce fuzzing throughput; normal shutdown
++	// still flushes the in-memory tail when durability is disabled.
++	DurableTrainingWAL bool `json:"durable_training_wal,omitempty"`
++	// EnableOnlineGuidance lets later model rounds update sequence and
++	// attribution guidance. Disable it for predictor-only ablations while
++	// retaining registration-time cold-start guidance and model hot updates.
++	EnableOnlineGuidance bool `json:"enable_online_guidance"`
 +
 +	// Enable diverse cover collection, which add CollectCover to the ExecOpts of the target queues (default: false).
 +	EnableDiverseCover bool `json:"enable_diverse_cover"`
@@ -4588,10 +4733,10 @@ index 6bf88c5..8322153 100644
  // can be dropped at any moment.
  type Experimental struct {
 diff --git a/pkg/mgrconfig/load.go b/pkg/mgrconfig/load.go
-index b92d6a4..8bb3c41 100644
+index b92d6a4..af516bc 100644
 --- a/pkg/mgrconfig/load.go
 +++ b/pkg/mgrconfig/load.go
-@@ -106,6 +106,26 @@ func defaultValues() *Config {
+@@ -106,6 +106,27 @@ func defaultValues() *Config {
  			CoverEdges:       true,
  			DescriptionsMode: manualDescriptions,
  		},
@@ -4599,6 +4744,7 @@ index b92d6a4..8bb3c41 100644
 +			DiverseCoverRatio:    1,
 +			DumpDir:              "SyzPilot-default-dumpdir",
 +			NetworkMode:          "isolated",
++			EnableOnlineGuidance: true,
 +			TemplateInsertWeight: 50,
 +			DirectedCorpus: DirectedCorpusCfg{
 +				Capacity:                  256,
@@ -4618,7 +4764,7 @@ index b92d6a4..8bb3c41 100644
  	}
  }
  
-@@ -176,6 +196,29 @@ func Complete(cfg *Config) error {
+@@ -176,6 +197,29 @@ func Complete(cfg *Config) error {
  	if cfg.Procs < 1 || cfg.Procs > prog.MaxPids {
  		return fmt.Errorf("bad config param procs: '%v', want [1, %v]", cfg.Procs, prog.MaxPids)
  	}
@@ -4648,7 +4794,7 @@ index b92d6a4..8bb3c41 100644
  	switch cfg.Sandbox {
  	case "none", "setuid", "namespace", "android":
  	default:
-@@ -212,6 +255,32 @@ func Complete(cfg *Config) error {
+@@ -212,6 +256,32 @@ func Complete(cfg *Config) error {
  	return nil
  }
  
@@ -4683,10 +4829,10 @@ index b92d6a4..8bb3c41 100644
  		if err := checkNonEmpty(
 diff --git a/pkg/mgrconfig/syzpilot_config_test.go b/pkg/mgrconfig/syzpilot_config_test.go
 new file mode 100644
-index 0000000..eda7143
+index 0000000..1eced26
 --- /dev/null
 +++ b/pkg/mgrconfig/syzpilot_config_test.go
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,124 @@
 +// Copyright 2026 SyzPilot authors. All rights reserved.
 +// Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
 +
@@ -4726,6 +4872,39 @@ index 0000000..eda7143
 +	cfg := defaultValues()
 +	if got, want := cfg.SyzPilot.TemplateInsertWeight, 50; got != want {
 +		t.Fatalf("template insert weight = %d, want %d", got, want)
++	}
++}
++
++func TestSyzPilotDurableTrainingWALIsOptIn(t *testing.T) {
++	if defaultValues().SyzPilot.DurableTrainingWAL {
++		t.Fatal("durable training WAL must remain opt-in")
++	}
++	var cfg struct {
++		SyzPilot SyzPilotCfg `json:"SyzPilot"`
++	}
++	if err := json.Unmarshal([]byte(
++		`{"SyzPilot":{"durable_training_wal":true}}`,
++	), &cfg); err != nil {
++		t.Fatal(err)
++	}
++	if !cfg.SyzPilot.DurableTrainingWAL {
++		t.Fatal("durable training WAL opt-in was not parsed")
++	}
++}
++
++func TestSyzPilotOnlineGuidanceDefaultsOnAndCanBeDisabled(t *testing.T) {
++	if !defaultValues().SyzPilot.EnableOnlineGuidance {
++		t.Fatal("online guidance must default to enabled")
++	}
++	cfg, err := LoadPartialData([]byte(`{
++		"target": "linux/amd64",
++		"SyzPilot": {"enable_online_guidance": false}
++	}`))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if cfg.SyzPilot.EnableOnlineGuidance {
++		t.Fatal("predictor-only online-guidance opt-out was not parsed")
 +	}
 +}
 +
@@ -5111,10 +5290,10 @@ index 0000000..7e2457c
 +}
 diff --git a/pkg/syzpilotlib/collector/collector.go b/pkg/syzpilotlib/collector/collector.go
 new file mode 100644
-index 0000000..e5763e4
+index 0000000..3e4246b
 --- /dev/null
 +++ b/pkg/syzpilotlib/collector/collector.go
-@@ -0,0 +1,1359 @@
+@@ -0,0 +1,1383 @@
 +package collector
 +
 +import (
@@ -5148,6 +5327,7 @@ index 0000000..e5763e4
 +type Config struct {
 +	ServerAddr            string
 +	BufferSize            int
++	DurableWAL            bool
 +	BufferWALCheckpoint   int
 +	FlushInterval         time.Duration
 +	AckTimeout            time.Duration
@@ -5166,8 +5346,8 @@ index 0000000..e5763e4
 +	CloseSend() error
 +}
 +
-+// MLDataCollector persists batches before a single sender goroutine transfers
-+// them. The Receiver acknowledgement is the commit point for deleting the WAL.
++// MLDataCollector sends batches through one sender goroutine. DurableWAL can
++// additionally persist in-flight data for process-crash recovery.
 +type MLDataCollector struct {
 +	serverAddr    string
 +	maxBatchSize  int
@@ -5177,6 +5357,7 @@ index 0000000..e5763e4
 +	spoolDir      string
 +	schemaID      string
 +	targetAddrs   []uint64
++	durableWAL    bool
 +
 +	connMu sync.RWMutex
 +	conn   *grpc.ClientConn
@@ -5301,7 +5482,7 @@ index 0000000..e5763e4
 +	if cfg.BufferSize <= 0 {
 +		cfg.BufferSize = 200
 +	}
-+	if cfg.BufferWALCheckpoint <= 0 {
++	if cfg.DurableWAL && cfg.BufferWALCheckpoint <= 0 {
 +		cfg.BufferWALCheckpoint = 1
 +	}
 +	if cfg.FlushInterval <= 0 {
@@ -5326,17 +5507,19 @@ index 0000000..e5763e4
 +	if cfg.SignatureCacheEntries <= 0 {
 +		cfg.SignatureCacheEntries = 65536
 +	}
-+	if cfg.SpoolDir == "" {
-+		return nil, fmt.Errorf("collector spool directory is required")
-+	}
-+	if cfg.SchemaID == "" {
-+		return nil, fmt.Errorf("collector label schema ID is required")
-+	}
-+	if err := os.MkdirAll(cfg.SpoolDir, 0o750); err != nil {
-+		return nil, fmt.Errorf("failed to create collector spool: %w", err)
-+	}
-+	if err := ensureSpoolSchema(cfg.SpoolDir, cfg.SchemaID); err != nil {
-+		return nil, err
++	if cfg.DurableWAL {
++		if cfg.SpoolDir == "" {
++			return nil, fmt.Errorf("collector spool directory is required when durable WAL is enabled")
++		}
++		if cfg.SchemaID == "" {
++			return nil, fmt.Errorf("collector label schema ID is required when durable WAL is enabled")
++		}
++		if err := os.MkdirAll(cfg.SpoolDir, 0o750); err != nil {
++			return nil, fmt.Errorf("failed to create collector spool: %w", err)
++		}
++		if err := ensureSpoolSchema(cfg.SpoolDir, cfg.SchemaID); err != nil {
++			return nil, err
++		}
 +	}
 +
 +	collectorCtx, cancel := context.WithCancel(context.Background())
@@ -5349,6 +5532,7 @@ index 0000000..e5763e4
 +		spoolDir:            cfg.SpoolDir,
 +		schemaID:            cfg.SchemaID,
 +		targetAddrs:         cfg.TargetAddrs,
++		durableWAL:          cfg.DurableWAL,
 +		buffer:              make([]*pb.TrainingExample, 0, cfg.BufferSize),
 +		bufferSize:          cfg.BufferSize,
 +		bufferWALCheckpoint: cfg.BufferWALCheckpoint,
@@ -5363,9 +5547,11 @@ index 0000000..e5763e4
 +		closeFinished:       make(chan struct{}),
 +	}
 +	atomic.StoreInt64(&collector.stats.LastPositiveUnixNano, time.Now().UnixNano())
-+	if err := collector.loadSpool(); err != nil {
-+		cancel()
-+		return nil, err
++	if collector.durableWAL {
++		if err := collector.loadSpool(); err != nil {
++			cancel()
++			return nil, err
++		}
 +	}
 +	if err := collector.connect(); err != nil {
 +		cancel()
@@ -5377,15 +5563,15 @@ index 0000000..e5763e4
 +		select {
 +		case <-parent.Done():
 +			if err := collector.Close(); err != nil {
-+				debuglogger.Log(true, "Collector shutdown retained WAL batches: %v", err)
++				debuglogger.Log(true, "Collector shutdown left unsent training data: %v", err)
 +			}
 +		case <-collector.closeFinished:
 +		}
 +	}()
 +	collector.signalSender()
 +	debuglogger.Log(true,
-+		"MLDataCollector initialized with buffer size %d, max batch size %s, spool %s",
-+		cfg.BufferSize, formatSize(cfg.MaxBatchSize), cfg.SpoolDir)
++		"MLDataCollector initialized with buffer size %d, max batch size %s, durable WAL %t",
++		cfg.BufferSize, formatSize(cfg.MaxBatchSize), collector.durableWAL)
 +	return collector, nil
 +}
 +
@@ -5483,25 +5669,30 @@ index 0000000..e5763e4
 +		c.bufferMu.Unlock()
 +		return
 +	}
-+	nextBuffer := append(
-+		append(make([]*pb.TrainingExample, 0, len(c.buffer)+1), c.buffer...),
-+		example,
-+	)
 +	bufferBatchID := c.bufferBatchID
 +	if bufferBatchID == 0 {
 +		bufferBatchID = atomic.LoadInt64(&c.stats.BatchID) + 1
 +	}
-+	if shouldCheckpointBuffer(
-+		len(nextBuffer), c.bufferSize, c.bufferWALCheckpoint,
-+	) {
-+		if err := c.persistBuffer(bufferBatchID, nextBuffer); err != nil {
-+			collectorTelemetry.persistDrops.Add(1)
-+			c.bufferMu.Unlock()
-+			debuglogger.Log(true, "Skipping training sample that could not be persisted: %v", err)
-+			return
++	if c.durableWAL {
++		// Keep the in-memory state unchanged until the replacement WAL is durable.
++		nextBuffer := append(
++			append(make([]*pb.TrainingExample, 0, len(c.buffer)+1), c.buffer...),
++			example,
++		)
++		if shouldCheckpointBuffer(
++			len(nextBuffer), c.bufferSize, c.bufferWALCheckpoint,
++		) {
++			if err := c.persistBuffer(bufferBatchID, nextBuffer); err != nil {
++				collectorTelemetry.persistDrops.Add(1)
++				c.bufferMu.Unlock()
++				debuglogger.Log(true, "Skipping training sample that could not be persisted: %v", err)
++				return
++			}
 +		}
++		c.buffer = nextBuffer
++	} else {
++		c.buffer = append(c.buffer, example)
 +	}
-+	c.buffer = nextBuffer
 +	c.bufferBatchID = bufferBatchID
 +	c.signatures.record(progSig, labelClass)
 +	if observed {
@@ -5589,14 +5780,16 @@ index 0000000..e5763e4
 +		batchID = atomic.LoadInt64(&c.stats.BatchID) + 1
 +	}
 +	batch := &pb.TrainingBatch{BatchId: batchID, Examples: examples}
-+	if err := c.persistBatch(batch); err != nil {
-+		c.bufferMu.Unlock()
-+		return fmt.Errorf("failed to persist batch %d: %w", batchID, err)
-+	}
-+	// The durable batch supersedes buffer.pb. If deletion fails, restart
-+	// recovery recognizes the identical payload and removes the stale copy.
-+	if err := c.removeBufferWAL(); err != nil {
-+		debuglogger.Log(true, "Failed to remove superseded buffer WAL: %v", err)
++	if c.durableWAL {
++		if err := c.persistBatch(batch); err != nil {
++			c.bufferMu.Unlock()
++			return fmt.Errorf("failed to persist batch %d: %w", batchID, err)
++		}
++		// The durable batch supersedes buffer.pb. If deletion fails, restart
++		// recovery recognizes the identical payload and removes the stale copy.
++		if err := c.removeBufferWAL(); err != nil {
++			debuglogger.Log(true, "Failed to remove superseded buffer WAL: %v", err)
++		}
 +	}
 +	c.buffer = make([]*pb.TrainingExample, 0, c.bufferSize)
 +	c.bufferBatchID = 0
@@ -5607,8 +5800,8 @@ index 0000000..e5763e4
 +	c.pending = append(c.pending, batch)
 +	pendingCount := len(c.pending)
 +	c.pendingMu.Unlock()
-+	debuglogger.Log(true, "Queued durable batch %d with %d examples (pending: %d)",
-+		batchID, len(examples), pendingCount)
++	debuglogger.Log(true, "Queued batch %d with %d examples (pending: %d, durable: %t)",
++		batchID, len(examples), pendingCount, c.durableWAL)
 +	c.signalSender()
 +	return nil
 +}
@@ -5661,7 +5854,7 @@ index 0000000..e5763e4
 +		}
 +		if closing && c.closeDeadlineExceeded() {
 +			c.recordCloseError(fmt.Errorf(
-+				"collector close deadline expired with %d durable batches retained",
++				"collector close deadline expired with %d pending batches",
 +				c.pendingCount(),
 +			))
 +			return
@@ -5670,26 +5863,36 @@ index 0000000..e5763e4
 +		if err := c.sendWithSimpleRetry(batch); err != nil {
 +			var rejected *batchRejectedError
 +			if errors.As(err, &rejected) {
-+				if quarantineErr := c.quarantineRejectedBatch(batch, rejected); quarantineErr == nil {
++				var rejectionErr error
++				if c.durableWAL {
++					rejectionErr = c.quarantineRejectedBatch(batch, rejected)
++				} else {
++					rejectionErr = c.popRejectedPendingAndRepairSignatures(batch)
++				}
++				if rejectionErr == nil {
 +					atomic.AddInt64(&c.stats.RejectedBatches, 1)
-+					log.Logf(0,
-+						"[SyzPilot] receiver permanently rejected training batch %d; "+
-+							"preserved in %s: %s",
-+						batch.BatchId, c.rejectedDir(), rejected.message)
-+					debuglogger.Log(true,
-+						"Receiver permanently rejected batch %d; preserved in %s: %s",
-+						batch.BatchId, c.rejectedDir(), rejected.message)
++					if c.durableWAL {
++						log.Logf(0,
++							"[SyzPilot] receiver permanently rejected training batch %d; "+
++								"preserved in %s: %s",
++							batch.BatchId, c.rejectedDir(), rejected.message)
++					} else {
++						log.Logf(0,
++							"[SyzPilot] receiver permanently rejected training batch %d; "+
++								"discarded from the in-memory queue: %s",
++							batch.BatchId, rejected.message)
++					}
 +					continue
 +				} else {
 +					var repairError *batchRepairError
-+					if errors.As(quarantineErr, &repairError) {
++					if errors.As(rejectionErr, &repairError) {
 +						log.Logf(0,
-+							"[SyzPilot] collector halted after durable rejection repair failed: %v",
++							"[SyzPilot] collector halted after rejection repair failed: %v",
 +							repairError)
 +						return
 +					}
-+					err = fmt.Errorf("persist rejected batch %d: %w",
-+						batch.BatchId, quarantineErr)
++					err = fmt.Errorf("handle rejected batch %d: %w",
++						batch.BatchId, rejectionErr)
 +				}
 +			}
 +			if c.IsClosed() {
@@ -5697,11 +5900,11 @@ index 0000000..e5763e4
 +			}
 +			pendingCount := c.pendingCount()
 +			debuglogger.Log(true,
-+				"Failed to commit batch %d; %d durable batches retained: %v",
++				"Failed to commit batch %d; %d pending batches retained: %v",
 +				batch.BatchId, pendingCount, err)
 +			if closing {
 +				c.recordCloseError(fmt.Errorf(
-+					"%d batches retained in collector spool after send failure: %w",
++					"%d training batches remain unsent after send failure: %w",
 +					pendingCount, err,
 +				))
 +				return
@@ -5722,7 +5925,7 @@ index 0000000..e5763e4
 +			continue
 +		}
 +		if err := c.commitPending(batch); err != nil {
-+			debuglogger.Log(true, "Failed to delete committed batch %d from spool: %v",
++			debuglogger.Log(true, "Failed to finalize committed batch %d: %v",
 +				batch.BatchId, err)
 +			if closing {
 +				c.recordCloseError(err)
@@ -5743,7 +5946,7 @@ index 0000000..e5763e4
 +			continue
 +		}
 +		atomic.AddInt64(&c.stats.SentBatches, 1)
-+		debuglogger.Log(true, "Receiver acknowledged durable batch %d with %d examples",
++		debuglogger.Log(true, "Receiver acknowledged batch %d with %d examples",
 +			batch.BatchId, len(batch.Examples))
 +	}
 +}
@@ -5863,7 +6066,7 @@ index 0000000..e5763e4
 +}
 +
 +func (c *MLDataCollector) commitPending(batch *pb.TrainingBatch) error {
-+	if c.spoolDir != "" {
++	if c.durableWAL {
 +		if err := c.persistHighWatermark(batch.BatchId); err != nil {
 +			return fmt.Errorf("persist committed batch watermark: %w", err)
 +		}
@@ -6476,10 +6679,10 @@ index 0000000..e5763e4
 +}
 diff --git a/pkg/syzpilotlib/collector/collector_test.go b/pkg/syzpilotlib/collector/collector_test.go
 new file mode 100644
-index 0000000..0c71e56
+index 0000000..25620ba
 --- /dev/null
 +++ b/pkg/syzpilotlib/collector/collector_test.go
-@@ -0,0 +1,1273 @@
+@@ -0,0 +1,1372 @@
 +package collector
 +
 +import (
@@ -6487,6 +6690,7 @@ index 0000000..0c71e56
 +	"errors"
 +	"fmt"
 +	"os"
++	"path/filepath"
 +	"sync"
 +	"sync/atomic"
 +	"testing"
@@ -6578,6 +6782,7 @@ index 0000000..0c71e56
 +	t.Helper()
 +	ctx, cancel := context.WithCancel(context.Background())
 +	collector := &MLDataCollector{
++		durableWAL:          true,
 +		buffer:              make([]*pb.TrainingExample, 0, bufferSize),
 +		bufferSize:          bufferSize,
 +		bufferWALCheckpoint: 1,
@@ -6601,6 +6806,98 @@ index 0000000..0c71e56
 +	atomic.StoreInt64(&collector.stats.LastPositiveUnixNano, time.Now().UnixNano())
 +	go collector.senderLoop()
 +	return collector
++}
++
++func TestMemoryModeSkipsWALAndFlushesNormally(t *testing.T) {
++	stream := &fakeTrainingStream{}
++	collector := newTestCollector(t, stream, 2)
++	collector.durableWAL = false
++
++	programs := uniqueTestPrograms(t, 2)
++	for _, program := range programs {
++		collector.AddProgAndLabel(program, []bool{false, true})
++	}
++	waitFor(t, func() bool {
++		return collector.pendingCount() == 0 &&
++			atomic.LoadInt64(&collector.stats.SentBatches) == 1
++	})
++	entries, err := os.ReadDir(collector.spoolDir)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(entries) != 0 {
++		t.Fatalf("memory mode wrote collector spool entries: %v", entries)
++	}
++	if err := collector.Close(); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestMemoryModeConstructorDoesNotCreateSpool(t *testing.T) {
++	spoolDir := filepath.Join(t.TempDir(), "collector-spool")
++	collector, err := NewDataCollector(context.Background(), &Config{
++		ServerAddr: "127.0.0.1:1",
++		BufferSize: 10,
++		SpoolDir:   spoolDir,
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err := os.Stat(spoolDir); !os.IsNotExist(err) {
++		t.Fatalf("memory-mode constructor created spool storage: %v", err)
++	}
++	if err := collector.Close(); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestMemoryModeGracefulCloseFlushesPartialTail(t *testing.T) {
++	stream := &fakeTrainingStream{}
++	collector := newTestCollector(t, stream, 10)
++	collector.durableWAL = false
++	collector.AddProgAndLabel(&prog.Prog{}, []bool{false, true})
++	if err := collector.Close(); err != nil {
++		t.Fatal(err)
++	}
++	stream.mu.Lock()
++	defer stream.mu.Unlock()
++	if len(stream.sent) != 1 || len(stream.sent[0].Examples) != 1 {
++		t.Fatalf("graceful close sent batches/examples = %d/%d, want 1/1",
++			len(stream.sent), len(stream.sent[0].Examples))
++	}
++	entries, err := os.ReadDir(collector.spoolDir)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(entries) != 0 {
++		t.Fatalf("memory-mode graceful close wrote spool entries: %v", entries)
++	}
++}
++
++func TestMemoryModeDiscardsRejectedBatchAndContinues(t *testing.T) {
++	stream := &fakeTrainingStream{responses: []*pb.BatchResponse{
++		{BatchId: 1, Status: "rejected", Message: "invalid label"},
++		{BatchId: 2, Status: "success", ProcessedSamples: 1},
++	}}
++	collector := newTestCollector(t, stream, 1)
++	collector.durableWAL = false
++	programs := uniqueTestPrograms(t, 2)
++	collector.AddProgAndLabel(programs[0], []bool{false, true})
++	waitFor(t, func() bool {
++		return atomic.LoadInt64(&collector.stats.RejectedBatches) == 1 &&
++			collector.pendingCount() == 0
++	})
++	collector.AddProgAndLabel(programs[1], []bool{false, true})
++	waitFor(t, func() bool {
++		return atomic.LoadInt64(&collector.stats.SentBatches) == 1 &&
++			collector.pendingCount() == 0
++	})
++	if _, err := os.Stat(collector.rejectedDir()); !os.IsNotExist(err) {
++		t.Fatalf("memory mode created rejected-batch storage: %v", err)
++	}
++	if err := collector.Close(); err != nil {
++		t.Fatal(err)
++	}
 +}
 +
 +func trainingExample(signature string) *pb.TrainingExample {
@@ -6833,6 +7130,7 @@ index 0000000..0c71e56
 +
 +func TestPermanentRejectionRetainsDeeperPendingObservation(t *testing.T) {
 +	collector := &MLDataCollector{
++		durableWAL: true,
 +		spoolDir:   t.TempDir(),
 +		buffer:     make([]*pb.TrainingExample, 0, 10),
 +		signatures: newSignatureCache(65536),
@@ -7195,6 +7493,7 @@ index 0000000..0c71e56
 +	failuresBefore := collectorTelemetry.bufferWALFailures.Load()
 +	persistDropsBefore := collectorTelemetry.persistDrops.Load()
 +	collector := &MLDataCollector{
++		durableWAL: true,
 +		spoolDir:   t.TempDir(),
 +		buffer:     make([]*pb.TrainingExample, 0, 10),
 +		bufferSize: 10,
@@ -7321,6 +7620,7 @@ index 0000000..0c71e56
 +		t.Run(fmt.Sprintf("accepted-%d", test.accepted), func(t *testing.T) {
 +			spoolDir := t.TempDir()
 +			collector := &MLDataCollector{
++				durableWAL:          true,
 +				spoolDir:            spoolDir,
 +				buffer:              make([]*pb.TrainingExample, 0, 100),
 +				bufferSize:          100,
@@ -7362,6 +7662,7 @@ index 0000000..0c71e56
 +	t.Run("full-batch", func(t *testing.T) {
 +		spoolDir := t.TempDir()
 +		collector := &MLDataCollector{
++			durableWAL:          true,
 +			spoolDir:            spoolDir,
 +			buffer:              make([]*pb.TrainingExample, 0, 33),
 +			bufferSize:          33,
@@ -7610,6 +7911,7 @@ index 0000000..0c71e56
 +	spoolDir := t.TempDir()
 +	ctx, cancel := context.WithCancel(context.Background())
 +	collector := &MLDataCollector{
++		durableWAL: true,
 +		spoolDir:   spoolDir,
 +		buffer:     make([]*pb.TrainingExample, 0, 10),
 +		bufferSize: 10,
@@ -8035,10 +8337,10 @@ index 0000000..4c6a7eb
 \ No newline at end of file
 diff --git a/pkg/syzpilotlib/lib.go b/pkg/syzpilotlib/lib.go
 new file mode 100644
-index 0000000..6e5fe11
+index 0000000..2632416
 --- /dev/null
 +++ b/pkg/syzpilotlib/lib.go
-@@ -0,0 +1,235 @@
+@@ -0,0 +1,237 @@
 +package syzpilotlib
 +
 +import (
@@ -8269,10 +8571,12 @@ index 0000000..6e5fe11
 +	ArgHints   []ArgConstraint `json:"arg_hints,omitempty"` // argument constraints for template syscalls
 +}
 +
-+// GenerationHints provides hints for program generation.
++// GenerationHints provides hints for program generation and mutation.
 +type GenerationHints struct {
 +	PreferredSyscalls []string `json:"preferred_syscalls"`
-+	PreferredRatio    float64  `json:"preferred_ratio"`
++	// PreferredRatio is the probability that an argument-mutation decision
++	// focuses on the highest-ranked mutable preferred syscall already present.
++	PreferredRatio float64 `json:"preferred_ratio"`
 +}
 diff --git a/pkg/syzpilotlib/lib_test.go b/pkg/syzpilotlib/lib_test.go
 new file mode 100644
@@ -8374,10 +8678,10 @@ index 0000000..b52adb6
 +}
 diff --git a/pkg/syzpilotlib/manager/client.go b/pkg/syzpilotlib/manager/client.go
 new file mode 100644
-index 0000000..dffa6df
+index 0000000..1f79b66
 --- /dev/null
 +++ b/pkg/syzpilotlib/manager/client.go
-@@ -0,0 +1,439 @@
+@@ -0,0 +1,443 @@
 +// Package manager provides the client functionality for interacting with the SyzPilot-brain controller.
 +// It handles the registration of fuzzer instances, the establishment of SSH tunnels in isolated mode, and the management of these resources.
 +package manager
@@ -8432,6 +8736,8 @@ index 0000000..dffa6df
 +	TargetRevision   string // compiled syscall-description revision
 +	ProducerRevision string // syzkaller revision embedded in this binary
 +	DescriptionsMode string // manual, auto, or any
++	// EnableOnlineGuidance controls model-derived sequence/attribution refreshes.
++	EnableOnlineGuidance bool
 +}
 +
 +// Client: the main structure for interacting with the SyzPilot-brain controller.
@@ -8449,20 +8755,21 @@ index 0000000..dffa6df
 +// RegistrationPayload: the data structure for sending to the server for registration.
 +// using a single structure and the omitempty tag, it is easier to manage than multiple nested structures.
 +type RegistrationPayload struct {
-+	UUID             string `json:"uuid"`
-+	TaskName         string `json:"task_name"`
-+	Mode             string `json:"mode"`
-+	PublicKey        string `json:"public_key,omitempty"` // omitempty in direct mode
-+	HostIP           string `json:"host_ip,omitempty"`    // omitempty in isolated mode
-+	HttpPort         int    `json:"http_port,omitempty"`  // omitempty in isolated mode
-+	TargetFunc       string `json:"target_func,omitempty"`
-+	ReportPath       string `json:"report_path,omitempty"`
-+	KallgraphDir     string `json:"kallgraph_dir,omitempty"`
-+	TargetOS         string `json:"target_os"`
-+	TargetArch       string `json:"target_arch"`
-+	TargetRevision   string `json:"target_revision"`
-+	ProducerRevision string `json:"producer_revision"`
-+	DescriptionsMode string `json:"descriptions_mode"`
++	UUID                 string `json:"uuid"`
++	TaskName             string `json:"task_name"`
++	Mode                 string `json:"mode"`
++	PublicKey            string `json:"public_key,omitempty"` // omitempty in direct mode
++	HostIP               string `json:"host_ip,omitempty"`    // omitempty in isolated mode
++	HttpPort             int    `json:"http_port,omitempty"`  // omitempty in isolated mode
++	TargetFunc           string `json:"target_func,omitempty"`
++	ReportPath           string `json:"report_path,omitempty"`
++	KallgraphDir         string `json:"kallgraph_dir,omitempty"`
++	TargetOS             string `json:"target_os"`
++	TargetArch           string `json:"target_arch"`
++	TargetRevision       string `json:"target_revision"`
++	ProducerRevision     string `json:"producer_revision"`
++	DescriptionsMode     string `json:"descriptions_mode"`
++	EnableOnlineGuidance bool   `json:"enable_online_guidance"`
 +}
 +
 +// RegistrationResponse: the data structure for receiving from the controller for registration.
@@ -8586,9 +8893,10 @@ index 0000000..dffa6df
 +		ReportPath:   c.Config.ReportPath,
 +		KallgraphDir: c.Config.KallgraphDir,
 +		TargetOS:     c.Config.TargetOS, TargetArch: c.Config.TargetArch,
-+		TargetRevision:   c.Config.TargetRevision,
-+		ProducerRevision: c.Config.ProducerRevision,
-+		DescriptionsMode: c.Config.DescriptionsMode,
++		TargetRevision:       c.Config.TargetRevision,
++		ProducerRevision:     c.Config.ProducerRevision,
++		DescriptionsMode:     c.Config.DescriptionsMode,
++		EnableOnlineGuidance: c.Config.EnableOnlineGuidance,
 +	}
 +
 +	if c.Config.NetworkMode == "direct" {
@@ -8819,10 +9127,10 @@ index 0000000..dffa6df
 +}
 diff --git a/pkg/syzpilotlib/manager/client_test.go b/pkg/syzpilotlib/manager/client_test.go
 new file mode 100644
-index 0000000..e646a0d
+index 0000000..ef6f671
 --- /dev/null
 +++ b/pkg/syzpilotlib/manager/client_test.go
-@@ -0,0 +1,243 @@
+@@ -0,0 +1,262 @@
 +package manager
 +
 +import (
@@ -8924,7 +9232,8 @@ index 0000000..e646a0d
 +			KallgraphDir: "/brain/kallgraph/case_25",
 +			TargetOS:     "linux", TargetArch: "amd64",
 +			TargetRevision: "target-r1", ProducerRevision: "fuzzer-r1",
-+			DescriptionsMode: "manual",
++			DescriptionsMode:     "manual",
++			EnableOnlineGuidance: true,
 +		},
 +		FuzzerID:   "fuzzer",
 +		httpClient: server.Client(),
@@ -8940,8 +9249,26 @@ index 0000000..e646a0d
 +		payload.TargetArch != client.Config.TargetArch ||
 +		payload.TargetRevision != client.Config.TargetRevision ||
 +		payload.ProducerRevision != client.Config.ProducerRevision ||
-+		payload.DescriptionsMode != client.Config.DescriptionsMode {
++		payload.DescriptionsMode != client.Config.DescriptionsMode ||
++		payload.EnableOnlineGuidance != client.Config.EnableOnlineGuidance {
 +		t.Fatalf("guidance context not forwarded: %#v", payload)
++	}
++}
++
++func TestRegistrationPayloadPreservesPredictorOnlyOptOut(t *testing.T) {
++	payload, err := json.Marshal(RegistrationPayload{
++		EnableOnlineGuidance: false,
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	var decoded map[string]any
++	if err := json.Unmarshal(payload, &decoded); err != nil {
++		t.Fatal(err)
++	}
++	value, present := decoded["enable_online_guidance"]
++	if !present || value != false {
++		t.Fatalf("predictor-only opt-out payload = %s", payload)
 +	}
 +}
 +
@@ -10258,10 +10585,10 @@ index 0000000..7f926c8
 +    uint64 total_samples_received = 4;         // total number of samples received
 +}
 diff --git a/prog/mutation.go b/prog/mutation.go
-index eb9e828..bc292f8 100644
+index eb9e828..7062672 100644
 --- a/prog/mutation.go
 +++ b/prog/mutation.go
-@@ -28,29 +28,72 @@ func (p *Prog) Mutate(rs rand.Source, ncalls int, ct *ChoiceTable, noMutate map[
+@@ -28,29 +28,90 @@ func (p *Prog) Mutate(rs rand.Source, ncalls int, ct *ChoiceTable, noMutate map[
  	p.MutateWithOpts(rs, ncalls, ct, noMutate, corpus, DefaultMutateOpts)
  }
  
@@ -10303,6 +10630,21 @@ index eb9e828..bc292f8 100644
 +	ObserveTemplateMutation(TemplateMutationOutcome)
 +}
 +
++// PreferredMutationOutcome identifies whether one sampled guided argument
++// mutation found a preferred syscall in the current program.
++type PreferredMutationOutcome uint8
++
++const (
++	PreferredMutationSelected PreferredMutationOutcome = iota
++	PreferredMutationFallback
++)
++
++// PreferredMutationObserver receives aggregate guided argument-mutation
++// outcomes without coupling prog to the fuzzer statistics package.
++type PreferredMutationObserver interface {
++	ObservePreferredMutation(PreferredMutationOutcome)
++}
++
  var DefaultMutateOpts = MutateOpts{
  	ExpectedIterations: 5,
  	MutateArgCount:     3,
@@ -10338,6 +10680,9 @@ index eb9e828..bc292f8 100644
 +	TemplateInsertWeight int                // weight for template-guided insertion
 +	Templates            []MutationTemplate // templates for guided mutation
 +	TemplateObserver     TemplateMutationObserver
++	PreferredSyscalls    []string // ranked syscall names for guided argument mutation
++	PreferredRatio       float64  // probability of preferring a ranked syscall
++	PreferredObserver    PreferredMutationObserver
  }
  
  func (o MutateOpts) weight() int {
@@ -10347,7 +10692,7 @@ index eb9e828..bc292f8 100644
  }
  
  func (p *Prog) MutateWithOpts(rs rand.Source, ncalls int, ct *ChoiceTable, noMutate map[int]bool,
-@@ -62,13 +105,14 @@ func (p *Prog) MutateWithOpts(rs rand.Source, ncalls int, ct *ChoiceTable, noMut
+@@ -62,13 +123,14 @@ func (p *Prog) MutateWithOpts(rs rand.Source, ncalls int, ct *ChoiceTable, noMut
  	r := newRand(p.Target, rs)
  	ncalls = max(ncalls, len(p.Calls))
  	ctx := &mutator{
@@ -10369,7 +10714,7 @@ index eb9e828..bc292f8 100644
  	}
  	for stop, ok := false, false; !stop; stop = ok && len(p.Calls) != 0 && r.oneOf(opts.ExpectedIterations) {
  		val := r.Intn(totalWeight)
-@@ -94,6 +138,19 @@ func (p *Prog) MutateWithOpts(rs rand.Source, ncalls int, ct *ChoiceTable, noMut
+@@ -94,6 +156,19 @@ func (p *Prog) MutateWithOpts(rs rand.Source, ncalls int, ct *ChoiceTable, noMut
  			ok = ctx.mutateArg()
  			continue
  		}
@@ -10389,7 +10734,7 @@ index eb9e828..bc292f8 100644
  		ok = ctx.removeCall()
  	}
  	p.sanitizeFix()
-@@ -106,13 +163,14 @@ func (p *Prog) MutateWithOpts(rs rand.Source, ncalls int, ct *ChoiceTable, noMut
+@@ -106,13 +181,14 @@ func (p *Prog) MutateWithOpts(rs rand.Source, ncalls int, ct *ChoiceTable, noMut
  // Internal state required for performing mutations -- currently this matches
  // the arguments passed to Mutate().
  type mutator struct {
@@ -10411,7 +10756,7 @@ index eb9e828..bc292f8 100644
  }
  
  // This function selects a random other program p0 out of the corpus, and
-@@ -201,6 +259,201 @@ func (ctx *mutator) insertCall() bool {
+@@ -201,6 +277,201 @@ func (ctx *mutator) insertCall() bool {
  	return true
  }
  
@@ -10613,11 +10958,76 @@ index eb9e828..bc292f8 100644
  // Removes a random call from program.
  func (ctx *mutator) removeCall() bool {
  	p, r := ctx.p, ctx.r
+@@ -219,7 +490,21 @@ func (ctx *mutator) mutateArg() bool {
+ 		return false
+ 	}
+ 
+-	idx := chooseCall(p, r)
++	idx := -1
++	if len(ctx.opts.PreferredSyscalls) != 0 && ctx.opts.PreferredRatio > 0 &&
++		r.Float64() < ctx.opts.PreferredRatio {
++		idx = choosePreferredCall(p, r, ctx.opts.PreferredSyscalls, ctx.noMutate)
++		outcome := PreferredMutationSelected
++		if idx < 0 {
++			outcome = PreferredMutationFallback
++		}
++		if ctx.opts.PreferredObserver != nil {
++			ctx.opts.PreferredObserver.ObservePreferredMutation(outcome)
++		}
++	}
++	if idx < 0 {
++		idx = chooseCall(p, r)
++	}
+ 	if idx < 0 {
+ 		return false
+ 	}
+@@ -281,6 +566,41 @@ func chooseCall(p *Prog, r *randGen) int {
+ 	return sort.SearchFloat64s(callPriorities, prioSum*r.Float64())
+ }
+ 
++// choosePreferredCall selects an instance of the highest-ranked preferred
++// syscall that is present and mutable. Multiple instances of the same syscall
++// retain Syzkaller's native argument-complexity weighting.
++func choosePreferredCall(p *Prog, r *randGen, preferred []string,
++	noMutate map[int]bool) int {
++	for _, name := range preferred {
++		var prioSum float64
++		indices := make([]int, 0)
++		priorities := make([]float64, 0)
++		for index, call := range p.Calls {
++			if call.Meta.Name != name || noMutate[call.Meta.ID] {
++				continue
++			}
++			prio := callArgumentMutationPriority(p, call)
++			if prio == 0 {
++				continue
++			}
++			prioSum += prio
++			indices = append(indices, index)
++			priorities = append(priorities, prioSum)
++		}
++		if prioSum != 0 {
++			selected := sort.SearchFloat64s(priorities, prioSum*r.Float64())
++			return indices[selected]
++		}
++	}
++	return -1
++}
++
++func callArgumentMutationPriority(p *Prog, call *Call) float64 {
++	args := &mutationArgs{target: p.Target}
++	ForeachArg(call, args.collectArg)
++	return args.prioSum
++}
++
+ func (target *Target) mutateArg(r *randGen, s *state, arg Arg, ctx ArgCtx, updateSizes *bool) ([]*Call, bool) {
+ 	var baseSize uint64
+ 	if ctx.Base != nil {
 diff --git a/prog/mutation_test.go b/prog/mutation_test.go
-index 1cd1865..a1b9d03 100644
+index 1cd1865..b3f452a 100644
 --- a/prog/mutation_test.go
 +++ b/prog/mutation_test.go
-@@ -7,11 +7,44 @@ import (
+@@ -7,11 +7,54 @@ import (
  	"bytes"
  	"fmt"
  	"math/rand"
@@ -10632,6 +11042,16 @@ index 1cd1865..a1b9d03 100644
 +	program              *Prog
 +	outcomes             []TemplateMutationOutcome
 +	successCallSnapshots [][]string
++}
++
++type preferredMutationRecorder struct {
++	outcomes []PreferredMutationOutcome
++}
++
++func (recorder *preferredMutationRecorder) ObservePreferredMutation(
++	outcome PreferredMutationOutcome,
++) {
++	recorder.outcomes = append(recorder.outcomes, outcome)
 +}
 +
 +func (recorder *templateMutationRecorder) ObserveTemplateMutation(outcome TemplateMutationOutcome) {
@@ -10662,10 +11082,175 @@ index 1cd1865..a1b9d03 100644
  func TestMutationFlags(t *testing.T) {
  	tests := [][2]string{
  		// Mutate flags (bitmask = true).
-@@ -36,6 +69,286 @@ func TestMutationFlags(t *testing.T) {
+@@ -36,6 +79,451 @@ func TestMutationFlags(t *testing.T) {
  	runMutationTests(t, tests, true)
  }
  
++func TestPreferredArgumentMutationSelectsHighestRankedPresentCall(t *testing.T) {
++	target := initTargetTest(t, "linux", "amd64")
++	program := target.Generate(rand.NewSource(7), 20, target.DefaultChoiceTable())
++	mutable := make([]string, 0, 2)
++	seen := make(map[string]bool)
++	for _, call := range program.Calls {
++		if !seen[call.Meta.Name] && callArgumentMutationPriority(program, call) > 0 {
++			seen[call.Meta.Name] = true
++			mutable = append(mutable, call.Meta.Name)
++			if len(mutable) == 2 {
++				break
++			}
++		}
++	}
++	if len(mutable) != 2 {
++		t.Fatal("generated program does not contain two mutable syscall families")
++	}
++
++	preferred := []string{mutable[1], mutable[0]}
++	idx := choosePreferredCall(
++		program, newRand(target, rand.NewSource(8)), preferred, nil,
++	)
++	if idx < 0 || program.Calls[idx].Meta.Name != mutable[1] {
++		selected := "<none>"
++		if idx >= 0 {
++			selected = program.CallName(idx)
++		}
++		t.Fatalf("selected call = %d/%s, want highest-ranked %q",
++			idx, selected, mutable[1])
++	}
++
++	blocked := map[int]bool{program.Calls[idx].Meta.ID: true}
++	idx = choosePreferredCall(
++		program, newRand(target, rand.NewSource(9)), preferred, blocked,
++	)
++	if idx < 0 || program.Calls[idx].Meta.Name != mutable[0] {
++		selected := "<none>"
++		if idx >= 0 {
++			selected = program.CallName(idx)
++		}
++		t.Fatalf("fallback preferred call = %d/%s, want %q",
++			idx, selected, mutable[0])
++	}
++
++	recorder := new(preferredMutationRecorder)
++	ctx := &mutator{
++		p: program.Clone(), r: newRand(target, rand.NewSource(10)),
++		ncalls: max(RecommendedCalls, len(program.Calls)),
++		ct:     target.DefaultChoiceTable(), opts: MutateOpts{
++			MutateArgCount: 1, PreferredSyscalls: []string{mutable[1]},
++			PreferredRatio: 1, PreferredObserver: recorder,
++		},
++	}
++	if !ctx.mutateArg() {
++		t.Fatal("preferred argument mutation did not mutate the selected call")
++	}
++	if len(recorder.outcomes) != 1 ||
++		recorder.outcomes[0] != PreferredMutationSelected {
++		t.Fatalf("preferred mutation outcomes = %v, want selected", recorder.outcomes)
++	}
++}
++
++func TestPreferredArgumentMutationSkipsCallWithoutMutableArguments(t *testing.T) {
++	target := initTargetTest(t, "test", "64")
++	withoutArguments := target.GenSampleProg(
++		target.SyscallMap["test_excessive_args1"], rand.NewSource(1),
++	)
++	mutable := target.GenSampleProg(
++		target.SyscallMap["test$int"], rand.NewSource(2),
++	)
++	program := &Prog{
++		Target: target,
++		Calls:  append(withoutArguments.Calls, mutable.Calls...),
++	}
++	idx := choosePreferredCall(program, newRand(target, rand.NewSource(3)),
++		[]string{"test_excessive_args1", "test$int"}, nil)
++	if idx < 0 || program.Calls[idx].Meta.Name != "test$int" {
++		selected := "<none>"
++		if idx >= 0 {
++			selected = program.CallName(idx)
++		}
++		t.Fatalf("selected call = %d/%s, want test$int", idx, selected)
++	}
++}
++
++func TestPreferredArgumentMutationSupportsExistingNoGenerateCall(t *testing.T) {
++	target := initTargetTest(t, "test", "64")
++	meta := target.SyscallMap["serialize3"]
++	if meta == nil || !meta.Attrs.NoGenerate {
++		t.Fatal("test target does not expose the expected NoGenerate syscall")
++	}
++	program, err := target.Deserialize([]byte(
++		`serialize3(&(0x7f0000000000)="$eJwqrqzKTszJSS0CBAAA//8TyQPi")`,
++	), Strict)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(program.Calls) != 1 || program.Calls[0].Meta != meta {
++		t.Fatalf("sample program calls = %v, want serialize3", program.Calls)
++	}
++	if callArgumentMutationPriority(program, program.Calls[0]) == 0 {
++		t.Fatal("serialize3 sample has no arguments accepted by the native mutator")
++	}
++	recorder := new(preferredMutationRecorder)
++	ctx := &mutator{
++		p: program, r: newRand(target, rand.NewSource(5)),
++		ncalls: RecommendedCalls,
++		ct:     target.DefaultChoiceTable(), opts: MutateOpts{
++			MutateArgCount: 1, PreferredSyscalls: []string{meta.Name},
++			PreferredRatio: 1, PreferredObserver: recorder,
++		},
++	}
++	if !ctx.mutateArg() {
++		t.Fatal("preferred argument mutation did not mutate existing NoGenerate call")
++	}
++	if len(recorder.outcomes) != 1 ||
++		recorder.outcomes[0] != PreferredMutationSelected {
++		t.Fatalf("preferred mutation outcomes = %v, want selected", recorder.outcomes)
++	}
++}
++
++func TestDisabledPreferredGuidancePreservesNativeMutationRNG(t *testing.T) {
++	target := initTargetTest(t, "linux", "amd64")
++	program := target.Generate(rand.NewSource(13), 10, target.DefaultChoiceTable())
++	mutate := func(opts MutateOpts) []byte {
++		clone := program.Clone()
++		clone.MutateWithOpts(rand.NewSource(14), RecommendedCalls,
++			target.DefaultChoiceTable(), nil, nil, opts)
++		return clone.Serialize()
++	}
++	want := mutate(DefaultMutateOpts)
++
++	ratioZero := DefaultMutateOpts
++	ratioZero.PreferredSyscalls = []string{program.CallName(0)}
++	ratioZero.PreferredRatio = 0
++	if got := mutate(ratioZero); !bytes.Equal(got, want) {
++		t.Fatalf("ratio-zero guidance changed native mutation:\n%s\nwant:\n%s", got, want)
++	}
++
++	emptyPreferred := DefaultMutateOpts
++	emptyPreferred.PreferredRatio = 1
++	if got := mutate(emptyPreferred); !bytes.Equal(got, want) {
++		t.Fatalf("empty preferred guidance changed native mutation:\n%s\nwant:\n%s", got, want)
++	}
++}
++
++func TestPreferredArgumentMutationReportsNativeFallback(t *testing.T) {
++	target := initTargetTest(t, "linux", "amd64")
++	program := target.Generate(rand.NewSource(11), 5, target.DefaultChoiceTable())
++	recorder := new(preferredMutationRecorder)
++	ctx := &mutator{
++		p: program, r: newRand(target, rand.NewSource(12)),
++		ncalls: max(RecommendedCalls, len(program.Calls)),
++		ct:     target.DefaultChoiceTable(), opts: MutateOpts{
++			MutateArgCount: 1, PreferredSyscalls: []string{"missing$call"},
++			PreferredRatio: 1, PreferredObserver: recorder,
++		},
++	}
++	ctx.mutateArg()
++	if len(recorder.outcomes) != 1 ||
++		recorder.outcomes[0] != PreferredMutationFallback {
++		t.Fatalf("preferred mutation outcomes = %v, want fallback", recorder.outcomes)
++	}
++}
++
 +func TestTemplateInsertCarriesResourcesAcrossTemplateCalls(t *testing.T) {
 +	target := initTargetTest(t, "linux", "amd64")
 +	enabled := map[*Syscall]bool{
@@ -11142,7 +11727,7 @@ index 0000000..5185a69
 +	return dependencies
 +}
 diff --git a/syz-manager/manager.go b/syz-manager/manager.go
-index b494df2..dd343ee 100644
+index b494df2..714b69c 100644
 --- a/syz-manager/manager.go
 +++ b/syz-manager/manager.go
 @@ -6,6 +6,7 @@ package main
@@ -11375,7 +11960,7 @@ index b494df2..dd343ee 100644
  	if mgr.cfg.HTTP != "" {
  		go func() {
  			err := mgr.http.Serve(ctx)
-@@ -379,13 +517,342 @@ func RunManager(mode *Mode, cfg *mgrconfig.Config) {
+@@ -379,13 +517,344 @@ func RunManager(mode *Mode, cfg *mgrconfig.Config) {
  	mgr.pool.Loop(ctx)
  }
  
@@ -11473,9 +12058,10 @@ index b494df2..dd343ee 100644
 +		ReportPath:   mgr.cfg.SyzPilot.ReportPath,
 +		KallgraphDir: mgr.cfg.SyzPilot.KallgraphDir,
 +		TargetOS:     mgr.target.OS, TargetArch: mgr.target.Arch,
-+		TargetRevision:   mgr.target.Revision,
-+		ProducerRevision: prog.GitRevision,
-+		DescriptionsMode: mgr.cfg.Experimental.DescriptionsMode,
++		TargetRevision:       mgr.target.Revision,
++		ProducerRevision:     prog.GitRevision,
++		DescriptionsMode:     mgr.cfg.Experimental.DescriptionsMode,
++		EnableOnlineGuidance: mgr.cfg.SyzPilot.EnableOnlineGuidance,
 +	})
 +	if err != nil {
 +		return fmt.Errorf("failed to create syzpilot client: %w", err)
@@ -11506,7 +12092,8 @@ index b494df2..dd343ee 100644
 +	guidance *syzpilotlib.GuidancePayload,
 +) (syzpilotlib.GuidanceApplyResult, error) {
 +	if mgr.cfg != nil && mgr.cfg.SyzPilot.ObserveTargetCoverage &&
-+		!mgr.cfg.SyzPilot.ReachFilter.Enable {
++		!mgr.cfg.SyzPilot.ReachFilter.Enable &&
++		!mgr.cfg.SyzPilot.AllowStandaloneGuidance {
 +		return syzpilotlib.GuidanceApplyResult{},
 +			fmt.Errorf("guidance is disabled in observation-only control mode")
 +	}
@@ -11721,7 +12308,7 @@ index b494df2..dd343ee 100644
  }
  
  func (mgr *Manager) heartbeatLoop() {
-@@ -1103,6 +1570,7 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
+@@ -1103,6 +1572,7 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
  	}
  	if mgr.mode.ExitAfterMachineCheck {
  		mgr.exit(mgr.mode.Name)
@@ -11729,7 +12316,7 @@ index b494df2..dd343ee 100644
  	}
  
  	mgr.mu.Lock()
-@@ -1114,12 +1582,38 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
+@@ -1114,12 +1584,38 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
  		panic("MachineChecked called twice")
  	}
  	mgr.enabledFeatures = features
@@ -11768,7 +12355,7 @@ index b494df2..dd343ee 100644
  	mgr.setPhaseLocked(phaseLoadedCorpus)
  	opts := fuzzer.DefaultExecOpts(mgr.cfg, features, *flagDebug)
  
-@@ -1130,7 +1624,7 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
+@@ -1130,7 +1626,7 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
  		mgr.http.Corpus.Store(mgr.corpus)
  
  		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -11777,7 +12364,7 @@ index b494df2..dd343ee 100644
  			Corpus:         mgr.corpus,
  			Snapshot:       mgr.cfg.Snapshot,
  			Coverage:       mgr.cfg.Cover,
-@@ -1151,10 +1645,36 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
+@@ -1151,10 +1647,36 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
  				defer mgr.mu.Unlock()
  				return !mgr.saturatedCalls[call]
  			},
@@ -11834,10 +12421,10 @@ index f2a0196..91628fd 100644
  
 diff --git a/syz-manager/syzpilot_guidance_test.go b/syz-manager/syzpilot_guidance_test.go
 new file mode 100644
-index 0000000..331b7dc
+index 0000000..0d4d8dd
 --- /dev/null
 +++ b/syz-manager/syzpilot_guidance_test.go
-@@ -0,0 +1,521 @@
+@@ -0,0 +1,547 @@
 +package main
 +
 +import (
@@ -11958,10 +12545,21 @@ index 0000000..331b7dc
 +	}
 +}
 +
-+func TestObservationOnlyControlRejectsGuidance(t *testing.T) {
-+	mgr := &Manager{cfg: &mgrconfig.Config{SyzPilot: mgrconfig.SyzPilotCfg{
++func TestValidateObservationCollectionWithStandaloneGuidance(t *testing.T) {
++	cfg := mgrconfig.SyzPilotCfg{
 +		ObserveTargetCoverage:   true,
 +		AllowStandaloneGuidance: true,
++		TargetPCs:               []string{"0x81234567"},
++		DumpDir:                 "/tmp/syzpilot-static-ablation",
++	}
++	if err := validateSyzPilotConfig(cfg); err != nil {
++		t.Fatalf("valid measured standalone-guidance configuration rejected: %v", err)
++	}
++}
++
++func TestObservationOnlyControlRejectsGuidance(t *testing.T) {
++	mgr := &Manager{cfg: &mgrconfig.Config{SyzPilot: mgrconfig.SyzPilotCfg{
++		ObserveTargetCoverage: true,
 +	}}}
 +	if _, err := mgr.acceptGuidance(&syzpilotlib.GuidancePayload{
 +		Version:        1,
@@ -11971,6 +12569,21 @@ index 0000000..331b7dc
 +	}
 +	if mgr.pendingGuidance != nil || mgr.guidance != nil {
 +		t.Fatal("rejected observation-only guidance changed manager state")
++	}
++}
++
++func TestObservationCollectionAllowsExplicitStandaloneGuidance(t *testing.T) {
++	mgr := &Manager{cfg: &mgrconfig.Config{SyzPilot: mgrconfig.SyzPilotCfg{
++		ObserveTargetCoverage:   true,
++		AllowStandaloneGuidance: true,
++	}}}
++	result, err := mgr.acceptGuidance(&syzpilotlib.GuidancePayload{
++		Version:        1,
++		SyscallWeights: map[string]float64{"openat": 1},
++	})
++	if err != nil || result.Status != "pending" || mgr.pendingGuidance == nil {
++		t.Fatalf("explicit standalone guidance = %+v, pending=%+v, err=%v",
++			result, mgr.pendingGuidance, err)
 +	}
 +}
 +

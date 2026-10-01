@@ -28,6 +28,12 @@ class PermanentBatchError(ValueError):
 class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
     """ML Training Data Receiver"""
 
+    # Pending requests are durable. A bounded backoff avoids repeatedly
+    # rescanning the same snapshot while GPUs are busy; the cap can delay the
+    # next training round by at most two minutes after a terminal response.
+    _OUTBOX_RETRY_INITIAL_SECONDS = 5
+    _OUTBOX_RETRY_MAX_SECONDS = 120
+
     def __init__(self, data_dir="./training_data", task_id="fuzzer_id@task_name@run_id",
                  controller_addr=None, api_token=None, warmup_seconds=0):
         self.task_id = task_id
@@ -54,7 +60,6 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
             'start_time': time.time(),
         }
         self.stats_lock = threading.Lock()
-        self.training_triggered = {}  # retained for dashboard compatibility
         self.training_outbox = None
         self.last_queued_samples = {}
         self.deferred_batch_end = {}
@@ -402,8 +407,9 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
             self.deferred_batch_end = {}
 
     def _outbox_loop(self):
+        retry_seconds = self._OUTBOX_RETRY_INITIAL_SECONDS
         while not self.outbox_stop.is_set():
-            self.outbox_wake.wait(5)
+            self.outbox_wake.wait(retry_seconds)
             self.outbox_wake.clear()
             if self.outbox_stop.is_set():
                 return
@@ -412,6 +418,15 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
                 self._drain_training_outbox()
             except Exception as error:
                 print(f"[DataReceiver] Training outbox loop error: {error}")
+            with self.trigger_lock:
+                request_pending = self.training_outbox is not None
+            if request_pending:
+                retry_seconds = min(
+                    retry_seconds * 2,
+                    self._OUTBOX_RETRY_MAX_SECONDS,
+                )
+            else:
+                retry_seconds = self._OUTBOX_RETRY_INITIAL_SECONDS
 
     def stop(self):
         self.outbox_stop.set()
@@ -713,7 +728,6 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
         if status == "queued":
             # Queued is not a commit: retain the outbox until the Controller
             # reports that this watermark was successfully trained.
-            self.training_triggered[actual_stage] = True
             return
         if status == "deferred":
             with self.trigger_lock:
@@ -764,7 +778,6 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
                     self.last_queued_samples.get(requested_stage, 0),
                     pending["total_samples"],
                 )
-            self.training_triggered[actual_stage] = True
             self.training_outbox = None
             self.deferred_batch_end.pop(actual_stage, None)
             self.deferred_batch_end.pop(pending["stage"], None)

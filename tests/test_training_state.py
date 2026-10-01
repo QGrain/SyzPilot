@@ -205,6 +205,30 @@ class TrainingStateTest(unittest.TestCase):
         )
         operator.scale_worker.assert_not_called()
 
+    def test_deployment_rejects_non_ready_workers_after_scaling(self):
+        instance = Controller()
+        operator = mock.Mock()
+        operator.model_dir = "/tmp/model-store"
+        operator.create_index2name.return_value = "/tmp/index_to_name.json"
+        operator.get_model_info.side_effect = [
+            {"workers": [{"status": "LOADING"}]},
+            {"workers": [{"status": "UNLOADING"}]},
+        ]
+        instance.torchserve_operator = operator
+        task = FuzzerTask(
+            task_id="fuzzer@task@1", task_name="task", run_id=1,
+            fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "no READY workers"):
+            instance._deploy_to_torchserve(
+                task, "model", "1", "/tmp/model.pt", 3, 1
+            )
+
+        operator.scale_worker.assert_called_once_with(
+            model_name="model", min_worker=1, sync=True
+        )
+
     def test_training_gpu_configuration_rejects_ambiguous_ids(self):
         with self.assertRaisesRegex(ValueError, "unique numeric"):
             controller_module.ControllerConfig(training_gpu_ids=("0", "0"))
@@ -331,8 +355,10 @@ class TrainingStateTest(unittest.TestCase):
                 defaults.first_train_min_steps,
                 defaults.first_train_patience,
             ),
-            (1000, 200, 200, 3),
+            (1000, 100, 200, 2),
         )
+        self.assertEqual(defaults.training_warmup_seconds, 0)
+        self.assertTrue(defaults.first_train_exit_on_promotion)
         self.assertEqual(
             (
                 defaults.continued_train_total_steps,
@@ -792,6 +818,25 @@ class TrainingStateTest(unittest.TestCase):
             self.assertEqual(instance._enqueue_training_waiter(second.task_id), 1)
             self.assertEqual(instance._enqueue_training_waiter(second.task_id), 0)
         self.assertNotIn(first.task_id, instance._training_wait_set)
+
+    def test_default_training_waiter_lease_survives_retry_backoff(self):
+        instance = Controller()
+        first = FuzzerTask(
+            task_id="first", task_name="first", run_id=1,
+            fuzzer_id="first", mode="direct", callback_addr="localhost:1",
+        )
+        second = FuzzerTask(
+            task_id="second", task_name="second", run_id=1,
+            fuzzer_id="second", mode="direct", callback_addr="localhost:2",
+        )
+        instance.global_tasks = {first.task_id: first, second.task_id: second}
+        self.assertGreater(instance._training_waiter_lease_seconds, 120)
+        with mock.patch.object(
+                controller_module.time, "monotonic", side_effect=(100, 221)):
+            self.assertEqual(instance._enqueue_training_waiter(first.task_id), 0)
+            self.assertEqual(instance._enqueue_training_waiter(second.task_id), 1)
+
+        self.assertEqual(list(instance._training_wait_queue), ["first", "second"])
 
     def test_training_fifo_allows_two_tasks_to_acquire_distinct_gpus(self):
         instance = Controller()
@@ -1411,6 +1456,68 @@ class TrainingStateTest(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertEqual(result, [True])
         kill.assert_called_once_with(process, process_group=True)
+
+    def test_unregister_does_not_block_same_loop_launch_cleanup(self):
+        instance = Controller()
+        task = FuzzerTask(
+            task_id="fuzzer@task@1", task_name="task", run_id=1,
+            fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
+            training_in_progress=True, active_training_id="training-1",
+        )
+        task.training_launch_done.clear()
+        instance.global_tasks[task.task_id] = task
+
+        async def scenario():
+            async def finish_launch_after_cancel():
+                while not task.training_cancel.is_set():
+                    await asyncio.sleep(0)
+                task.training_launch_done.set()
+
+            launch = asyncio.create_task(finish_launch_after_cancel())
+            response = await asyncio.wait_for(
+                instance.unregister(task.task_id), timeout=1
+            )
+            await launch
+            return response
+
+        with (
+            mock.patch.object(instance, "_release_port"),
+            mock.patch.object(instance, "_remove_ssh_entry"),
+        ):
+            response = asyncio.run(scenario())
+
+        self.assertEqual(response, {"status": "ok"})
+        self.assertNotIn(task.task_id, instance.global_tasks)
+        self.assertTrue(task.training_launch_done.is_set())
+        self.assertFalse(task.training_in_progress)
+
+    def test_unregister_offloads_auxiliary_process_cleanup(self):
+        instance = Controller()
+        task = FuzzerTask(
+            task_id="fuzzer@task@1", task_name="task", run_id=1,
+            fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
+        )
+        instance.global_tasks[task.task_id] = task
+        event_loop_thread = threading.get_ident()
+        cleanup_threads = []
+
+        def stop_auxiliary(_task):
+            cleanup_threads.append(threading.get_ident())
+            return True
+
+        with (
+            mock.patch.object(
+                instance, "_stop_task_auxiliary_processes",
+                side_effect=stop_auxiliary,
+            ),
+            mock.patch.object(instance, "_release_port"),
+            mock.patch.object(instance, "_remove_ssh_entry"),
+        ):
+            response = asyncio.run(instance.unregister(task.task_id))
+
+        self.assertEqual(response, {"status": "ok"})
+        self.assertEqual(len(cleanup_threads), 1)
+        self.assertNotEqual(cleanup_threads[0], event_loop_thread)
 
     def test_unregister_cancels_training_dataset_preflight(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2213,6 +2320,7 @@ class TrainingStateTest(unittest.TestCase):
             stage_index = command.index("--train_stage") + 1
             self.assertEqual(command[stage_index], "1")
             self.assertIn("--is_first_train", command)
+            self.assertIn("--exit_on_stage1_promotion", command)
             self.assertNotIn("--load_path", command)
             self.assertEqual(response["stage"], 1)
             self.assertEqual(task.training_round, 0)
@@ -2319,6 +2427,17 @@ class TrainingStateTest(unittest.TestCase):
             self.assertEqual(response["stage"], 2)
             self.assertEqual(set(map(int, excluded.split(","))), {1, 2})
             self.assertEqual(test_indices, "3")
+            self.assertIn("--load_path", command)
+            self.assertIn("--is_first_train", command)
+            self.assertNotIn("--exit_on_stage1_promotion", command)
+            self.assertEqual(
+                command[command.index("--total_steps") + 1],
+                str(controller_module.config.first_train_total_steps),
+            )
+            self.assertEqual(
+                command[command.index("--test_interval") + 1],
+                str(controller_module.config.first_train_test_interval),
+            )
 
             task.trainer_log_fh.close()
             task.trainer_log_fh = None
@@ -2714,19 +2833,19 @@ class TrainingStateTest(unittest.TestCase):
             self.assertEqual(task.last_trained_batch, 7)
             self.assertEqual(task.last_successful_checkpoint, str(checkpoint))
             self.assertEqual(task.last_successful_stage, 1)
-            self.assertEqual(task.model_name, "reach_filter_test_r1")
+            self.assertEqual(task.model_name, "reach_filter_test_v1")
             self.assertEqual(task.model_version, "1")
             self.assertEqual(task.deployment_version, 1)
             self.assertEqual(task.pending_model_name, "")
             self.assertFalse(task.training_in_progress)
             export.assert_called_once_with(
-                task, checkpoint, 3, 1, "reach_filter_test_r1", "0"
+                task, checkpoint, 3, 1, "reach_filter_test_v1", "0"
             )
             release_gpu.assert_called_once_with("0")
             deploy.assert_called_once_with(
-                task, "reach_filter_test_r1", "1", "model.pt", 3, 1
+                task, "reach_filter_test_v1", "1", "model.pt", 3, 1
             )
-            notify.assert_called_once_with(task, "reach_filter_test_r1", "1")
+            notify.assert_called_once_with(task, "reach_filter_test_v1", "1")
 
     def test_monitor_rejects_low_quality_candidate_before_export(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2906,16 +3025,299 @@ class TrainingStateTest(unittest.TestCase):
                 )
 
             export.assert_called_once_with(
-                task, checkpoint, 3, 1, "reach_filter_test_r1", "0"
+                task, checkpoint, 3, 1, "reach_filter_test_v1", "0"
             )
 
             self.assertEqual(task.training_round, 0)
             self.assertEqual(task.last_trained_batch, 0)
             self.assertEqual(task.last_successful_stage, 0)
             self.assertEqual(task.model_name, "")
-            self.assertEqual(task.pending_model_name, "reach_filter_test_r1")
+            self.assertEqual(task.pending_model_name, "reach_filter_test_v1")
             self.assertEqual(task.pending_batch, 7)
             unregister.assert_not_called()
+
+    def test_deployment_failure_keeps_exported_candidate_pending(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_dir = Path(temp_dir)
+            checkpoint = model_dir / "step-200.pt"
+            checkpoint.write_bytes(b"best")
+            manifest = {
+                "schema_version": 1,
+                "curriculum_schema": 2,
+                "train_stage": 1,
+                "num_classes": 3,
+                "best_checkpoint": str(checkpoint),
+                "checkpoint_sha256": hashlib.sha256(b"best").hexdigest(),
+                "best_step": 200,
+                "best_eval_loss": 0.3,
+                "seen_train_batch_indices": [1, 2, 3, 4, 5, 6],
+                **passing_stage_one_promotion_metrics(),
+            }
+            (model_dir / "training_manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            instance = Controller()
+            task = FuzzerTask(
+                task_id="fuzzer@task@1", task_name="task", run_id=1,
+                fuzzer_id="fuzzer", mode="direct",
+                callback_addr="localhost:1",
+                model_name_prefix="reach_filter_test",
+                training_in_progress=True,
+                active_training_id="training-1",
+                training_gpu="0", training_port=29999,
+                trainer_proc=CompletedProcess(),
+            )
+            instance.global_tasks[task.task_id] = task
+            with (
+                mock.patch.object(instance, "_release_training_gpu"),
+                mock.patch.object(instance, "_release_port"),
+                mock.patch.object(instance, "_persist_training_state") as persist,
+                mock.patch.object(
+                    instance, "_export_torchscript", return_value="model.pt"
+                ),
+                mock.patch.object(
+                    instance, "_deploy_to_torchserve",
+                    side_effect=RuntimeError("worker initialization failed"),
+                ),
+                mock.patch.object(
+                    instance, "_notify_fuzzer_model_ready"
+                ) as notify,
+            ):
+                instance._monitor_training_and_deploy(
+                    task, "training-1", task.trainer_proc, 1, 3,
+                    str(model_dir), 29999, "0", 1, 7,
+                )
+
+            persist.assert_called_once_with(task)
+            notify.assert_not_called()
+            self.assertFalse(task.training_in_progress)
+            self.assertEqual(task.training_round, 0)
+            self.assertEqual(task.last_trained_batch, 0)
+            self.assertEqual(task.pending_model_name, "reach_filter_test_v1")
+            self.assertEqual(task.pending_torchscript, "model.pt")
+            self.assertEqual(task.pending_batch, 7)
+
+    def test_pending_persist_failure_rolls_back_before_deployment(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_dir = Path(temp_dir)
+            checkpoint = model_dir / "step-200.pt"
+            checkpoint.write_bytes(b"best")
+            manifest = {
+                "schema_version": 1,
+                "curriculum_schema": 2,
+                "train_stage": 1,
+                "num_classes": 3,
+                "best_checkpoint": str(checkpoint),
+                "checkpoint_sha256": hashlib.sha256(b"best").hexdigest(),
+                "best_step": 200,
+                "best_eval_loss": 0.3,
+                "seen_train_batch_indices": [1, 2, 3, 4, 5, 6],
+                **passing_stage_one_promotion_metrics(),
+            }
+            (model_dir / "training_manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            instance = Controller()
+            task = FuzzerTask(
+                task_id="fuzzer@task@1", task_name="task", run_id=1,
+                fuzzer_id="fuzzer", mode="direct",
+                callback_addr="localhost:1",
+                model_name_prefix="reach_filter_test",
+                model_name="active-model",
+                model_version="6",
+                training_round=6,
+                training_in_progress=True,
+                active_training_id="training-1",
+                training_gpu="0", training_port=29999,
+                trainer_proc=CompletedProcess(),
+                last_trained_batch=5,
+                last_successful_checkpoint="active.pt",
+                last_successful_stage=1,
+                last_training_manifest="active.json",
+                seen_training_batches=[1, 2, 4, 5],
+                deployment_version=6,
+                pending_model_name="previous-candidate",
+                pending_model_version="7",
+                pending_checkpoint="previous.pt",
+                pending_manifest="previous.json",
+                pending_torchscript="previous.ts",
+                pending_stage=2,
+                pending_batch=6,
+                pending_training_round=7,
+                pending_num_classes=4,
+                pending_seen_training_batches=[1, 2, 3],
+                evaluation_watermarks={
+                    2: {"batch_end": 4, "accepted": False},
+                },
+            )
+            instance.global_tasks[task.task_id] = task
+            calls = []
+
+            def fail_persist(_task):
+                calls.append("persist")
+                raise OSError("state directory is read-only")
+
+            def record_deploy(*_args, **_kwargs):
+                calls.append("deploy")
+
+            with (
+                mock.patch.object(instance, "_release_training_gpu"),
+                mock.patch.object(instance, "_release_port"),
+                mock.patch.object(
+                    instance, "_persist_training_state",
+                    side_effect=fail_persist,
+                ),
+                mock.patch.object(
+                    instance, "_export_torchscript", return_value="model.pt"
+                ),
+                mock.patch.object(
+                    instance, "_deploy_to_torchserve",
+                    side_effect=record_deploy,
+                ) as deploy,
+                mock.patch.object(
+                    instance, "_notify_fuzzer_model_ready"
+                ) as notify,
+            ):
+                instance._monitor_training_and_deploy(
+                    task, "training-1", task.trainer_proc, 1, 3,
+                    str(model_dir), 29999, "0", 1, 7,
+                )
+
+            self.assertEqual(calls, ["persist"])
+            deploy.assert_not_called()
+            notify.assert_not_called()
+            self.assertEqual(task.model_name, "active-model")
+            self.assertEqual(task.model_version, "6")
+            self.assertEqual(task.deployment_version, 6)
+            self.assertEqual(task.training_round, 6)
+            self.assertEqual(task.last_trained_batch, 5)
+            self.assertEqual(task.last_successful_checkpoint, "active.pt")
+            self.assertEqual(task.last_successful_stage, 1)
+            self.assertEqual(task.last_training_manifest, "active.json")
+            self.assertEqual(task.seen_training_batches, [1, 2, 4, 5])
+            self.assertEqual(
+                task.evaluation_watermarks,
+                {2: {"batch_end": 4, "accepted": False}},
+            )
+            self.assertEqual(task.pending_model_name, "previous-candidate")
+            self.assertEqual(task.pending_model_version, "7")
+            self.assertEqual(task.pending_checkpoint, "previous.pt")
+            self.assertEqual(task.pending_manifest, "previous.json")
+            self.assertEqual(task.pending_torchscript, "previous.ts")
+            self.assertEqual(task.pending_stage, 2)
+            self.assertEqual(task.pending_batch, 6)
+            self.assertEqual(task.pending_training_round, 7)
+            self.assertEqual(task.pending_num_classes, 4)
+            self.assertEqual(task.pending_seen_training_batches, [1, 2, 3])
+
+    def test_pending_model_retry_redeploys_when_worker_is_missing(self):
+        instance = Controller()
+        operator = mock.Mock()
+        operator.get_model_info.return_value = {"workers": []}
+        instance.torchserve_operator = operator
+        task = FuzzerTask(
+            task_id="fuzzer@task@1", task_name="task", run_id=1,
+            fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
+        )
+
+        with mock.patch.object(instance, "_deploy_to_torchserve") as deploy:
+            instance._ensure_pending_model_deployed(
+                task, "candidate", "1", "candidate.pt", 3, 1
+            )
+
+        operator.unregister_model.assert_called_once_with("candidate", "1")
+        deploy.assert_called_once_with(
+            task, "candidate", "1", "candidate.pt", 3, 1
+        )
+
+    def test_pending_model_retry_reuses_ready_worker(self):
+        instance = Controller()
+        operator = mock.Mock()
+        operator.get_model_info.return_value = {
+            "workers": [{"status": "READY"}],
+        }
+        instance.torchserve_operator = operator
+        task = FuzzerTask(
+            task_id="fuzzer@task@1", task_name="task", run_id=1,
+            fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
+        )
+
+        with mock.patch.object(instance, "_deploy_to_torchserve") as deploy:
+            instance._ensure_pending_model_deployed(
+                task, "candidate", "1", "candidate.pt", 3, 1
+            )
+
+        operator.unregister_model.assert_not_called()
+        deploy.assert_not_called()
+
+    def test_pending_model_retry_deploys_only_after_explicit_not_found(self):
+        instance = Controller()
+        operator = mock.Mock()
+        not_found = RuntimeError("not found")
+        not_found.response = mock.Mock(status_code=404)
+        operator.get_model_info.side_effect = not_found
+        instance.torchserve_operator = operator
+        task = FuzzerTask(
+            task_id="fuzzer@task@1", task_name="task", run_id=1,
+            fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
+        )
+
+        with mock.patch.object(instance, "_deploy_to_torchserve") as deploy:
+            instance._ensure_pending_model_deployed(
+                task, "candidate", "1", "candidate.pt", 3, 1
+            )
+
+        operator.unregister_model.assert_not_called()
+        deploy.assert_called_once_with(
+            task, "candidate", "1", "candidate.pt", 3, 1
+        )
+
+    def test_pending_model_retry_stops_on_query_transport_failure(self):
+        instance = Controller()
+        operator = mock.Mock()
+        operator.get_model_info.side_effect = RuntimeError("management timeout")
+        instance.torchserve_operator = operator
+        task = FuzzerTask(
+            task_id="fuzzer@task@1", task_name="task", run_id=1,
+            fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
+        )
+
+        with (
+            mock.patch.object(instance, "_deploy_to_torchserve") as deploy,
+            self.assertRaisesRegex(RuntimeError, "failed to query"),
+        ):
+            instance._ensure_pending_model_deployed(
+                task, "candidate", "1", "candidate.pt", 3, 1
+            )
+
+        operator.unregister_model.assert_not_called()
+        deploy.assert_not_called()
+
+    def test_pending_model_retry_stops_when_partial_unregister_fails(self):
+        instance = Controller()
+        operator = mock.Mock()
+        operator.get_model_info.return_value = {
+            "workers": [{"status": "LOADING"}],
+        }
+        operator.unregister_model.side_effect = RuntimeError(
+            "management timeout"
+        )
+        instance.torchserve_operator = operator
+        task = FuzzerTask(
+            task_id="fuzzer@task@1", task_name="task", run_id=1,
+            fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
+        )
+
+        with (
+            mock.patch.object(instance, "_deploy_to_torchserve") as deploy,
+            self.assertRaisesRegex(RuntimeError, "management timeout"),
+        ):
+            instance._ensure_pending_model_deployed(
+                task, "candidate", "1", "candidate.pt", 3, 1
+            )
+
+        operator.unregister_model.assert_called_once_with("candidate", "1")
+        deploy.assert_not_called()
 
     def test_export_failure_releases_reserved_training_gpu(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2970,7 +3372,7 @@ class TrainingStateTest(unittest.TestCase):
                 )
 
             export.assert_called_once_with(
-                task, checkpoint, 3, 1, "reach_filter_test_r1", "2"
+                task, checkpoint, 3, 1, "reach_filter_test_v1", "2"
             )
             release_gpu.assert_called_once_with("2")
             release_port.assert_called_once_with(
@@ -3140,12 +3542,18 @@ class TrainingStateTest(unittest.TestCase):
             )
             instance.global_tasks[task.task_id] = task
             with (
+                mock.patch.object(
+                    instance, "_ensure_pending_model_deployed"
+                ) as ensure_deployed,
                 mock.patch.object(instance, "_notify_fuzzer_model_ready"),
                 mock.patch.object(instance, "_persist_training_state"),
                 mock.patch.object(instance, "_run_guidance_pipeline") as guidance,
             ):
                 instance._retry_pending_deployment(task, "retry-1")
 
+            ensure_deployed.assert_called_once_with(
+                task, "candidate", "1", str(model_dir / "candidate.pt"), 3, 1
+            )
             guidance.assert_called_once_with(
                 task, 1, 3, str(model_dir), str(checkpoint_path)
             )
@@ -3582,6 +3990,50 @@ class TrainingStateTest(unittest.TestCase):
                 resolve_guidance_context(payload),
                 ("payload-target", "payload-graph", "payload-report"),
             )
+
+    def test_predictor_only_registration_skips_post_model_guidance(self):
+        instance = Controller()
+        payload = RegistrationPayload(
+            uuid="fuzzer", task_name="predictor-only", mode="direct",
+            host_ip="127.0.0.1", http_port=1234,
+            target_os="linux", target_arch="amd64",
+            target_revision="target-r1", producer_revision="fuzzer-r1",
+            descriptions_mode="manual", enable_online_guidance=False,
+        )
+        with (
+            mock.patch.object(
+                controller_module, "start_receiver", return_value=FakeProcess()
+            ),
+            mock.patch.object(instance, "_alloc_port", return_value=31001),
+            mock.patch.object(instance, "_get_run_id", return_value=1),
+            mock.patch.object(instance, "_release_run_id_reservation"),
+            mock.patch.object(instance, "_load_training_state"),
+        ):
+            response = asyncio.run(instance.register(payload))
+
+        task = instance.global_tasks[response.task_id]
+        self.assertFalse(task.enable_online_guidance)
+        with mock.patch.object(
+            instance, "_run_guidance_pipeline_locked"
+        ) as pipeline:
+            instance._run_guidance_pipeline(
+                task, stage=1, num_classes=3,
+                save_dir="model", ckpt_path="checkpoint.pt",
+            )
+        pipeline.assert_not_called()
+        detail = asyncio.run(instance.get_task_detail(task.task_id))
+        self.assertFalse(detail["guidance"]["online_updates_enabled"])
+        instance.global_tasks.clear()
+
+    def test_online_guidance_registration_default_is_enabled(self):
+        payload = RegistrationPayload(
+            uuid="fuzzer", task_name="full", mode="direct",
+            host_ip="127.0.0.1", http_port=1234,
+            target_os="linux", target_arch="amd64",
+            target_revision="target-r1", producer_revision="fuzzer-r1",
+            descriptions_mode="manual",
+        )
+        self.assertTrue(payload.enable_online_guidance)
 
     def test_guidance_context_accepts_only_bounded_trusted_paths(self):
         with tempfile.TemporaryDirectory() as temp_dir:

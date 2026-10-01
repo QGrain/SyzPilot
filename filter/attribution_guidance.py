@@ -32,9 +32,72 @@ from model_v2 import TraceClassifierV2
 from model_v2 import TraceClassifierServingWrapper
 from common.curriculum import curriculum_class
 from dataset_v2 import load_canonical_records
-from attribution_wrapped import (
-    split_invocations, replace_tokens, get_syscall_attr, merge_syscall_attr
-)
+
+
+def replace_tokens(tokens):
+    """Normalize tokenizer whitespace and newline markers in place."""
+    for index, token in enumerate(tokens):
+        tokens[index] = token.replace(
+            "Ġ", " "
+        ).replace("Ċ", "\n").replace("<|endoftext|>", "")
+
+
+def split_invocations(tokens, token_attributions):
+    """Group token attribution scores by syz-program invocation."""
+    if len(tokens) != len(token_attributions):
+        raise ValueError("tokens and attributions must have equal length")
+    grouped_tokens = []
+    grouped_attributions = []
+    current_tokens = []
+    current_attributions = []
+    for token, attribution in zip(tokens, token_attributions):
+        current_tokens.append(token)
+        current_attributions.append(attribution)
+        if "\n" in token:
+            grouped_tokens.append(current_tokens)
+            grouped_attributions.append(current_attributions)
+            current_tokens = []
+            current_attributions = []
+    if current_tokens:
+        grouped_tokens.append(current_tokens)
+        grouped_attributions.append(current_attributions)
+    return grouped_tokens, grouped_attributions
+
+
+def get_syscall_attr(tokenizer, invocations_tokens, invocations_attrs):
+    """Aggregate token attribution scores over syscall-name subtokens."""
+    if len(invocations_tokens) != len(invocations_attrs):
+        raise ValueError("invocations and attributions must have equal length")
+    syscall_attr = {}
+    for invocation_tokens, invocation_attrs in zip(
+            invocations_tokens, invocations_attrs):
+        invocation = "".join(invocation_tokens)
+        if "(" not in invocation:
+            continue
+        syscall = invocation.split("(", 1)[0].strip().split(" ")[-1].strip()
+        if not syscall:
+            continue
+        syscall_attr.setdefault(syscall, 0)
+        syscall_tokens = tokenizer.tokenize(syscall)
+        width = len(syscall_tokens)
+        for offset in range(len(invocation_tokens) - width + 1):
+            if all(
+                    syscall_tokens[index] ==
+                    invocation_tokens[offset + index].strip()
+                    for index in range(width)):
+                syscall_attr[syscall] += sum(
+                    invocation_attrs[offset:offset + width]
+                )
+                break
+    return syscall_attr
+
+
+def merge_syscall_attr(total_syscall_attr, new_syscall_attr):
+    """Merge one sample's syscall attribution into an aggregate mapping."""
+    for syscall, attribution in new_syscall_attr.items():
+        total_syscall_attr[syscall] = (
+            total_syscall_attr.get(syscall, 0) + attribution
+        )
 
 
 class AttributionProbabilityWrapper(nn.Module):

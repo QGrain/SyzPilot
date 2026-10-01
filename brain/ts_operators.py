@@ -17,6 +17,7 @@ except ImportError:  # Script execution keeps brain/ as the import root.
 
 TERM_GRACE_SECONDS = 10
 KILL_GRACE_SECONDS = 5
+SYNCHRONOUS_MODEL_LOAD_TIMEOUT_SECONDS = 120
 
 
 class ServeOperator:
@@ -374,8 +375,11 @@ class ServeOperator:
             "max_batch_delay": max_batch_delay,
             "synchronous": sync
         }
+        request_timeout = (
+            SYNCHRONOUS_MODEL_LOAD_TIMEOUT_SECONDS if sync else 10
+        )
         response = api_request('http://localhost', self.management_port, '/models',
-                               params, headers, "POST")
+                               params, headers, "POST", request_timeout)
         print(f'[ServeOperator][INFO] register {model_name} done in {time()-t0:.4f}s')
         return response
 
@@ -386,10 +390,13 @@ class ServeOperator:
         else:
             mgr_key, _, _ = self.__read_key_file()
             headers = {"Authorization": f"Bearer {mgr_key}"}
+        request_timeout = (
+            SYNCHRONOUS_MODEL_LOAD_TIMEOUT_SECONDS if sync else 10
+        )
         response = api_request('http://localhost', self.management_port,
                                f'/models/{model_name}',
                                {"min_worker": min_worker, "synchronous": sync},
-                               headers, "PUT")
+                               headers, "PUT", request_timeout)
         print(f'[ServeOperator][INFO] scale_worker min_worker={min_worker} done for {model_name} in {time()-t0:.4f}s')
         return response
 
@@ -490,7 +497,3 @@ class ServeOperator:
         api_request('http://localhost', self.management_port, f'/models/{self.model_name}',
                     params, headers,
                     "PUT")
-
-class TrainOperator:
-    def __init__(self):
-        pass

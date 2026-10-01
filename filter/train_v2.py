@@ -45,6 +45,11 @@ from common.curriculum import (
     curriculum_class,
     curriculum_output_classes,
 )
+from brain.model_promotion import (
+    PromotionThresholds,
+    decide_stage1_bootstrap,
+    decide_stage2_bootstrap,
+)
 
 
 def effective_eval_steps(num_records, eval_batch_size, requested_steps):
@@ -52,6 +57,52 @@ def effective_eval_steps(num_records, eval_batch_size, requested_steps):
     if num_records <= 0 or eval_batch_size <= 0 or requested_steps <= 0:
         raise ValueError("evaluation sizes and step limit must be positive")
     return min(requested_steps, math.ceil(num_records / eval_batch_size))
+
+
+def should_evaluate_step(step, min_steps, test_interval, total_steps):
+    """Evaluate on schedule and always evaluate the configured final step."""
+    return (
+        step == total_steps or
+        (step >= min_steps and (step - min_steps) % test_interval == 0)
+    )
+
+
+def require_single_process(accelerator):
+    """Reject unsupported distributed training before model allocation."""
+    if accelerator.num_processes != 1:
+        raise RuntimeError("TrainerV2 supports exactly one Accelerate process")
+
+
+def checkpoint_selection(
+        stage, metrics, *, num_classes=None, thresholds=None):
+    """Return the validation objective and a larger-is-better selection key."""
+    eval_loss = float(metrics["eval_loss"])
+    if stage == 1:
+        metric_name = "eval_loss"
+        metric_value = eval_loss
+        selection_key = (-eval_loss,)
+    elif stage == 2:
+        metric_name = "macro_f1"
+        metric_value = float(metrics["macro_f1"])
+        gate_priority = ()
+        if thresholds is not None:
+            if num_classes is None:
+                raise ValueError(
+                    "num_classes is required for Stage-2 gate selection"
+                )
+            gate_priority = (int(decide_stage2_bootstrap(
+                metrics, num_classes, thresholds
+            )["accepted"]),)
+        # Exact-class loss is dominated by common classes. Macro-F1 matches
+        # the promotion objective; loss breaks ties deterministically. A
+        # checkpoint that clears all absolute production gates outranks one
+        # that cannot be deployed on the same evidence.
+        selection_key = gate_priority + (metric_value, -eval_loss)
+    else:
+        raise ValueError(f"invalid curriculum stage: {stage}")
+    if any(not math.isfinite(value) for value in selection_key):
+        raise ValueError("checkpoint selection metrics must be finite")
+    return metric_name, metric_value, selection_key
 
 
 def binary_serving_logits(raw_logits, serving_stage):
@@ -73,7 +124,7 @@ def binary_serving_logits(raw_logits, serving_stage):
 def write_training_manifest(save_dir, *, best_checkpoint, best_step,
                             best_eval_loss, final_step, config,
                             best_metrics=None, baseline_metrics=None):
-    """Atomically publish the checkpoint selected by validation loss."""
+    """Atomically publish the checkpoint selected by its stage objective."""
     if not math.isfinite(float(best_eval_loss)):
         raise ValueError("best_eval_loss must be finite")
     checkpoint_path = Path(best_checkpoint).resolve()
@@ -91,6 +142,45 @@ def write_training_manifest(save_dir, *, best_checkpoint, best_step,
             re.fullmatch(r"[0-9a-f]{64}", validation_signature_sha256) is None):
         raise ValueError("validation signature fingerprint is invalid")
 
+    if int(config["train_stage"]) == 2 and best_metrics is None:
+        raise ValueError("Stage-2 manifest requires checkpoint metrics")
+    selection_metrics = dict(best_metrics or {})
+    selection_metrics.setdefault("eval_loss", best_eval_loss)
+    selection_metrics.setdefault("macro_f1", 0.0)
+    selection_thresholds = PromotionThresholds(
+        majority_margin=float(config.get("promotion_majority_margin", 0.05)),
+        stage1_min_support=int(config.get(
+            "promotion_stage1_min_support", 32
+        )),
+        stage1_min_macro_f1=float(config.get(
+            "promotion_stage1_min_macro_f1", 0.75
+        )),
+        stage1_min_recall=float(config.get(
+            "promotion_stage1_min_recall", 0.75
+        )),
+        stage2_min_support=int(config.get(
+            "promotion_stage2_min_support", 16
+        )),
+        stage2_min_macro_f1=float(config.get(
+            "promotion_stage2_min_macro_f1", 0.60
+        )),
+        stage2_min_unreachable_recall=float(config.get(
+            "promotion_stage2_min_unreachable_recall", 0.75
+        )),
+        stage2_min_reached_recall=float(config.get(
+            "promotion_stage2_min_reached_recall", 0.40
+        )),
+        stage2_min_final_recall=float(config.get(
+            "promotion_stage2_min_final_recall", 0.50
+        )),
+    )
+    selection_metric, selection_value, selection_key = checkpoint_selection(
+        int(config["train_stage"]), selection_metrics,
+        num_classes=int(config["num_classes"]),
+        thresholds=(
+            selection_thresholds if int(config["train_stage"]) == 2 else None
+        ),
+    )
     manifest = {
         "schema_version": 1,
         "curriculum_schema": CURRICULUM_SCHEMA_VERSION,
@@ -98,6 +188,11 @@ def write_training_manifest(save_dir, *, best_checkpoint, best_step,
         "checkpoint_sha256": digest.hexdigest(),
         "best_step": int(best_step),
         "best_eval_loss": float(best_eval_loss),
+        "checkpoint_selection_metric": selection_metric,
+        "checkpoint_selection_value": selection_value,
+        "checkpoint_selection_gate_passed": (
+            bool(selection_key[0]) if int(config["train_stage"]) == 2 else None
+        ),
         "final_step": int(final_step),
         "train_stage": int(config["train_stage"]),
         "num_classes": int(config["num_classes"]),
@@ -114,6 +209,7 @@ def write_training_manifest(save_dir, *, best_checkpoint, best_step,
         "test_interval": int(config["test_interval"]),
         "min_steps": int(config["min_steps"]),
         "patience": int(config["patience"]),
+        "stop_reason": str(config.get("stop_reason", "total_steps")),
         "num_warmup_steps": int(config["num_warmup_steps"]),
         "assigned_physical_gpu": str(config.get(
             "assigned_physical_gpu", ""
@@ -405,6 +501,7 @@ class TrainerV2:
                     }
                 },
             )
+        require_single_process(self.accelerator)
         self.config["mixed_precision"] = self.accelerator.mixed_precision
         if self.accelerator.device.type == "cuda":
             # Include model construction, checkpoint restore, dataloaders, and
@@ -754,8 +851,12 @@ class TrainerV2:
         # Early stopping state
         best_eval_loss = float('inf')
         best_eval_metrics = None
+        best_selection_key = None
+        best_selection_metric = None
+        best_selection_value = None
         patience_counter = 0
         best_step = 0
+        stop_reason = "total_steps"
 
         train_iterator = iter(self.train_dl)
         prog_bar = tqdm(
@@ -803,7 +904,8 @@ class TrainerV2:
             )
             prog_bar.update(1)
 
-            if step % test_interval == 0:
+            if should_evaluate_step(
+                    step, min_steps, test_interval, total_step):
                 eval_acc, current_time, eval_info = self.test()
                 eval_loss = eval_info["eval_loss"]
                 if not math.isfinite(eval_loss):
@@ -826,20 +928,101 @@ class TrainerV2:
                     runtime_log[step] = to_log
                     self.accelerator.log(to_log, step)
 
-                    # Early stopping: eval_loss lower is better
-                    if eval_loss < best_eval_loss:
+                    bootstrap_decision = None
+                    if (self.config.get("exit_on_stage1_promotion") and
+                            self.config.get("is_first_train") and
+                            self.config["train_stage"] == 1):
+                        bootstrap_decision = decide_stage1_bootstrap(
+                            eval_info,
+                            thresholds=PromotionThresholds(
+                                majority_margin=self.config[
+                                    "promotion_majority_margin"
+                                ],
+                                stage1_min_support=self.config[
+                                    "promotion_stage1_min_support"
+                                ],
+                                stage1_min_macro_f1=self.config[
+                                    "promotion_stage1_min_macro_f1"
+                                ],
+                                stage1_min_recall=self.config[
+                                    "promotion_stage1_min_recall"
+                                ],
+                            ),
+                        )
+                    if bootstrap_decision and bootstrap_decision["accepted"]:
+                        best_eval_loss = eval_loss
+                        best_step = step
+                        self.best_step = step
+                        best_eval_metrics = dict(eval_info)
+                        (best_selection_metric, best_selection_value,
+                         best_selection_key) = checkpoint_selection(
+                            self.config["train_stage"], eval_info
+                        )
+                        self.save(step)
+                        stop_reason = "first_promotion_qualified_checkpoint"
+                        self.accelerator.print(
+                            "Stopping at first promotion-qualified "
+                            f"checkpoint (step={step})"
+                        )
+                        break
+
+                    # Fallback early stopping follows the current stage's
+                    # deployment objective.
+                    selection_metric, selection_value, selection_key = (
+                        checkpoint_selection(
+                            self.config["train_stage"], eval_info,
+                            num_classes=self.config["num_classes"],
+                            thresholds=PromotionThresholds(
+                                majority_margin=self.config[
+                                    "promotion_majority_margin"
+                                ],
+                                stage1_min_support=self.config[
+                                    "promotion_stage1_min_support"
+                                ],
+                                stage1_min_macro_f1=self.config[
+                                    "promotion_stage1_min_macro_f1"
+                                ],
+                                stage1_min_recall=self.config[
+                                    "promotion_stage1_min_recall"
+                                ],
+                                stage2_min_support=self.config[
+                                    "promotion_stage2_min_support"
+                                ],
+                                stage2_min_macro_f1=self.config[
+                                    "promotion_stage2_min_macro_f1"
+                                ],
+                                stage2_min_unreachable_recall=self.config[
+                                    "promotion_stage2_min_unreachable_recall"
+                                ],
+                                stage2_min_reached_recall=self.config[
+                                    "promotion_stage2_min_reached_recall"
+                                ],
+                                stage2_min_final_recall=self.config[
+                                    "promotion_stage2_min_final_recall"
+                                ],
+                            ) if self.config["train_stage"] == 2 else None,
+                        )
+                    )
+                    if (best_selection_key is None or
+                            selection_key > best_selection_key):
                         best_eval_loss = eval_loss
                         patience_counter = 0
                         best_step = step
                         self.best_step = step
                         best_eval_metrics = dict(eval_info)
+                        best_selection_key = selection_key
+                        best_selection_metric = selection_metric
+                        best_selection_value = selection_value
                         self.save(step)  # Save best model
                     elif step >= min_steps:
                         patience_counter += 1
                         if patience_counter >= patience:
+                            stop_reason = "patience_exhausted"
                             self.accelerator.print(
                                 f"Early stopping at step {step} (best at step {best_step}, "
-                                f"eval_loss={best_eval_loss:0.4f}, patience={patience})"
+                                f"{best_selection_metric}="
+                                f"{best_selection_value:0.4f}, "
+                                f"patience={patience})"
                             )
                             break
 
@@ -854,6 +1037,7 @@ class TrainerV2:
             self.save(step)
 
         if self.accelerator.is_main_process:
+            self.config["stop_reason"] = stop_reason
             if self.accelerator.device.type == "cuda":
                 torch.cuda.synchronize(self.accelerator.device)
                 self.config["cuda_peak_allocated_bytes"] = (
@@ -869,6 +1053,12 @@ class TrainerV2:
             ).ru_maxrss
             self.config["train_token_cache"] = self.train_collator.cache_info()
             self.config["test_token_cache"] = self.test_collator.cache_info()
+            self.config["checkpoint_selection_metric"] = (
+                best_selection_metric
+            )
+            self.config["checkpoint_selection_value"] = (
+                best_selection_value
+            )
             best_checkpoint = self.ckpt_list.get(best_step)
             if best_checkpoint is None or not best_checkpoint.is_file():
                 raise RuntimeError(f"best checkpoint for step {best_step} is missing")
@@ -934,7 +1124,32 @@ if __name__ == '__main__':
     # Adaptive early stopping
     parser.add_argument('--min_steps', type=int, default=200, help='Minimum training steps before early stopping')
     parser.add_argument('--patience', type=int, default=3, help='Stop after N consecutive evals without improvement')
-    parser.add_argument('--is_first_train', action='store_true', help='First training (from scratch) vs continued training')
+    parser.add_argument(
+        '--is_first_train', action='store_true',
+        help='Use the first optimization profile for this stage objective',
+    )
+    parser.add_argument(
+        '--exit_on_stage1_promotion', action='store_true',
+        help=(
+            'Stop the first round at the first checkpoint that passes the '
+            'Stage-1 promotion gate'
+        ),
+    )
+    parser.add_argument('--promotion_majority_margin', type=float, default=0.05)
+    parser.add_argument('--promotion_stage1_min_support', type=int, default=32)
+    parser.add_argument('--promotion_stage1_min_macro_f1', type=float, default=0.75)
+    parser.add_argument('--promotion_stage1_min_recall', type=float, default=0.75)
+    parser.add_argument('--promotion_stage2_min_support', type=int, default=16)
+    parser.add_argument('--promotion_stage2_min_macro_f1', type=float, default=0.60)
+    parser.add_argument(
+        '--promotion_stage2_min_unreachable_recall', type=float, default=0.75
+    )
+    parser.add_argument(
+        '--promotion_stage2_min_reached_recall', type=float, default=0.40
+    )
+    parser.add_argument(
+        '--promotion_stage2_min_final_recall', type=float, default=0.50
+    )
 
     # parser.add_argument('--trainset_rate', type=float, default=0.9)
     # parser.add_argument('--pos_weight', type=float, nargs='+', default=None)
