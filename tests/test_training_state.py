@@ -3999,6 +3999,8 @@ class TrainingStateTest(unittest.TestCase):
             target_os="linux", target_arch="amd64",
             target_revision="target-r1", producer_revision="fuzzer-r1",
             descriptions_mode="manual", enable_online_guidance=False,
+            enable_sequence_guidance=False,
+            enable_attribution_guidance=True,
         )
         with (
             mock.patch.object(
@@ -4013,6 +4015,8 @@ class TrainingStateTest(unittest.TestCase):
 
         task = instance.global_tasks[response.task_id]
         self.assertFalse(task.enable_online_guidance)
+        self.assertFalse(task.enable_sequence_guidance)
+        self.assertTrue(task.enable_attribution_guidance)
         with mock.patch.object(
             instance, "_run_guidance_pipeline_locked"
         ) as pipeline:
@@ -4023,6 +4027,10 @@ class TrainingStateTest(unittest.TestCase):
         pipeline.assert_not_called()
         detail = asyncio.run(instance.get_task_detail(task.task_id))
         self.assertFalse(detail["guidance"]["online_updates_enabled"])
+        self.assertFalse(detail["guidance"]["sequence_updates_enabled"])
+        self.assertFalse(detail["guidance"]["attribution_updates_enabled"])
+        self.assertFalse(detail["guidance"]["configured_sequence_updates"])
+        self.assertTrue(detail["guidance"]["configured_attribution_updates"])
         instance.global_tasks.clear()
 
     def test_online_guidance_registration_default_is_enabled(self):
@@ -4034,6 +4042,88 @@ class TrainingStateTest(unittest.TestCase):
             descriptions_mode="manual",
         )
         self.assertTrue(payload.enable_online_guidance)
+        self.assertTrue(payload.enable_sequence_guidance)
+        self.assertTrue(payload.enable_attribution_guidance)
+
+    def test_sequence_only_profile_disables_attribution(self):
+        instance = Controller()
+        engine = mock.Mock()
+        engine.version = 1
+        engine.get_static_weights.return_value = {}
+        engine.get_attribution_weights.return_value = {}
+        engine.compute_guidance.return_value = {
+            "version": 1,
+            "syscall_weights": {},
+            "mutation_templates": [],
+        }
+        task = FuzzerTask(
+            task_id="fuzzer@task@1", task_name="task", run_id=1,
+            fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
+            guidance_engine=engine, static_analysis_done=True,
+            enable_sequence_guidance=True,
+            enable_attribution_guidance=False,
+        )
+        instance.global_tasks[task.task_id] = task
+        labels = [[False, False, True] for _ in range(100)]
+        programs = ["getpid()" for _ in labels]
+        with (
+            mock.patch.object(
+                instance, "_load_training_data", return_value=(programs, labels)
+            ),
+            mock.patch.object(instance, "_run_attribution_analysis") as attribution,
+            mock.patch.object(instance, "_run_sequence_mining") as sequence,
+            mock.patch.object(
+                instance, "_send_guidance_if_active", return_value=True
+            ),
+        ):
+            instance._run_guidance_pipeline_locked(
+                task, stage=2, num_classes=3,
+                save_dir="model", ckpt_path="checkpoint.pt",
+            )
+
+        attribution.assert_not_called()
+        sequence.assert_called_once_with(
+            task, engine, programs, labels, 3, 2
+        )
+        engine.update_attribution.assert_called_once_with({})
+
+    def test_sequence_disabled_profile_clears_sequence_templates(self):
+        instance = Controller()
+        engine = mock.Mock()
+        engine.version = 1
+        engine.get_static_weights.return_value = {}
+        engine.get_attribution_weights.return_value = {}
+        engine.compute_guidance.return_value = {
+            "version": 1,
+            "syscall_weights": {},
+            "mutation_templates": [],
+        }
+        task = FuzzerTask(
+            task_id="fuzzer@task@1", task_name="task", run_id=1,
+            fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
+            guidance_engine=engine, static_analysis_done=True,
+            enable_sequence_guidance=False,
+            enable_attribution_guidance=False,
+        )
+        instance.global_tasks[task.task_id] = task
+        labels = [[False, True, False] for _ in range(100)]
+        programs = ["getpid()" for _ in labels]
+        with (
+            mock.patch.object(
+                instance, "_load_training_data", return_value=(programs, labels)
+            ),
+            mock.patch.object(instance, "_run_sequence_mining") as sequence,
+            mock.patch.object(
+                instance, "_send_guidance_if_active", return_value=True
+            ),
+        ):
+            instance._run_guidance_pipeline_locked(
+                task, stage=1, num_classes=3,
+                save_dir="model", ckpt_path="checkpoint.pt",
+            )
+
+        sequence.assert_not_called()
+        engine.update_sequence_patterns.assert_called_once_with([])
 
     def test_guidance_context_accepts_only_bounded_trusted_paths(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -86,10 +86,10 @@ index d61d27c..871c3ee 100644
  
  # For a tupical Ubuntu/Debian distribution.
 diff --git a/README.md b/README.md
-index a8c48e3..e3da718 100644
+index a8c48e3..9922a81 100644
 --- a/README.md
 +++ b/README.md
-@@ -1,44 +1,331 @@
+@@ -1,44 +1,333 @@
 -# syzkaller - kernel fuzzer
 -
 -[![CI Status](https://github.com/google/syzkaller/workflows/ci/badge.svg)](https://github.com/google/syzkaller/actions?query=workflow/ci)
@@ -142,7 +142,7 @@ index a8c48e3..e3da718 100644
 +
 +SyzPilot-fuzzer is a modified version of [syzkaller](https://github.com/google/syzkaller) that integrates ML-guided directed fuzzing. It communicates with SyzPilot-Brain for model training and guidance, and uses local inference to schedule program execution toward target kernel code.
 +
-+The patch distributed with SyzPilot targets upstream syzkaller commit
++The patch distributed with SyzPilot-dev targets upstream syzkaller commit
 +`6e83b42dcfcd13c3b8e0d5c803cdcc424c0fbff9`. The historical import that
 +started this repository omitted 31 upstream-only files, including GitHub
 +metadata and canned manager-config test fixtures. Applying the patch to the
@@ -234,7 +234,7 @@ index a8c48e3..e3da718 100644
 +
 +Add SyzPilot config to `manager.cfg`. Replace every placeholder with a value
 +for the evaluator's own kernel, VM image, network, and work directory. Resolve
-+target PCs with SyzPilot's `analyzer/get_targets.py` (using
++target PCs with SyzPilot-dev's `analyzer/get_targets.py` (using
 +`function@source-file:line`), rather than copying addresses from another
 +kernel build. The Docker bridge address is host-dependent.
 +
@@ -303,6 +303,8 @@ index a8c48e3..e3da718 100644
 +| `allow_standalone_guidance` | bool | false | Accept HTTP guidance without reach filtering only for explicitly labeled oracle/ablation runs; never use for a feature-off baseline |
 +| `durable_training_wal` | bool | false | Persist buffered and unacknowledged training batches for manager-process crash recovery; enable only for robustness experiments because synchronous WAL writes reduce fuzzing throughput |
 +| `enable_online_guidance` | bool | true | Allow deployed model rounds to refresh sequence/attribution guidance; set false only for a predictor-only ablation that retains cold-start guidance and model/rfilter hot updates |
++| `enable_sequence_guidance` | bool | true | Allow deployed model rounds to refresh sequence-mined mutation templates; disable only for labeled ablations |
++| `enable_attribution_guidance` | bool | true | Allow deployed Stage-2 models to refresh IG syscall weights; disable for a sequence-only ablation |
 +| `dump_dir` | string | "SyzPilot-default-dumpdir" | Dump directory path; observation-only controls require an explicit absolute per-instance path |
 +| `target_pcs` | []string | [] | Target PC addresses (32-bit hex) |
 +| `cold_start_seed_dir` | string | "" | Directory containing generic generated seed programs; must be paired with `cold_start_seed_catalog` |
@@ -459,7 +461,7 @@ index a8c48e3..e3da718 100644
 +
 +| Repository | Purpose |
 +|------------|---------|
-+| SyzPilot | Brain-side controller and ML pipeline (Python) |
++| SyzPilot-dev | Brain-side controller and ML pipeline (Python) |
 +| KallGraph-full | Static analysis for indirect call analysis (C++) |
 +
 +## License
@@ -4590,10 +4592,10 @@ index 0deee9e..145cee0 100644
 +	}
 +}
 diff --git a/pkg/mgrconfig/config.go b/pkg/mgrconfig/config.go
-index 6bf88c5..fc6455e 100644
+index 6bf88c5..e887ca2 100644
 --- a/pkg/mgrconfig/config.go
 +++ b/pkg/mgrconfig/config.go
-@@ -228,10 +228,138 @@ type Config struct {
+@@ -228,10 +228,142 @@ type Config struct {
  	// Experimental options.
  	Experimental Experimental
  
@@ -4632,6 +4634,10 @@ index 6bf88c5..fc6455e 100644
 +	// attribution guidance. Disable it for predictor-only ablations while
 +	// retaining registration-time cold-start guidance and model hot updates.
 +	EnableOnlineGuidance bool `json:"enable_online_guidance"`
++	// EnableSequenceGuidance controls post-model sequence mining independently.
++	EnableSequenceGuidance bool `json:"enable_sequence_guidance"`
++	// EnableAttributionGuidance controls post-model IG attribution independently.
++	EnableAttributionGuidance bool `json:"enable_attribution_guidance"`
 +
 +	// Enable diverse cover collection, which add CollectCover to the ExecOpts of the target queues (default: false).
 +	EnableDiverseCover bool `json:"enable_diverse_cover"`
@@ -4733,19 +4739,21 @@ index 6bf88c5..fc6455e 100644
  // can be dropped at any moment.
  type Experimental struct {
 diff --git a/pkg/mgrconfig/load.go b/pkg/mgrconfig/load.go
-index b92d6a4..af516bc 100644
+index b92d6a4..db95558 100644
 --- a/pkg/mgrconfig/load.go
 +++ b/pkg/mgrconfig/load.go
-@@ -106,6 +106,27 @@ func defaultValues() *Config {
+@@ -106,6 +106,29 @@ func defaultValues() *Config {
  			CoverEdges:       true,
  			DescriptionsMode: manualDescriptions,
  		},
 +		SyzPilot: SyzPilotCfg{
-+			DiverseCoverRatio:    1,
-+			DumpDir:              "SyzPilot-default-dumpdir",
-+			NetworkMode:          "isolated",
-+			EnableOnlineGuidance: true,
-+			TemplateInsertWeight: 50,
++			DiverseCoverRatio:         1,
++			DumpDir:                   "SyzPilot-default-dumpdir",
++			NetworkMode:               "isolated",
++			EnableOnlineGuidance:      true,
++			EnableSequenceGuidance:    true,
++			EnableAttributionGuidance: true,
++			TemplateInsertWeight:      50,
 +			DirectedCorpus: DirectedCorpusCfg{
 +				Capacity:                  256,
 +				MutationProbability:       0.20,
@@ -4764,7 +4772,7 @@ index b92d6a4..af516bc 100644
  	}
  }
  
-@@ -176,6 +197,29 @@ func Complete(cfg *Config) error {
+@@ -176,6 +199,29 @@ func Complete(cfg *Config) error {
  	if cfg.Procs < 1 || cfg.Procs > prog.MaxPids {
  		return fmt.Errorf("bad config param procs: '%v', want [1, %v]", cfg.Procs, prog.MaxPids)
  	}
@@ -4794,7 +4802,7 @@ index b92d6a4..af516bc 100644
  	switch cfg.Sandbox {
  	case "none", "setuid", "namespace", "android":
  	default:
-@@ -212,6 +256,32 @@ func Complete(cfg *Config) error {
+@@ -212,6 +258,32 @@ func Complete(cfg *Config) error {
  	return nil
  }
  
@@ -4829,10 +4837,10 @@ index b92d6a4..af516bc 100644
  		if err := checkNonEmpty(
 diff --git a/pkg/mgrconfig/syzpilot_config_test.go b/pkg/mgrconfig/syzpilot_config_test.go
 new file mode 100644
-index 0000000..1eced26
+index 0000000..9cae32b
 --- /dev/null
 +++ b/pkg/mgrconfig/syzpilot_config_test.go
-@@ -0,0 +1,124 @@
+@@ -0,0 +1,143 @@
 +// Copyright 2026 SyzPilot authors. All rights reserved.
 +// Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
 +
@@ -4893,8 +4901,10 @@ index 0000000..1eced26
 +}
 +
 +func TestSyzPilotOnlineGuidanceDefaultsOnAndCanBeDisabled(t *testing.T) {
-+	if !defaultValues().SyzPilot.EnableOnlineGuidance {
-+		t.Fatal("online guidance must default to enabled")
++	defaults := defaultValues().SyzPilot
++	if !defaults.EnableOnlineGuidance || !defaults.EnableSequenceGuidance ||
++		!defaults.EnableAttributionGuidance {
++		t.Fatal("online guidance components must default to enabled")
 +	}
 +	cfg, err := LoadPartialData([]byte(`{
 +		"target": "linux/amd64",
@@ -4905,6 +4915,23 @@ index 0000000..1eced26
 +	}
 +	if cfg.SyzPilot.EnableOnlineGuidance {
 +		t.Fatal("predictor-only online-guidance opt-out was not parsed")
++	}
++}
++
++func TestSyzPilotOnlineGuidanceComponentsCanBeDisabledIndependently(t *testing.T) {
++	cfg, err := LoadPartialData([]byte(`{
++		"target": "linux/amd64",
++		"SyzPilot": {
++			"enable_sequence_guidance": true,
++			"enable_attribution_guidance": false
++		}
++	}`))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !cfg.SyzPilot.EnableSequenceGuidance ||
++		cfg.SyzPilot.EnableAttributionGuidance {
++		t.Fatalf("unexpected component switches: %+v", cfg.SyzPilot)
 +	}
 +}
 +
@@ -8678,10 +8705,10 @@ index 0000000..b52adb6
 +}
 diff --git a/pkg/syzpilotlib/manager/client.go b/pkg/syzpilotlib/manager/client.go
 new file mode 100644
-index 0000000..1f79b66
+index 0000000..248d608
 --- /dev/null
 +++ b/pkg/syzpilotlib/manager/client.go
-@@ -0,0 +1,443 @@
+@@ -0,0 +1,449 @@
 +// Package manager provides the client functionality for interacting with the SyzPilot-brain controller.
 +// It handles the registration of fuzzer instances, the establishment of SSH tunnels in isolated mode, and the management of these resources.
 +package manager
@@ -8737,7 +8764,9 @@ index 0000000..1f79b66
 +	ProducerRevision string // syzkaller revision embedded in this binary
 +	DescriptionsMode string // manual, auto, or any
 +	// EnableOnlineGuidance controls model-derived sequence/attribution refreshes.
-+	EnableOnlineGuidance bool
++	EnableOnlineGuidance      bool
++	EnableSequenceGuidance    bool
++	EnableAttributionGuidance bool
 +}
 +
 +// Client: the main structure for interacting with the SyzPilot-brain controller.
@@ -8755,21 +8784,23 @@ index 0000000..1f79b66
 +// RegistrationPayload: the data structure for sending to the server for registration.
 +// using a single structure and the omitempty tag, it is easier to manage than multiple nested structures.
 +type RegistrationPayload struct {
-+	UUID                 string `json:"uuid"`
-+	TaskName             string `json:"task_name"`
-+	Mode                 string `json:"mode"`
-+	PublicKey            string `json:"public_key,omitempty"` // omitempty in direct mode
-+	HostIP               string `json:"host_ip,omitempty"`    // omitempty in isolated mode
-+	HttpPort             int    `json:"http_port,omitempty"`  // omitempty in isolated mode
-+	TargetFunc           string `json:"target_func,omitempty"`
-+	ReportPath           string `json:"report_path,omitempty"`
-+	KallgraphDir         string `json:"kallgraph_dir,omitempty"`
-+	TargetOS             string `json:"target_os"`
-+	TargetArch           string `json:"target_arch"`
-+	TargetRevision       string `json:"target_revision"`
-+	ProducerRevision     string `json:"producer_revision"`
-+	DescriptionsMode     string `json:"descriptions_mode"`
-+	EnableOnlineGuidance bool   `json:"enable_online_guidance"`
++	UUID                      string `json:"uuid"`
++	TaskName                  string `json:"task_name"`
++	Mode                      string `json:"mode"`
++	PublicKey                 string `json:"public_key,omitempty"` // omitempty in direct mode
++	HostIP                    string `json:"host_ip,omitempty"`    // omitempty in isolated mode
++	HttpPort                  int    `json:"http_port,omitempty"`  // omitempty in isolated mode
++	TargetFunc                string `json:"target_func,omitempty"`
++	ReportPath                string `json:"report_path,omitempty"`
++	KallgraphDir              string `json:"kallgraph_dir,omitempty"`
++	TargetOS                  string `json:"target_os"`
++	TargetArch                string `json:"target_arch"`
++	TargetRevision            string `json:"target_revision"`
++	ProducerRevision          string `json:"producer_revision"`
++	DescriptionsMode          string `json:"descriptions_mode"`
++	EnableOnlineGuidance      bool   `json:"enable_online_guidance"`
++	EnableSequenceGuidance    bool   `json:"enable_sequence_guidance"`
++	EnableAttributionGuidance bool   `json:"enable_attribution_guidance"`
 +}
 +
 +// RegistrationResponse: the data structure for receiving from the controller for registration.
@@ -8893,10 +8924,12 @@ index 0000000..1f79b66
 +		ReportPath:   c.Config.ReportPath,
 +		KallgraphDir: c.Config.KallgraphDir,
 +		TargetOS:     c.Config.TargetOS, TargetArch: c.Config.TargetArch,
-+		TargetRevision:       c.Config.TargetRevision,
-+		ProducerRevision:     c.Config.ProducerRevision,
-+		DescriptionsMode:     c.Config.DescriptionsMode,
-+		EnableOnlineGuidance: c.Config.EnableOnlineGuidance,
++		TargetRevision:            c.Config.TargetRevision,
++		ProducerRevision:          c.Config.ProducerRevision,
++		DescriptionsMode:          c.Config.DescriptionsMode,
++		EnableOnlineGuidance:      c.Config.EnableOnlineGuidance,
++		EnableSequenceGuidance:    c.Config.EnableSequenceGuidance,
++		EnableAttributionGuidance: c.Config.EnableAttributionGuidance,
 +	}
 +
 +	if c.Config.NetworkMode == "direct" {
@@ -9127,10 +9160,10 @@ index 0000000..1f79b66
 +}
 diff --git a/pkg/syzpilotlib/manager/client_test.go b/pkg/syzpilotlib/manager/client_test.go
 new file mode 100644
-index 0000000..ef6f671
+index 0000000..b8a79a0
 --- /dev/null
 +++ b/pkg/syzpilotlib/manager/client_test.go
-@@ -0,0 +1,262 @@
+@@ -0,0 +1,285 @@
 +package manager
 +
 +import (
@@ -9232,8 +9265,10 @@ index 0000000..ef6f671
 +			KallgraphDir: "/brain/kallgraph/case_25",
 +			TargetOS:     "linux", TargetArch: "amd64",
 +			TargetRevision: "target-r1", ProducerRevision: "fuzzer-r1",
-+			DescriptionsMode:     "manual",
-+			EnableOnlineGuidance: true,
++			DescriptionsMode:          "manual",
++			EnableOnlineGuidance:      true,
++			EnableSequenceGuidance:    true,
++			EnableAttributionGuidance: true,
 +		},
 +		FuzzerID:   "fuzzer",
 +		httpClient: server.Client(),
@@ -9250,7 +9285,9 @@ index 0000000..ef6f671
 +		payload.TargetRevision != client.Config.TargetRevision ||
 +		payload.ProducerRevision != client.Config.ProducerRevision ||
 +		payload.DescriptionsMode != client.Config.DescriptionsMode ||
-+		payload.EnableOnlineGuidance != client.Config.EnableOnlineGuidance {
++		payload.EnableOnlineGuidance != client.Config.EnableOnlineGuidance ||
++		payload.EnableSequenceGuidance != client.Config.EnableSequenceGuidance ||
++		payload.EnableAttributionGuidance != client.Config.EnableAttributionGuidance {
 +		t.Fatalf("guidance context not forwarded: %#v", payload)
 +	}
 +}
@@ -9269,6 +9306,25 @@ index 0000000..ef6f671
 +	value, present := decoded["enable_online_guidance"]
 +	if !present || value != false {
 +		t.Fatalf("predictor-only opt-out payload = %s", payload)
++	}
++}
++
++func TestRegistrationPayloadPreservesGuidanceComponentSwitches(t *testing.T) {
++	payload, err := json.Marshal(RegistrationPayload{
++		EnableOnlineGuidance:      true,
++		EnableSequenceGuidance:    true,
++		EnableAttributionGuidance: false,
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	var decoded map[string]any
++	if err := json.Unmarshal(payload, &decoded); err != nil {
++		t.Fatal(err)
++	}
++	if decoded["enable_sequence_guidance"] != true ||
++		decoded["enable_attribution_guidance"] != false {
++		t.Fatalf("guidance component payload = %s", payload)
 +	}
 +}
 +
@@ -11727,7 +11783,7 @@ index 0000000..5185a69
 +	return dependencies
 +}
 diff --git a/syz-manager/manager.go b/syz-manager/manager.go
-index b494df2..714b69c 100644
+index b494df2..72046e7 100644
 --- a/syz-manager/manager.go
 +++ b/syz-manager/manager.go
 @@ -6,6 +6,7 @@ package main
@@ -11960,7 +12016,7 @@ index b494df2..714b69c 100644
  	if mgr.cfg.HTTP != "" {
  		go func() {
  			err := mgr.http.Serve(ctx)
-@@ -379,13 +517,344 @@ func RunManager(mode *Mode, cfg *mgrconfig.Config) {
+@@ -379,13 +517,346 @@ func RunManager(mode *Mode, cfg *mgrconfig.Config) {
  	mgr.pool.Loop(ctx)
  }
  
@@ -12058,10 +12114,12 @@ index b494df2..714b69c 100644
 +		ReportPath:   mgr.cfg.SyzPilot.ReportPath,
 +		KallgraphDir: mgr.cfg.SyzPilot.KallgraphDir,
 +		TargetOS:     mgr.target.OS, TargetArch: mgr.target.Arch,
-+		TargetRevision:       mgr.target.Revision,
-+		ProducerRevision:     prog.GitRevision,
-+		DescriptionsMode:     mgr.cfg.Experimental.DescriptionsMode,
-+		EnableOnlineGuidance: mgr.cfg.SyzPilot.EnableOnlineGuidance,
++		TargetRevision:            mgr.target.Revision,
++		ProducerRevision:          prog.GitRevision,
++		DescriptionsMode:          mgr.cfg.Experimental.DescriptionsMode,
++		EnableOnlineGuidance:      mgr.cfg.SyzPilot.EnableOnlineGuidance,
++		EnableSequenceGuidance:    mgr.cfg.SyzPilot.EnableSequenceGuidance,
++		EnableAttributionGuidance: mgr.cfg.SyzPilot.EnableAttributionGuidance,
 +	})
 +	if err != nil {
 +		return fmt.Errorf("failed to create syzpilot client: %w", err)
@@ -12308,7 +12366,7 @@ index b494df2..714b69c 100644
  }
  
  func (mgr *Manager) heartbeatLoop() {
-@@ -1103,6 +1572,7 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
+@@ -1103,6 +1574,7 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
  	}
  	if mgr.mode.ExitAfterMachineCheck {
  		mgr.exit(mgr.mode.Name)
@@ -12316,7 +12374,7 @@ index b494df2..714b69c 100644
  	}
  
  	mgr.mu.Lock()
-@@ -1114,12 +1584,38 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
+@@ -1114,12 +1586,38 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
  		panic("MachineChecked called twice")
  	}
  	mgr.enabledFeatures = features
@@ -12355,7 +12413,7 @@ index b494df2..714b69c 100644
  	mgr.setPhaseLocked(phaseLoadedCorpus)
  	opts := fuzzer.DefaultExecOpts(mgr.cfg, features, *flagDebug)
  
-@@ -1130,7 +1626,7 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
+@@ -1130,7 +1628,7 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
  		mgr.http.Corpus.Store(mgr.corpus)
  
  		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -12364,7 +12422,7 @@ index b494df2..714b69c 100644
  			Corpus:         mgr.corpus,
  			Snapshot:       mgr.cfg.Snapshot,
  			Coverage:       mgr.cfg.Cover,
-@@ -1151,10 +1647,36 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
+@@ -1151,10 +1649,36 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
  				defer mgr.mu.Unlock()
  				return !mgr.saturatedCalls[call]
  			},

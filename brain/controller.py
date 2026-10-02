@@ -95,6 +95,8 @@ class FuzzerTask:
     producer_revision: str = ""
     descriptions_mode: str = ""
     enable_online_guidance: bool = True
+    enable_sequence_guidance: bool = True
+    enable_attribution_guidance: bool = True
     # members with default values
     tunnel_port: Optional[int] = None  # isolated
     grpc_port: int = 0
@@ -207,6 +209,8 @@ class RegistrationPayload(BaseModel):
     producer_revision: str
     descriptions_mode: str
     enable_online_guidance: bool = True
+    enable_sequence_guidance: bool = True
+    enable_attribution_guidance: bool = True
 
 class RegistrationResponse(BaseModel):
     task_id: str
@@ -1632,6 +1636,18 @@ class Controller:
                 "guidance_version": task.guidance_version,
                 "static_analysis_done": task.static_analysis_done,
                 "online_updates_enabled": task.enable_online_guidance,
+                "sequence_updates_enabled": (
+                    task.enable_online_guidance
+                    and task.enable_sequence_guidance
+                ),
+                "attribution_updates_enabled": (
+                    task.enable_online_guidance
+                    and task.enable_attribution_guidance
+                ),
+                "configured_sequence_updates": task.enable_sequence_guidance,
+                "configured_attribution_updates": (
+                    task.enable_attribution_guidance
+                ),
             },
         }
 
@@ -1729,6 +1745,8 @@ class Controller:
             producer_revision=payload.producer_revision,
             descriptions_mode=payload.descriptions_mode,
             enable_online_guidance=payload.enable_online_guidance,
+            enable_sequence_guidance=payload.enable_sequence_guidance,
+            enable_attribution_guidance=payload.enable_attribution_guidance,
         )
 
         # Receiver logs are now written to per-task log file via --log_file
@@ -1907,6 +1925,16 @@ class Controller:
                 "target_func": task.target_func,
                 "guidance_version": task.guidance_version,
                 "online_guidance": task.enable_online_guidance,
+                "sequence_guidance": task.enable_sequence_guidance,
+                "attribution_guidance": task.enable_attribution_guidance,
+                "effective_sequence_guidance": (
+                    task.enable_online_guidance
+                    and task.enable_sequence_guidance
+                ),
+                "effective_attribution_guidance": (
+                    task.enable_online_guidance
+                    and task.enable_attribution_guidance
+                ),
                 "stopping": task.stopping,
             })
 
@@ -3826,7 +3854,12 @@ class Controller:
 
         # Stage 1 only learns generic reachability. Stage 2 provides exact
         # waypoint-specific positive predictions.
-        if stage == 1:
+        if not task.enable_attribution_guidance:
+            logger.info(
+                f"[{task.task_id}] Skipping attribution: disabled by "
+                "experiment profile"
+            )
+        elif stage == 1:
             logger.info(
                 f"[{task.task_id}] Skipping attribution: Stage {stage} "
                 "does not learn reached-class distinctions"
@@ -3851,10 +3884,14 @@ class Controller:
             return
 
         # Step 3: Sequence pattern mining (needs 10+ positive samples)
-        sequence_evidence = (
-            n_positive if stage == 1 else n_final_target
-        )
-        if sequence_evidence >= 10:
+        sequence_evidence = n_positive if stage == 1 else n_final_target
+        if not task.enable_sequence_guidance:
+            engine.update_sequence_patterns([])
+            logger.info(
+                f"[{task.task_id}] Skipping sequence mining: disabled by "
+                "experiment profile"
+            )
+        elif sequence_evidence >= 10:
             self._run_sequence_mining(
                 task, engine, programs, labels, num_classes, stage
             )

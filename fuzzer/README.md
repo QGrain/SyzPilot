@@ -7,8 +7,8 @@ upstream Syzkaller commit
 `6e83b42dcfcd13c3b8e0d5c803cdcc424c0fbff9`. Use a clean clone and
 apply from the Syzkaller root. Do not apply it to an arbitrary newer
 Syzkaller revision, since its Go APIs and program mutation semantics change.
-The current patch corresponds to the reviewed SyzPilot-Fuzzer `v0.1.0`
-source release (`653259d`). It includes the authenticated generic seed
+The current patch corresponds to the reviewed SyzPilot-Fuzzer `v0.1.1`
+source release (`fad3a73`). It includes the authenticated generic seed
 catalog, additive cold-start seed injection, the directed corpus, bounded
 training-data buffering, online model hot replacement, and the reachability
 filter used by the functional pipeline.
@@ -40,7 +40,12 @@ explicit manager-process recovery experiment. For the predictor-only ablation,
 set `SyzPilot.enable_online_guidance=false`: cold-start guidance, online
 training, TorchServe model hot replacement, and reach filtering remain active,
 while post-model sequence and attribution guidance refreshes are disabled.
-Omitting these fields retains the normal full-pipeline behavior.
+For component ablations, keep online guidance enabled and independently set
+`SyzPilot.enable_sequence_guidance` or
+`SyzPilot.enable_attribution_guidance` to false. These component switches
+require the Brain bundled in this public revision or later; upgrade the Brain
+first or upgrade both sides together. Omitting the fields retains normal
+full-pipeline behavior.
 
 ## External baseline patches
 
