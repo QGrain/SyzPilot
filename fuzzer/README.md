@@ -7,8 +7,8 @@ upstream Syzkaller commit
 `6e83b42dcfcd13c3b8e0d5c803cdcc424c0fbff9`. Use a clean clone and
 apply from the Syzkaller root. Do not apply it to an arbitrary newer
 Syzkaller revision, since its Go APIs and program mutation semantics change.
-The current patch corresponds to the reviewed SyzPilot-Fuzzer `v0.1.1`
-source release (`fad3a73`). It includes the authenticated generic seed
+The current patch corresponds to the reviewed SyzPilot-Fuzzer `v0.1.2`
+source release (`6a829a7`). It includes the authenticated generic seed
 catalog, additive cold-start seed injection, the directed corpus, bounded
 training-data buffering, online model hot replacement, and the reachability
 filter used by the functional pipeline.
@@ -23,10 +23,12 @@ make syzpilot
 make -j4 TARGETOS=linux TARGETARCH=amd64
 ```
 
-The build needs Go 1.24.8, `protoc`, the pinned protobuf Go generators,
-network access for the pinned googleapis checkout, and the ordinary Syzkaller
-Linux build dependencies. [`docker/Dockerfile.fuzzer`](../docker/Dockerfile.fuzzer)
-implements these steps against a published base image. The SyzPilot-Fuzzer
+The build needs Go 1.24.8, `protoc`, protobuf development headers, the pinned
+protobuf Go generators, network access for the pinned googleapis checkout,
+and the ordinary Syzkaller Linux build dependencies.
+[`docker/Dockerfile`](../docker/Dockerfile) provides
+the shared Brain/Fuzzer environment; `scripts/patch_fuzzers.sh SyzPilot`
+implements the pinned clone-and-apply step. The SyzPilot-Fuzzer
 repository's initial import (`872788c`) omitted several upstream CI and test
 fixture files, including `pkg/mgrconfig/testdata/*.cfg`; this patch is meant
 for **the official upstream checkout**, not that incomplete import. The

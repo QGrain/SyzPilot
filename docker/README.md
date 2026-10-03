@@ -1,91 +1,141 @@
-# Artifact container builds
+# Unified SyzPilot image
 
-Run these commands from the root of this repository. The default Docker builds
-do not embed pretrained model weights; the optional Brain model build downloads
-and embeds the public SyzEncoder release. The Brain image includes the public
-benchmark metadata and bug reports tracked by this repository. Neither build
-embeds compiled kernel cases, VM images, runtime credentials, or experiment
-logs.
+The release uses one image for both SyzPilot roles. It is based on the
+published `qgrain/kernel-fuzz:2404_v1` image and adds:
 
-## Fuzzer
+- the public `QGrain/SyzPilot` checkout at `/root/SyzPilot`;
+- a Python 3.11 Conda environment named `syzpilot`;
+- the Brain and Fuzzer-side Python dependencies;
+- Java 17 runtime support for TorchServe; and
+- the pinned public SyzEncoder and tokenizer at `/root/models/SyzEncoder`; and
+- compiled Linux/amd64 Syzlang metadata plus matching descriptions under
+  `/root/syzpilot-assets/syzlang` for cold-start guidance.
 
-`Dockerfile.fuzzer` applies `fuzzer/SyzPilot-fuzzer.diff` to upstream syzkaller
-commit `6e83b42dcfcd13c3b8e0d5c803cdcc424c0fbff9` and builds the
-minimal functional runtime: manager, executor, execprog, and a compiled
-Syzlang manifest. It does not claim that every optional `make all` utility
-builds. The default base is the published
-`qgrain/kernel-fuzz:2204_v3` image, pinned to its Docker Hub manifest digest.
+The image does not contain a target kernel, target PoC, experiment output, or
+patched Syzkaller checkout. It also has no active entrypoint: creating a
+container does not implicitly start sshd, initialize a guest, run the Brain,
+or launch a fuzzer.
 
-```bash
-docker build -f docker/Dockerfile.fuzzer -t syzpilot-fuzzer:artifact .
-docker run --rm --entrypoint /bin/bash syzpilot-fuzzer:artifact -lc \
-  'git rev-parse HEAD; test -x bin/syz-manager; test -x bin/linux_amd64/syz-executor; test -x bin/linux_amd64/syz-execprog; test -s bin/linux-amd64-syzlang-manifest.json'
-```
+The container environment defaults to `SYZPILOT_DIRECT_ONLY=true`. Functional
+containers therefore use explicit private-IP connectivity and do not require
+the optional SSH tunnel service or its privileged host helpers.
 
-An alternative compatible base can be selected explicitly:
+## Build
 
-```bash
-docker build -f docker/Dockerfile.fuzzer \
-  --build-arg KERNEL_FUZZ_IMAGE=registry.example/kernel-fuzz@sha256:DIGEST \
-  -t syzpilot-fuzzer:artifact-custom .
-```
-
-The default pinned `2204_v3` image remains the tested build base. Do not
-substitute a mutable tag in a reproducibility claim without recording its
-resolved digest.
-
-For a real fuzzing run, provide a KVM-capable host, compiled kernel case,
-guest disk image and SSH key through mounts. Use unique manager work and bench
-paths and a suitable CPU affinity for each instance; see the project README
-for manager configuration. Do not mount a host source tree over
-`/root/SyzPilot-fuzzer` when testing the image-built binary, as doing so would
-hide the built code.
-
-## Brain
-
-The Brain recipe uses the published PyTorch 2.2.1 CUDA 12.1 runtime image,
-installs the pinned Python requirements and Java 17 for TorchServe, and
-generates the receiver's protobuf bindings. The default build has no model
-weights and supports the CPU-only preparation exercise. The final model image
-downloads the separately hosted
-[`zzra1n/SyzEncoder`](https://huggingface.co/zzra1n/SyzEncoder) at build time;
-do not pass access tokens as Docker build arguments.
-The container defaults to `SYZPILOT_DIRECT_ONLY=true`: it skips the
-host-specific SSH tunnel helper and refuses isolated-mode registrations.
-Use the `direct` fuzzer configuration in `artifact/README.md`.
+Build from the repository root. `SYZPILOT_REVISION` and `OCI_REVISION` are
+required to be the same exact public commit. Record that revision and the
+resulting image digest for an evaluation.
 
 ```bash
-docker build -f docker/Dockerfile.brain -t syzpilot-brain:artifact .
-docker run --rm --entrypoint /bin/bash syzpilot-brain:artifact -lc \
-  'python -c "import torch, grpc, fastapi; print(torch.__version__)"; command -v torchserve'
+REVISION="$(git rev-parse HEAD)"
+docker build -f docker/Dockerfile \
+  --build-arg SYZPILOT_REVISION="$REVISION" \
+  --build-arg OCI_REVISION="$REVISION" \
+  -t qgrain/syzpilot:ndss27-ae .
 
-# Pin the public model to the validated immutable Hugging Face commit.
-docker build -f docker/Dockerfile.brain \
-  --build-arg INCLUDE_SYZENCODER=true \
-  --build-arg SYZENCODER_REVISION=6140b0b46c81bb6428458fde5fd800a0e4a0687d \
-  -t syzpilot-brain:artifact-model .
+docker image inspect qgrain/syzpilot:ndss27-ae \
+  --format '{{json .Config.Entrypoint}} {{json .Config.Cmd}}'
+docker run --rm qgrain/syzpilot:ndss27-ae \
+  bash -lc 'python --version; go version; java -version; test -s /root/models/SyzEncoder/model.safetensors'
 ```
 
-Building or importing the Brain is **not** an end-to-end functional test.
-Its container-oriented defaults can be overridden with
-`SYZPILOT_BASE_MODEL_PATH`, `SYZPILOT_TOKENIZER_PATH`,
-`SYZPILOT_SYZKALLER_SYSLINUX`, `SYZPILOT_SYZLANG_MANIFEST`,
-`SYZPILOT_GUIDANCE_REPORT_ROOTS`, and
-`SYZPILOT_GUIDANCE_KALLGRAPH_ROOTS`. The two roots variables use the
-platform path separator and restrict Brain-local paths supplied in task
-registration. When either roots variable is set, the corresponding
-author-machine benchmark-title fallback map is disabled: pass an explicit
-`report_path` and/or `kallgraph_dir` in the fuzzer task configuration.
-See `artifact/README.md` for a concrete example that builds the kernel and
-guest locally from the packaged configuration and pinned public sources.
-Online training and inference need two suitable NVIDIA GPUs, reachable
-controller/receiver/TorchServe ports, and configured network routing.
-The optional self-contained build adds only the public SyzEncoder release to
-the default source image. A runtime-selected target report, compiled kernel,
-VM image, credentials, and generated results remain external and are supplied
-through configuration or mounts.
+The default base is pinned to the multi-platform digest of
+`qgrain/kernel-fuzz:2404_v1`. Override `KERNEL_FUZZ_IMAGE` only with a tested,
+digest-pinned compatible image.
 
-The image has not been published by this recipe. Before distributing a Brain
-image, verify the exact image tag and run an integration test with the
-artifact's actual model and kernel-case mounts. Pass secrets only at runtime,
-never as Docker build arguments or committed files.
+The optional `requirements/requirements-agent.txt` is not installed in the
+functional image. It requires a newer Pydantic release than the pinned Brain
+environment and belongs in a separate environment when evaluating the
+experimental agentic waypoint tools.
+
+## Create a Brain container
+
+Run the Brain role on a GPU host. The explicit `sleep infinity` below is a
+user-selected keepalive, not an image default. Replace the GPU IDs and host
+mounts for the evaluation machine.
+
+```bash
+mkdir -p /HOST/SYZPILOT-BRAIN-STATE/{receiver_data,logs,model_store}
+
+docker run -d --name syzpilot-brain --network host \
+  --gpus 'device=0,1' \
+  -v /HOST/KERNELS:/root/kernels \
+  -v /HOST/SYZPILOT-RUNS:/root/syzpilot-runs \
+  -v /HOST/SYZPILOT-BRAIN-STATE/receiver_data:/root/SyzPilot/brain/receiver_data \
+  -v /HOST/SYZPILOT-BRAIN-STATE/logs:/root/SyzPilot/brain/logs \
+  -v /HOST/SYZPILOT-BRAIN-STATE/model_store:/root/SyzPilot/brain/model_store \
+  qgrain/syzpilot:ndss27-ae sleep infinity
+
+docker exec syzpilot-brain bash -lc '
+  cd /root/SyzPilot
+  make -C brain
+  scripts/verify_setup.sh brain
+'
+```
+
+Start the Controller explicitly only after paths, GPUs, ports, and network
+routing are configured:
+
+```bash
+docker exec -it syzpilot-brain bash -lc '
+  cd /root/SyzPilot
+  export SYZPILOT_DIRECT_ONLY=true
+  export SYZPILOT_TRAINING_GPU_IDS=0
+  export SYZPILOT_INFERENCE_GPU_ID=1
+  export SYZPILOT_ATTRIBUTION_GPU_ID=1
+  python brain/controller.py --host 0.0.0.0 --port 48000
+'
+```
+
+The Brain host must allow the Fuzzer to reach TCP 48000, the dynamically
+allocated Receiver range 31001--31999, and the configured TorchServe ports.
+Restrict these ports to the evaluation hosts rather than exposing them to the
+public Internet.
+
+## Create a Fuzzer container
+
+Run the Fuzzer role on a KVM-capable CPU host. Mount kernels and run outputs
+explicitly. The inherited base image supplies the disposable guest template
+used by the default functional configuration.
+
+```bash
+docker run -d --name syzpilot-fuzzer --network host --device /dev/kvm \
+  --cpuset-cpus=0-1 \
+  -v /HOST/KERNELS:/root/kernels \
+  -v /HOST/SYZPILOT-RUNS:/root/syzpilot-runs \
+  qgrain/syzpilot:ndss27-ae sleep infinity
+
+docker exec syzpilot-fuzzer bash -lc '
+  cd /root/SyzPilot
+  scripts/patch_fuzzers.sh SyzPilot
+  cd /root/fuzzers/SyzPilot-fuzzer
+  make -j$(nproc)
+  /root/SyzPilot/scripts/verify_setup.sh fuzzer
+'
+```
+
+`patch_fuzzers.sh` fetches exact upstream Syzkaller commit
+`6e83b42dcfcd13c3b8e0d5c803cdcc424c0fbff9` over HTTPS and applies the
+reviewed `fuzzer/SyzPilot-fuzzer.diff`. It refuses to overwrite an unrelated
+destination. MOCK and SyzDirect patch automation are intentionally not part of
+this release.
+
+The image's source checkout, Fuzzer patch, and compiled Syzlang metadata are a
+matched snapshot. Rebuild the image to adopt a newer public revision instead
+of running `git pull` in only one role container.
+
+For distributed deployment, replace loopback Controller/callback addresses in
+the manager configuration with the two hosts' mutually reachable private
+addresses. Keep HTTP, Receiver, and manager callback ports firewalled to those
+hosts.
+
+## Publishing
+
+Pushing a rebuilt image to an existing Docker Hub tag atomically replaces the
+tag reference; deleting the old tag first is unnecessary and creates an
+avoidable availability gap. Record the new digest after pushing:
+
+```bash
+docker push qgrain/syzpilot:ndss27-ae
+docker buildx imagetools inspect qgrain/syzpilot:ndss27-ae
+```

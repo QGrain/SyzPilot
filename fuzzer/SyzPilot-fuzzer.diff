@@ -86,10 +86,10 @@ index d61d27c..871c3ee 100644
  
  # For a tupical Ubuntu/Debian distribution.
 diff --git a/README.md b/README.md
-index a8c48e3..9922a81 100644
+index a8c48e3..acf3645 100644
 --- a/README.md
 +++ b/README.md
-@@ -1,44 +1,333 @@
+@@ -1,44 +1,323 @@
 -# syzkaller - kernel fuzzer
 -
 -[![CI Status](https://github.com/google/syzkaller/workflows/ci/badge.svg)](https://github.com/google/syzkaller/actions?query=workflow/ci)
@@ -142,7 +142,7 @@ index a8c48e3..9922a81 100644
 +
 +SyzPilot-fuzzer is a modified version of [syzkaller](https://github.com/google/syzkaller) that integrates ML-guided directed fuzzing. It communicates with SyzPilot-Brain for model training and guidance, and uses local inference to schedule program execution toward target kernel code.
 +
-+The patch distributed with SyzPilot-dev targets upstream syzkaller commit
++The patch distributed with SyzPilot targets upstream syzkaller commit
 +`6e83b42dcfcd13c3b8e0d5c803cdcc424c0fbff9`. The historical import that
 +started this repository omitted 31 upstream-only files, including GitHub
 +metadata and canned manager-config test fixtures. Applying the patch to the
@@ -185,21 +185,18 @@ index a8c48e3..9922a81 100644
 +### Prerequisites
 +
 +- Go 1.24.8+
-+- Docker (syzpilot-fuzzer container)
++- The unified `qgrain/syzpilot:ndss27-ae` container (recommended)
 +- Linux kernel with KCOV support
 +- QEMU for VM-based fuzzing
 +
 +### Build
 +
-+The fuzzer **must** be compiled inside the `syzpilot-fuzzer` Docker container:
++Compile the fuzzer inside a CPU/KVM container created from the unified
++SyzPilot image:
 +
 +```bash
 +docker exec syzpilot-fuzzer bash -lc '
-+  export go_version=1.24.8
-+  export GOPATH=~/software/gopath-common
-+  export GOROOT=~/software/go$go_version
-+  export PATH=$GOROOT/bin:$PATH:$GOPATH/bin
-+  cd /root/SyzPilot-fuzzer && make -j$(nproc)
++  cd /root/fuzzers/SyzPilot-fuzzer && make -j$(nproc)
 +'
 +```
 +
@@ -208,9 +205,9 @@ index a8c48e3..9922a81 100644
 +### Directory Layout (inside container)
 +
 +```
-+/root/SyzPilot-fuzzer/          # This repository (bind-mounted from host)
-+/root/kernels/                  # Compiled kernels (bind-mounted from host)
-+/root/images-auto/image-{1..5}/ # VM images (5 copies for parallel load)
++/root/fuzzers/SyzPilot-fuzzer/ # Patched Syzkaller checkout
++/root/kernels/                 # Compiled kernels
++/root/images/image-template/   # Guest disk image and SSH key
 +```
 +
 +## Usage
@@ -226,7 +223,7 @@ index a8c48e3..9922a81 100644
 +
 +```bash
 +# Run the unassisted Syzkaller baseline.
-+taskset -c 0-7 /root/SyzPilot-fuzzer/bin/syz-manager \
++taskset -c 0-7 /root/fuzzers/SyzPilot-fuzzer/bin/syz-manager \
 +    -config /path/to/manager.cfg -timeout 12h
 +```
 +
@@ -234,7 +231,7 @@ index a8c48e3..9922a81 100644
 +
 +Add SyzPilot config to `manager.cfg`. Replace every placeholder with a value
 +for the evaluator's own kernel, VM image, network, and work directory. Resolve
-+target PCs with SyzPilot-dev's `analyzer/get_targets.py` (using
++target PCs with SyzPilot's `analyzer/get_targets.py` (using
 +`function@source-file:line`), rather than copying addresses from another
 +kernel build. The Docker bridge address is host-dependent.
 +
@@ -255,7 +252,7 @@ index a8c48e3..9922a81 100644
 +```
 +
 +```bash
-+taskset -c 0-7 /root/SyzPilot-fuzzer/bin/syz-manager \
++taskset -c 0-7 /root/fuzzers/SyzPilot-fuzzer/bin/syz-manager \
 +    -config /path/to/manager.cfg -timeout 12h \
 +    -bench /path/to/bench.log
 +```
@@ -456,13 +453,6 @@ index a8c48e3..9922a81 100644
 +### Debug logger
 +
 +When `enable_debug: true` in config, detailed logs are written to `<workdir>/debuglogger.log`.
-+
-+## Related Repositories
-+
-+| Repository | Purpose |
-+|------------|---------|
-+| SyzPilot-dev | Brain-side controller and ML pipeline (Python) |
-+| KallGraph-full | Static analysis for indirect call analysis (C++) |
 +
 +## License
 +
@@ -5055,13 +5045,14 @@ index f6e327d..6295c58 100644
  	if x := v / secs; x >= 10 {
 diff --git a/pkg/syzpilotlib/Makefile b/pkg/syzpilotlib/Makefile
 new file mode 100644
-index 0000000..94584d9
+index 0000000..22890ae
 --- /dev/null
 +++ b/pkg/syzpilotlib/Makefile
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,139 @@
 +LOG_PREFIX := [SyzPilot]
 +GO ?= go
 +PROTOC ?= protoc
++PROTOBUF_INCLUDE ?= $(shell pkg-config --variable=includedir protobuf 2>/dev/null)
 +PROTOC_GEN_GO_VERSION := v1.36.6
 +PROTOC_GEN_GO_GRPC_VERSION := v1.5.1
 +
@@ -5094,7 +5085,8 @@ index 0000000..94584d9
 +GOOGLEAPIS_DIR := $(TOOLS_ROOT)/googleapis/$(GOOGLEAPIS_COMMIT)
 +GOOGLEAPIS_READY := $(GOOGLEAPIS_DIR)/.syzpilot-ready
 +
-+.PHONY: all tools check-protoc collectorlib predictorlib clean help
++.PHONY: all tools check-protoc check-protobuf-includes
++.PHONY: collectorlib predictorlib clean help
 +
 +all: collectorlib predictorlib
 +
@@ -5117,7 +5109,15 @@ index 0000000..94584d9
 +check-protoc:
 +	@command -v $(PROTOC) >/dev/null 2>&1 || { \
 +		echo "$(LOG_PREFIX) error: protoc is not installed"; \
-+		echo "$(LOG_PREFIX) Ubuntu/Debian: apt-get install protobuf-compiler libprotobuf-dev"; \
++		echo "$(LOG_PREFIX) Ubuntu/Debian: apt-get install protobuf-compiler"; \
++		exit 1; \
++	}
++
++check-protobuf-includes:
++	@test -f "$(PROTOBUF_INCLUDE)/google/protobuf/empty.proto" || { \
++		echo "$(LOG_PREFIX) error: protobuf include files are unavailable"; \
++		echo "$(LOG_PREFIX) install protobuf development headers"; \
++		echo "$(LOG_PREFIX) (e.g. libprotobuf-dev on Debian/Ubuntu) or set PROTOBUF_INCLUDE"; \
 +		exit 1; \
 +	}
 +
@@ -5149,11 +5149,12 @@ index 0000000..94584d9
 +		"$(TRANSMISSION_PROTO)"
 +	@echo "$(LOG_PREFIX) Generated collector client code in $(COLLECTORLIB_DIR)/"
 +
-+predictorlib: $(GOOGLEAPIS_READY) check-protoc $(PROTOC_GEN_GO) $(PROTOC_GEN_GO_GRPC)
++predictorlib: $(GOOGLEAPIS_READY) check-protoc check-protobuf-includes $(PROTOC_GEN_GO) $(PROTOC_GEN_GO_GRPC)
 +	@echo "$(LOG_PREFIX) Generating Go protobuf code for predictor client..."
 +	mkdir -p "$(PREDICTORLIB_DIR)"
 +	$(PROTOC) \
 +		-I "$(GOOGLEAPIS_DIR)" \
++		-I "$(PROTOBUF_INCLUDE)" \
 +		-I "$(SYZPILOTLIB_DIR)" \
 +		--plugin=protoc-gen-go="$(PROTOC_GEN_GO)" \
 +		--plugin=protoc-gen-go-grpc="$(PROTOC_GEN_GO_GRPC)" \
