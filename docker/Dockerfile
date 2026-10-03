@@ -2,6 +2,10 @@
 ARG KERNEL_FUZZ_IMAGE=qgrain/kernel-fuzz:2404_v1@sha256:946b5620a9e31690c5b67458a63410a75afbff7d9ea4223f2acb93812018afa0
 FROM ${KERNEL_FUZZ_IMAGE}
 
+# Load the base image's shared Go, LLVM, and Conda environment for every build
+# step, matching the documented non-interactive automation contract.
+SHELL ["/bin/bash", "-lc"]
+
 ARG SYZPILOT_REPOSITORY=https://github.com/QGrain/SyzPilot.git
 ARG SYZPILOT_REVISION
 ARG SYZENCODER_REPOSITORY=zzra1n/SyzEncoder
