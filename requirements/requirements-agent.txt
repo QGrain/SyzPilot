@@ -1,3 +1,0 @@
-# Install in a dedicated environment because the Codex SDK currently requires
-# a newer Pydantic release than the SyzPilot Brain environment.
-openai-codex==0.147.0

@@ -43,11 +43,6 @@ The default base is pinned to the multi-platform digest of
 `qgrain/kernel-fuzz:2404_v1`. Override `KERNEL_FUZZ_IMAGE` only with a tested,
 digest-pinned compatible image.
 
-The optional `requirements/requirements-agent.txt` is not installed in the
-functional image. It requires a newer Pydantic release than the pinned Brain
-environment and belongs in a separate environment when evaluating the
-experimental agentic waypoint tools.
-
 ## Create a Brain container
 
 Run the Brain role on a GPU host. The explicit `sleep infinity` below is a

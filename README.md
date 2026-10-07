@@ -82,7 +82,7 @@ completed.
 ├── filter/           # SyzEncoder, classifier training, and attribution
 ├── fuzzer/           # SyzPilot-Fuzzer and archived baseline source patches
 ├── mini-benchmark/   # Three source-only functional benchmark cases
-├── requirements/     # Brain, Fuzzer, and optional agent dependencies
+├── requirements/     # Brain and Fuzzer dependencies
 ├── scripts/          # Dataset and experiment utilities
 └── tests/            # CPU-side regression and contract tests
 ```
@@ -258,9 +258,6 @@ python analyzer/waypoints_extractor.py \
 Success is an ordered, nonempty waypoint list followed by a
 `[For SyzPilot-fuzzer:]` JSON array of target PCs. PC values must always be
 resolved from the exact `vmlinux` used by the corresponding fuzzing VM.
-
-For the resumable multi-case extraction and evaluation workflow, see
-[`docs/WAYPOINTS_TESTING.md`](docs/WAYPOINTS_TESTING.md).
 
 ### 2.2 Start the Brain
 
