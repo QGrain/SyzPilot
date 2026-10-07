@@ -61,6 +61,7 @@ def render_config(args: argparse.Namespace, pcs: list[str]) -> dict:
     syzpilot["report_path"] = report_path
     syzpilot["target_func"] = target_func
     syzpilot["target_pcs"] = pcs
+    syzpilot["observe_target_coverage"] = False
     syzpilot["reach_filter"]["controller"] = f"{args.brain_host}:48000"
     for field in (
         "cold_start_seed_dir",
@@ -69,8 +70,13 @@ def render_config(args: argparse.Namespace, pcs: list[str]) -> dict:
         "directed_corpus",
     ):
         syzpilot.pop(field, None)
+    syzpilot["directed_corpus"] = {
+        "enable": True,
+        "capacity": 256,
+        "mutation_probability": 0.20,
+        "anchor_preserve_probability": 0.95,
+    }
     if args.case == 25:
-        syzpilot["observe_target_coverage"] = False
         syzpilot["cold_start_seed_dir"] = (
             "/root/fuzzers/SyzPilot-fuzzer/sys/linux/test"
         )
@@ -79,12 +85,6 @@ def render_config(args: argparse.Namespace, pcs: list[str]) -> dict:
             "syzpilot_seed_catalog_linux_amd64.json"
         )
         syzpilot["cold_start_auto_dependencies"] = True
-        syzpilot["directed_corpus"] = {
-            "enable": True,
-            "capacity": 256,
-            "mutation_probability": 0.20,
-            "anchor_preserve_probability": 0.95,
-        }
     return config
 
 

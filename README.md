@@ -64,7 +64,7 @@ completed.
 ┌────────────────────────────┴──────────────────────────────┐
 │                   SyzPilot-Fuzzer (CPU/KVM)               │
 │  syz-manager ── Collector/Predictor ── guided scheduling  │
-│       └── native corpus + opt-in directed runtime corpus  │
+│       └── native corpus + Full-profile directed corpus    │
 └───────────────────────────────────────────────────────────┘
 ```
 

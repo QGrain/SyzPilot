@@ -40,17 +40,20 @@ python experiments/compile_kernel.py \
 mkdir -p "/root/syzpilot-runs/case_${CASE}"
 python analyzer/waypoints_extractor.py \
   -k "/root/kernels/case_${CASE}" \
-  -t "benchmark/configs/case_${CASE}.title" \
-  -r "benchmark/configs/case_${CASE}.report" \
+  -t "mini-benchmark/configs/case_${CASE}.title" \
+  -r "mini-benchmark/configs/case_${CASE}.report" \
   | tee "/root/syzpilot-runs/case_${CASE}/waypoints.txt"
 ```
 
 Generate the manager configuration on the Fuzzer host. `BRAIN_HOST` and
 `FUZZER_HOST` must be mutually reachable private addresses. The centralized
 helper replaces all kernel-specific PCs and paths; it never reuses the
-template's historical addresses.
+template's historical addresses. If the Brain and Fuzzer containers do not
+share `/root/syzpilot-runs`, first copy `waypoints.txt` to the same path on the
+Fuzzer host using the site's normal shared volume, `docker cp`, or `scp`.
 
 ```bash
+CASE=25
 export BRAIN_HOST=10.0.0.10
 export FUZZER_HOST=10.0.0.20
 
@@ -62,12 +65,12 @@ python scripts/prepare_functional_config.py \
   --fuzzer-host "$FUZZER_HOST"
 ```
 
-The helper chooses a distinct manager port for each case. For `case_25`, it
-also enables the versioned generic `NoGenerate` seed catalog and the bounded
-directed runtime corpus. Those assets come from the pinned Syzkaller tree,
-not from F2FS-specific code, a target PoC, or crash-specific values. Cases 21
-and 36 retain the ordinary full-pipeline configuration without this optional
-directed-corpus treatment.
+The helper chooses a distinct manager port for each case and enables the same
+bounded directed runtime corpus used by the SyzPilot Full profile. For
+`case_25`, it additionally enables the versioned generic `NoGenerate` seed
+catalog. Those seed assets come from the pinned Syzkaller tree, not from
+F2FS-specific code, a target PoC, or crash-specific values. Cases 21 and 36
+use the ordinary generatable-call cold-start path.
 
 Before launching a run, follow the root README to patch and build
 `/root/fuzzers/SyzPilot-fuzzer`, start the Brain explicitly, and verify the
