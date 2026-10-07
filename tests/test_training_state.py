@@ -144,6 +144,21 @@ def write_balanced_committed_batch(data_dir, batch_id, num_classes=3):
 
 
 class TrainingStateTest(unittest.TestCase):
+    def test_run_id_advances_past_sparse_numeric_directories(self):
+        instance = Controller()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            task_dir = Path(temp_dir) / "task"
+            task_dir.mkdir()
+            (task_dir / "1").mkdir()
+            (task_dir / "3").mkdir()
+            (task_dir / "2").write_text("not a run directory")
+            (task_dir / "notes").mkdir()
+            (task_dir / "²").mkdir()
+            with mock.patch.object(controller_module.config, "data_root", temp_dir):
+                run_id = instance._get_run_id("task")
+
+        self.assertEqual(run_id, 4)
+
     def test_controller_rejects_ambiguous_cuda_device_namespace(self):
         with mock.patch.dict(
                 os.environ, {"CUDA_VISIBLE_DEVICES": "2,0"}, clear=False):

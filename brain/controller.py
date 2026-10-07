@@ -1492,9 +1492,17 @@ class Controller:
         with self.task_stats_lock:
             # Recount under lock to avoid race conditions
             task_dir = os.path.join(config.data_root, task_name)
-            disk_count = 0
-            if os.path.exists(task_dir):
-                disk_count = len(os.listdir(task_dir))
+            disk_run_ids = []
+            if os.path.isdir(task_dir):
+                with os.scandir(task_dir) as entries:
+                    disk_run_ids = [
+                        int(entry.name)
+                        for entry in entries
+                        if entry.name.isascii()
+                        and entry.name.isdigit()
+                        and entry.is_dir(follow_symlinks=False)
+                    ]
+            max_disk = max(disk_run_ids, default=0)
 
             # Count in-memory tasks that would bump the counter
             existing_run_ids = {t.run_id for t in self.global_tasks.values()
@@ -1507,7 +1515,7 @@ class Controller:
             max_reserved = max(reserved_ids, default=0)
 
             current_run_id = max(
-                disk_count + 1, max_existing + 1, max_reserved + 1
+                max_disk + 1, max_existing + 1, max_reserved + 1
             )
             self.reserved_run_ids.add((task_name, current_run_id))
 
