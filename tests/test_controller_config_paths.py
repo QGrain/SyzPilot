@@ -50,6 +50,10 @@ class ControllerConfigPathsTest(unittest.TestCase):
             "/artifact/assets/syzlang/sys/linux/",
         )
         self.assertEqual(
+            config.data_root,
+            str(Path(__file__).resolve().parents[1] / "brain" / "receiver_data"),
+        )
+        self.assertEqual(
             config.guidance_report_roots,
             ("/artifact/assets",),
         )
@@ -65,6 +69,7 @@ class ControllerConfigPathsTest(unittest.TestCase):
             "SYZPILOT_BASE_MODEL_PATH": "/artifact/model",
             "SYZPILOT_TOKENIZER_PATH": "/artifact/tokenizer",
             "SYZPILOT_SYZKALLER_SYSLINUX": "/artifact/syzkaller/sys/linux",
+            "SYZPILOT_DATA_ROOT": "/datasets/syzpilot/run-1/receiver_data",
             "SYZPILOT_GUIDANCE_REPORT_ROOTS": (
                 f"/artifact/reports{os.pathsep} /artifact/other-reports "
             ),
@@ -80,6 +85,9 @@ class ControllerConfigPathsTest(unittest.TestCase):
             config.syzkaller_syslinux, "/artifact/syzkaller/sys/linux"
         )
         self.assertEqual(
+            config.data_root, "/datasets/syzpilot/run-1/receiver_data"
+        )
+        self.assertEqual(
             config.guidance_report_roots,
             ("/artifact/reports", "/artifact/other-reports"),
         )
@@ -87,6 +95,27 @@ class ControllerConfigPathsTest(unittest.TestCase):
             config.guidance_kallgraph_roots, ("/artifact/kallgraph",)
         )
         self.assertEqual(explicit.base_model, "/explicit/model")
+
+    def test_empty_data_root_uses_default(self):
+        with mock.patch.dict(
+            os.environ, {"SYZPILOT_DATA_ROOT": ""}, clear=True
+        ):
+            config = ControllerConfig()
+
+        self.assertEqual(
+            config.data_root,
+            str(Path(__file__).resolve().parents[1] / "brain" / "receiver_data"),
+        )
+
+    def test_data_root_expands_home(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with mock.patch.dict(os.environ, {
+                "HOME": temp_dir,
+                "SYZPILOT_DATA_ROOT": "~/syzpilot-data",
+            }, clear=True):
+                config = ControllerConfig()
+
+        self.assertEqual(config.data_root, str(Path(temp_dir) / "syzpilot-data"))
 
     def test_torchserve_handler_uses_controller_tokenizer_environment(self):
         handler_config = self._load_handler_config({

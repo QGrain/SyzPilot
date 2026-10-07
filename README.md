@@ -187,6 +187,11 @@ docker run -d --name syzpilot-fuzzer --network host --device /dev/kvm \
   qgrain/syzpilot:ndss27-ae sleep infinity
 ```
 
+For persistent development experiments outside Docker, set
+`SYZPILOT_DATA_ROOT` to an experiment-specific directory, for example
+`$HOME/datasets/SyzPilot/receiver_runs/<RUN_ID>/brain/receiver_data`. The
+default remains `brain/receiver_data`.
+
 The source checkout, Fuzzer patch, and compiled Syzlang assets in the image
 form one tested snapshot. Use it unchanged for artifact evaluation:
 

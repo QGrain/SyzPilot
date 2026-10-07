@@ -45,7 +45,9 @@ class ControllerConfig:
     log_dir: str = str(BRAIN_DIR / "logs")
 
     # ---- Data & training ----
-    data_root: str = str(BRAIN_DIR / "receiver_data")   # where shards and merged PKLs live (absolute path)
+    data_root: str = field(default_factory=lambda: str(Path(
+        os.getenv("SYZPILOT_DATA_ROOT") or str(BRAIN_DIR / "receiver_data")
+    ).expanduser().resolve()))
     min_samples_to_train: int = 1000                      # trigger a train run after this many new samples (matches receiver stage1_threshold)
     training_warmup_seconds: int = int(os.getenv(
         "SYZPILOT_TRAINING_WARMUP_SECONDS", "0"
