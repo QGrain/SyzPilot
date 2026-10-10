@@ -3,6 +3,11 @@
 from typing import Optional, Sequence
 
 
+def is_model_eligible_program(program: str) -> bool:
+    """Return whether a serialized program can be consumed by the model."""
+    return program != ""
+
+
 def one_hot_label_class(
     labels: Sequence[bool], num_classes: Optional[int] = None
 ) -> Optional[int]:

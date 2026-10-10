@@ -42,13 +42,18 @@ from model_v2 import (
 from utils import create_collate_fn, rand_str
 from common.curriculum import (
     CURRICULUM_SCHEMA_VERSION,
+    DENSE_PAPER_MODE,
+    SPARSE_ADAPTIVE_MODE,
     curriculum_class,
+    curriculum_metric_class_members,
     curriculum_output_classes,
+    normalize_curriculum_mode,
+    normalize_stage3_active_classes,
 )
 from brain.model_promotion import (
     PromotionThresholds,
+    decide_detailed_bootstrap,
     decide_stage1_bootstrap,
-    decide_stage2_bootstrap,
 )
 
 
@@ -73,25 +78,47 @@ def require_single_process(accelerator):
         raise RuntimeError("TrainerV2 supports exactly one Accelerate process")
 
 
+def validate_active_class_transition(
+        train_stage, active_classes, loaded_stage, loaded_active_classes):
+    """Reject a Stage-3 objective that forgets a deployed exact class."""
+    if train_stage == 3 and loaded_stage == 3:
+        if not set(loaded_active_classes or ()).issubset(active_classes or ()):
+            raise ValueError("Stage-3 active classes cannot contract")
+
+
+def baseline_serving_objective(config):
+    """Return the deployed objective used for pre-training binary metrics."""
+    loaded_stage = int(config.get("loaded_checkpoint_stage", 0))
+    stage = loaded_stage or int(config["train_stage"])
+    active_classes = None
+    if stage == 3:
+        active_classes = (
+            config.get("loaded_active_classes") if loaded_stage == 3
+            else config.get("active_classes")
+        )
+    return stage, active_classes
+
+
 def checkpoint_selection(
-        stage, metrics, *, num_classes=None, thresholds=None):
+        stage, metrics, *, num_classes=None, thresholds=None,
+        active_classes=None):
     """Return the validation objective and a larger-is-better selection key."""
     eval_loss = float(metrics["eval_loss"])
     if stage == 1:
         metric_name = "eval_loss"
         metric_value = eval_loss
         selection_key = (-eval_loss,)
-    elif stage == 2:
+    elif stage in (2, 3):
         metric_name = "macro_f1"
         metric_value = float(metrics["macro_f1"])
         gate_priority = ()
         if thresholds is not None:
             if num_classes is None:
                 raise ValueError(
-                    "num_classes is required for Stage-2 gate selection"
+                    "num_classes is required for detailed gate selection"
                 )
-            gate_priority = (int(decide_stage2_bootstrap(
-                metrics, num_classes, thresholds
+            gate_priority = (int(decide_detailed_bootstrap(
+                metrics, stage, num_classes, active_classes, thresholds
             )["accepted"]),)
         # Exact-class loss is dominated by common classes. Macro-F1 matches
         # the promotion objective; loss breaks ties deterministically. A
@@ -105,18 +132,23 @@ def checkpoint_selection(
     return metric_name, metric_value, selection_key
 
 
-def binary_serving_logits(raw_logits, serving_stage):
+def binary_serving_logits(raw_logits, serving_stage, active_classes=None):
     """Project logits using the deployed stage's reachability decision."""
     if serving_stage == 1:
         return curriculum_logits(raw_logits, 1)
     if serving_stage == 2:
-        if raw_logits.ndim != 2 or raw_logits.shape[1] < 2:
-            raise ValueError(
-                "raw logits must have shape [batch, at least 2 classes]"
-            )
+        objective = curriculum_logits(raw_logits, 2)
         return torch.stack((
-            raw_logits[:, 0],
-            torch.max(raw_logits[:, 1:], dim=1).values,
+            objective[:, 0],
+            torch.max(objective[:, 1:], dim=1).values,
+        ), dim=1)
+    if serving_stage == 3:
+        objective = curriculum_logits(
+            raw_logits, 3, active_classes
+        )
+        return torch.stack((
+            objective[:, 0],
+            torch.max(objective[:, 1:], dim=1).values,
         ), dim=1)
     raise ValueError(f"invalid serving stage: {serving_stage}")
 
@@ -142,8 +174,25 @@ def write_training_manifest(save_dir, *, best_checkpoint, best_step,
             re.fullmatch(r"[0-9a-f]{64}", validation_signature_sha256) is None):
         raise ValueError("validation signature fingerprint is invalid")
 
-    if int(config["train_stage"]) == 2 and best_metrics is None:
-        raise ValueError("Stage-2 manifest requires checkpoint metrics")
+    train_stage = int(config["train_stage"])
+    num_classes = int(config["num_classes"])
+    curriculum_mode = normalize_curriculum_mode(
+        config.get("curriculum_mode", DENSE_PAPER_MODE)
+    )
+    active_classes = config.get("active_classes")
+    if train_stage == 3:
+        active_classes = normalize_stage3_active_classes(
+            active_classes, num_classes
+        )
+        if (curriculum_mode == DENSE_PAPER_MODE and
+                active_classes != tuple(range(num_classes))):
+            raise ValueError(
+                "dense-paper Stage 3 requires every canonical class"
+            )
+    elif active_classes is not None:
+        raise ValueError("active_classes is only valid for Stage 3")
+    if train_stage in (2, 3) and best_metrics is None:
+        raise ValueError("detailed-stage manifest requires checkpoint metrics")
     selection_metrics = dict(best_metrics or {})
     selection_metrics.setdefault("eval_loss", best_eval_loss)
     selection_metrics.setdefault("macro_f1", 0.0)
@@ -175,15 +224,20 @@ def write_training_manifest(save_dir, *, best_checkpoint, best_step,
         )),
     )
     selection_metric, selection_value, selection_key = checkpoint_selection(
-        int(config["train_stage"]), selection_metrics,
-        num_classes=int(config["num_classes"]),
+        train_stage, selection_metrics,
+        num_classes=num_classes,
         thresholds=(
-            selection_thresholds if int(config["train_stage"]) == 2 else None
+            selection_thresholds if train_stage in (2, 3) else None
         ),
+        active_classes=active_classes,
+    )
+    metric_class_members = curriculum_metric_class_members(
+        num_classes, train_stage, active_classes
     )
     manifest = {
         "schema_version": 1,
         "curriculum_schema": CURRICULUM_SCHEMA_VERSION,
+        "curriculum_mode": curriculum_mode,
         "best_checkpoint": str(checkpoint_path),
         "checkpoint_sha256": digest.hexdigest(),
         "best_step": int(best_step),
@@ -191,11 +245,18 @@ def write_training_manifest(save_dir, *, best_checkpoint, best_step,
         "checkpoint_selection_metric": selection_metric,
         "checkpoint_selection_value": selection_value,
         "checkpoint_selection_gate_passed": (
-            bool(selection_key[0]) if int(config["train_stage"]) == 2 else None
+            bool(selection_key[0]) if train_stage in (2, 3) else None
         ),
         "final_step": int(final_step),
         "train_stage": int(config["train_stage"]),
         "num_classes": int(config["num_classes"]),
+        "active_exact_classes": (
+            list(active_classes) if train_stage == 3 else []
+        ),
+        "metric_class_members": {
+            str(metric_index): list(exact_classes)
+            for metric_index, exact_classes in metric_class_members.items()
+        },
         "model_max_length": int(config.get("model_max_length", 1024)),
         "micro_batch_size": int(config.get("batch_size", 128)),
         "gradient_accumulation_steps": int(config.get("grad_acc_steps", 1)),
@@ -252,6 +313,9 @@ def write_training_manifest(save_dir, *, best_checkpoint, best_step,
         "loaded_checkpoint_stage": int(config.get(
             "loaded_checkpoint_stage", 0
         )),
+        "loaded_active_exact_classes": (
+            list(config.get("loaded_active_classes") or ())
+        ),
         "validation_signature_count": validation_signature_count,
         "validation_signature_sha256": validation_signature_sha256,
         "class_aware_replay": bool(config.get("class_aware_replay", False)),
@@ -292,7 +356,7 @@ def write_training_manifest(save_dir, *, best_checkpoint, best_step,
     )
     if validation_class_counts is not None:
         expected_classes = curriculum_output_classes(
-            int(config["num_classes"]), int(config["train_stage"])
+            int(config["num_classes"]), train_stage, active_classes
         )
         normalized_counts = {
             str(int(class_index)): int(count)
@@ -462,6 +526,44 @@ class TrainerV2:
             list(map(int, config["test_exclude_data_idx"].split(",")))
             if config["test_exclude_data_idx"] else list(config["data_idx"])
         )
+        config["active_classes"] = (
+            tuple(map(int, config["active_classes"].split(",")))
+            if config.get("active_classes") else None
+        )
+        config["loaded_active_classes"] = (
+            tuple(map(int, config["loaded_active_classes"].split(",")))
+            if config.get("loaded_active_classes") else None
+        )
+        config["curriculum_mode"] = normalize_curriculum_mode(
+            config.get("curriculum_mode", DENSE_PAPER_MODE)
+        )
+        if config["train_stage"] == 3:
+            config["active_classes"] = normalize_stage3_active_classes(
+                config["active_classes"], config["num_classes"]
+            )
+            if (config["curriculum_mode"] == DENSE_PAPER_MODE and
+                    config["active_classes"] != tuple(range(
+                        config["num_classes"]
+                    ))):
+                raise ValueError(
+                    "dense-paper Stage 3 requires every canonical class"
+                )
+        elif config["active_classes"] is not None:
+            raise ValueError("active_classes is only valid for Stage 3")
+        if config["loaded_checkpoint_stage"] == 3:
+            config["loaded_active_classes"] = normalize_stage3_active_classes(
+                config["loaded_active_classes"], config["num_classes"]
+            )
+        elif config["loaded_active_classes"] is not None:
+            raise ValueError(
+                "loaded_active_classes requires a Stage-3 checkpoint"
+            )
+        validate_active_class_transition(
+            config["train_stage"],
+            config["active_classes"],
+            config["loaded_checkpoint_stage"],
+            config["loaded_active_classes"],
+        )
         self.ckpt_list = {}
         self.best_step = 0
 
@@ -516,6 +618,7 @@ class TrainerV2:
             self.config["base_model_path"],
             self.config["num_classes"],
             stage=self.config["train_stage"],
+            active_classes=self.config["active_classes"],
         )
         if config["load_path"]:
             loaded_weights = torch.load(config["load_path"], weights_only=True)
@@ -547,7 +650,7 @@ class TrainerV2:
             config["num_classes"],
             config["data_idx"],
             canonical_indices=canonical_indices,
-            class_aware_replay=config["train_stage"] == 2,
+            class_aware_replay=config["train_stage"] in (2, 3),
         )
         self.config["class_aware_replay"] = train_ds.class_aware_replay
         self.config["replay_policy"] = (
@@ -586,12 +689,14 @@ class TrainerV2:
         validation_class_counts = {
             class_index: 0
             for class_index in range(curriculum_output_classes(
-                config["num_classes"], config["train_stage"]
+                config["num_classes"], config["train_stage"],
+                config["active_classes"],
             ))
         }
         for _, _, exact_class in test_ds.records.values():
             grouped_class = curriculum_class(
-                exact_class, config["num_classes"], config["train_stage"]
+                exact_class, config["num_classes"], config["train_stage"],
+                config["active_classes"],
             )
             validation_class_counts[grouped_class] += 1
         self.config["validation_dataset_class_counts"] = validation_class_counts
@@ -654,14 +759,19 @@ class TrainerV2:
                 self.logger.info(f'''  {_k} -> {_v}''')
 
     @torch.no_grad()
-    def test(self, binary_serving_stage=None):
+    def test(self, binary_serving_stage=None,
+             binary_serving_active_classes=None):
         self.model.eval()
+        active_classes = self.config.get("active_classes")
         if binary_serving_stage is None:
             binary_serving_stage = self.config["train_stage"]
+            if binary_serving_stage == 3:
+                binary_serving_active_classes = active_classes
         total_loss = 0
         total_binary_loss = 0
         num_batches = 0
         num_examples = 0
+        num_binary_examples = 0
 
         prog_bar = tqdm(
             range(self.eval_steps),
@@ -680,18 +790,28 @@ class TrainerV2:
             raw_logits = self.model(input_ids, attention_mask)
             exact_labels = torch.argmax(labels, dim=1)
             objective_logits = curriculum_logits(
-                raw_logits, self.config["train_stage"]
+                raw_logits, self.config["train_stage"], active_classes,
             )
             objective_labels = curriculum_labels(
                 exact_labels,
                 self.config["num_classes"],
                 self.config["train_stage"],
+                active_classes,
             )
             loss = torch.nn.functional.cross_entropy(
                 objective_logits, objective_labels
             )
+            if not torch.isfinite(loss).all():
+                raise FloatingPointError("non-finite exact evaluation loss")
+            pred_labels = torch.argmax(objective_logits, dim=1)
+            batch_examples = int(objective_labels.shape[0])
+            total_loss += loss.item() * batch_examples
+            num_examples += batch_examples
+            y_test.append(objective_labels.cpu().numpy())
+            y_pred.append(pred_labels.cpu().numpy())
             binary_logits = binary_serving_logits(
-                raw_logits, binary_serving_stage
+                raw_logits, binary_serving_stage,
+                binary_serving_active_classes,
             )
             binary_labels = curriculum_labels(
                 exact_labels, self.config["num_classes"], 1
@@ -699,18 +819,13 @@ class TrainerV2:
             binary_loss = torch.nn.functional.cross_entropy(
                 binary_logits, binary_labels
             )
-            if (not torch.isfinite(loss).all() or
-                    not torch.isfinite(binary_loss).all()):
-                raise FloatingPointError("non-finite evaluation loss")
-            pred_labels = torch.argmax(objective_logits, dim=1)
+            if not torch.isfinite(binary_loss).all():
+                raise FloatingPointError("non-finite binary evaluation loss")
             binary_pred_labels = torch.argmax(binary_logits, dim=1)
-            batch_examples = int(objective_labels.shape[0])
-            total_loss += loss.item() * batch_examples
-            total_binary_loss += binary_loss.item() * batch_examples
-            num_examples += batch_examples
+            binary_batch_examples = int(binary_labels.shape[0])
+            total_binary_loss += binary_loss.item() * binary_batch_examples
+            num_binary_examples += binary_batch_examples
             num_batches += 1
-            y_test.append(objective_labels.cpu().numpy())
-            y_pred.append(pred_labels.cpu().numpy())
             binary_y_test.append(binary_labels.cpu().numpy())
             binary_y_pred.append(binary_pred_labels.cpu().numpy())
 
@@ -719,6 +834,8 @@ class TrainerV2:
                 prog_bar.close()
                 break
 
+        if not y_test:
+            raise ValueError("validation split is empty")
         y_test = np.concatenate(y_test)
         y_pred = np.concatenate(y_pred)
         binary_y_test = np.concatenate(binary_y_test)
@@ -732,7 +849,8 @@ class TrainerV2:
             y_test, y_pred, average="weighted", zero_division=0,
         )
         expected_classes = curriculum_output_classes(
-            self.config["num_classes"], self.config["train_stage"]
+            self.config["num_classes"], self.config["train_stage"],
+            active_classes,
         )
         _, per_class_recall, _, _ = precision_recall_fscore_support(
             y_test,
@@ -741,10 +859,15 @@ class TrainerV2:
             average=None,
             zero_division=0,
         )
+        macro_metric_classes = list(range(expected_classes))
+        if (self.config["train_stage"] == 3 and
+                len(active_classes) < self.config["num_classes"]):
+            # Reach_Other is a safe catch-all, not a promoted exact waypoint.
+            macro_metric_classes = list(range(len(active_classes)))
         _, _, macro_f1, _ = precision_recall_fscore_support(
             y_test,
             y_pred,
-            labels=list(range(expected_classes)),
+            labels=macro_metric_classes,
             average="macro",
             zero_division=0,
         )
@@ -780,7 +903,7 @@ class TrainerV2:
                 for class_index in range(expected_classes)
             },
             "binary_eval_loss": (
-                total_binary_loss / max(num_examples, 1)
+                total_binary_loss / max(num_binary_examples, 1)
             ),
             "binary_accuracy": binary_accuracy,
             "binary_macro_f1": binary_macro_f1,
@@ -822,12 +945,12 @@ class TrainerV2:
         min_steps = self.config.get("min_steps", 200)
         patience = self.config.get("patience", 3)
 
-        baseline_serving_stage = (
-            int(self.config.get("loaded_checkpoint_stage", 0)) or
-            self.config["train_stage"]
+        baseline_serving_stage, baseline_serving_active_classes = (
+            baseline_serving_objective(self.config)
         )
         acc, current_time, log_info = self.test(
-            binary_serving_stage=baseline_serving_stage
+            binary_serving_stage=baseline_serving_stage,
+            binary_serving_active_classes=baseline_serving_active_classes,
         )
         baseline_eval_metrics = (
             dict(log_info) if self.config.get("load_path") else None
@@ -972,6 +1095,7 @@ class TrainerV2:
                         checkpoint_selection(
                             self.config["train_stage"], eval_info,
                             num_classes=self.config["num_classes"],
+                            active_classes=self.config["active_classes"],
                             thresholds=PromotionThresholds(
                                 majority_margin=self.config[
                                     "promotion_majority_margin"
@@ -1000,7 +1124,7 @@ class TrainerV2:
                                 stage2_min_final_recall=self.config[
                                     "promotion_stage2_min_final_recall"
                                 ],
-                            ) if self.config["train_stage"] == 2 else None,
+                            ) if self.config["train_stage"] in (2, 3) else None,
                         )
                     )
                     if (best_selection_key is None or
@@ -1085,7 +1209,16 @@ if __name__ == '__main__':
     parser.add_argument('--total_steps', type=int, default=10000)
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--num_classes', type=int, default=5)
-    parser.add_argument('--train_stage', type=int, choices=(1, 2), default=1)
+    parser.add_argument('--train_stage', type=int, choices=(1, 2, 3), default=1)
+    parser.add_argument(
+        '--curriculum_mode',
+        choices=(DENSE_PAPER_MODE, SPARSE_ADAPTIVE_MODE),
+        default=DENSE_PAPER_MODE,
+    )
+    parser.add_argument(
+        '--active_classes', type=str, default='',
+        help='Comma-separated canonical exact classes active in Stage 3',
+    )
 
     parser.add_argument('--base_model_path', type=str, default='/opt/syzpilot/models/customized_starencoder_5w/final_syzencoder/')
     parser.add_argument('--tokenizer_path', type=str, default='/opt/syzpilot/models/customized_tokenizer_224w/')
@@ -1119,7 +1252,11 @@ if __name__ == '__main__':
     parser.add_argument('--test_only', action='store_true')
     parser.add_argument('--load_path', type=str, default='')
     parser.add_argument(
-        '--loaded_checkpoint_stage', type=int, choices=(0, 1, 2), default=0
+        '--loaded_checkpoint_stage', type=int, choices=(0, 1, 2, 3), default=0
+    )
+    parser.add_argument(
+        '--loaded_active_classes', type=str, default='',
+        help='Stage-3 active classes used by the loaded serving checkpoint',
     )
     # Adaptive early stopping
     parser.add_argument('--min_steps', type=int, default=200, help='Minimum training steps before early stopping')

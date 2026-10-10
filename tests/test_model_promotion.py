@@ -10,6 +10,7 @@ BRAIN = ROOT / "brain"
 sys.path.insert(0, str(BRAIN))
 
 from model_promotion import (
+    decide_detailed_bootstrap,
     decide_model_promotion,
     decide_stage1_bootstrap,
     decide_stage2_bootstrap,
@@ -40,7 +41,7 @@ def manifest(stage, counts, recalls, *, accuracy=None, macro_f1=0.85,
         "loaded_checkpoint": "active.pt" if baseline else None,
         "loaded_checkpoint_stage": loaded_stage,
     }
-    if stage == 2:
+    if stage in (2, 3):
         binary_counts = [counts[0], sum(counts[1:])]
         binary = binary or {
             "loss": 0.2,
@@ -79,7 +80,7 @@ def manifest(stage, counts, recalls, *, accuracy=None, macro_f1=0.85,
                 for index, value in enumerate(baseline["recalls"])
             },
         })
-        if stage == 2:
+        if stage in (2, 3):
             baseline_binary = baseline.get("binary", binary)
             binary_counts = [counts[0], sum(counts[1:])]
             baseline_binary_accuracy = sum(
@@ -169,7 +170,7 @@ class ModelPromotionTest(unittest.TestCase):
         )
         self.assertFalse(decision["accepted"])
         self.assertIn("insufficient_class_support", decision["reason_codes"])
-        self.assertIn("low_final_recall", decision["reason_codes"])
+        self.assertIn("low_deep_recall", decision["reason_codes"])
 
     def test_same_stage_regression_is_rejected(self):
         decision = decide_model_promotion(
@@ -211,13 +212,13 @@ class ModelPromotionTest(unittest.TestCase):
         decision = decide_model_promotion(
             manifest(
                 2,
-                [100, 100],
-                [0.8, 0.6],
+                [100, 100, 100],
+                [0.8, 0.6, 0.6],
                 macro_f1=0.7,
                 baseline={
                     "loss": 0.2,
                     "macro_f1": 0.95,
-                    "recalls": [0.95, 0.95],
+                    "recalls": [0.95, 0.95, 0.95],
                     "binary": {
                         "loss": 0.1,
                         "macro_f1": 0.95,
@@ -232,13 +233,300 @@ class ModelPromotionTest(unittest.TestCase):
                 },
             ),
             2,
-            2,
+            3,
         )
         self.assertFalse(decision["accepted"])
         self.assertIn(
             "binary_relative_class_recall_regression",
             decision["reason_codes"],
         )
+
+    def test_stage_transition_allows_small_binary_loss_tradeoff(self):
+        decision = decide_model_promotion(
+            manifest(
+                3,
+                [100, 100, 100, 50],
+                [0.95, 0.9, 0.85, 0.8],
+                macro_f1=0.9,
+                baseline={
+                    "loss": 0.6,
+                    "macro_f1": 0.7,
+                    "recalls": [0.9, 0.4, 0.4, 0.4],
+                    "binary": {
+                        "loss": 0.14,
+                        "macro_f1": 0.95,
+                        "recalls": [0.97, 0.94],
+                    },
+                },
+                loaded_stage=2,
+                binary={
+                    "loss": 0.154,
+                    "macro_f1": 0.95,
+                    "recalls": [0.97, 0.94],
+                },
+            ),
+            3,
+            5,
+            active_classes=(0, 1, 4),
+        )
+        self.assertTrue(decision["accepted"], decision["reason_codes"])
+        self.assertEqual(
+            decision["binary_loss_gate"]["mode"],
+            "stage_transition_relative",
+        )
+        self.assertAlmostEqual(
+            decision["binary_loss_gate"]["absolute_tolerance"], 0.014
+        )
+        self.assertAlmostEqual(
+            decision["binary_loss_gate"]["maximum_candidate_loss"], 0.154
+        )
+
+    def test_stage_one_to_two_uses_transition_loss_gate(self):
+        decision = decide_model_promotion(
+            manifest(
+                2,
+                [100, 100, 100],
+                [0.95, 0.9, 0.85],
+                macro_f1=0.9,
+                baseline={
+                    "loss": 0.5,
+                    "macro_f1": 0.7,
+                    "recalls": [0.9, 0.5, 0.5],
+                    "binary": {
+                        "loss": 0.2,
+                        "macro_f1": 0.9,
+                        "recalls": [0.9, 0.9],
+                    },
+                },
+                loaded_stage=1,
+                binary={
+                    "loss": 0.22,
+                    "macro_f1": 0.9,
+                    "recalls": [0.9, 0.9],
+                },
+            ),
+            2,
+            3,
+        )
+        self.assertTrue(decision["accepted"], decision["reason_codes"])
+        self.assertEqual(
+            decision["binary_loss_gate"]["mode"],
+            "stage_transition_relative",
+        )
+
+    def test_same_stage_keeps_strict_binary_loss_gate(self):
+        decision = decide_model_promotion(
+            manifest(
+                3,
+                [100, 100, 100, 50],
+                [0.95, 0.9, 0.85, 0.8],
+                macro_f1=0.9,
+                loss=0.18,
+                baseline={
+                    "loss": 0.2,
+                    "macro_f1": 0.85,
+                    "recalls": [0.94, 0.88, 0.82, 0.78],
+                    "binary": {
+                        "loss": 0.14,
+                        "macro_f1": 0.95,
+                        "recalls": [0.97, 0.94],
+                    },
+                },
+                loaded_stage=3,
+                binary={
+                    "loss": 0.141,
+                    "macro_f1": 0.95,
+                    "recalls": [0.97, 0.94],
+                },
+            ),
+            3,
+            5,
+            active_classes=(0, 1, 4),
+        )
+        self.assertFalse(decision["accepted"])
+        self.assertIn(
+            "binary_relative_loss_regression", decision["reason_codes"]
+        )
+        self.assertEqual(
+            decision["binary_loss_gate"]["mode"], "same_stage_absolute"
+        )
+
+    def test_transition_loss_tolerance_does_not_relax_recall(self):
+        decision = decide_model_promotion(
+            manifest(
+                3,
+                [100, 100, 100, 50],
+                [0.95, 0.9, 0.85, 0.8],
+                macro_f1=0.9,
+                baseline={
+                    "loss": 0.6,
+                    "macro_f1": 0.7,
+                    "recalls": [0.9, 0.4, 0.4, 0.4],
+                    "binary": {
+                        "loss": 0.14,
+                        "macro_f1": 0.95,
+                        "recalls": [0.97, 0.94],
+                    },
+                },
+                loaded_stage=2,
+                binary={
+                    "loss": 0.149,
+                    "macro_f1": 0.91,
+                    "recalls": [0.90, 0.92],
+                },
+            ),
+            3,
+            5,
+            active_classes=(0, 1, 4),
+        )
+        self.assertFalse(decision["accepted"])
+        self.assertIn(
+            "binary_relative_class_recall_regression",
+            decision["reason_codes"],
+        )
+
+    def test_non_adjacent_checkpoint_stage_fails_closed(self):
+        evidence = manifest(
+            3,
+            [100, 100, 100, 50],
+            [0.95, 0.9, 0.85, 0.8],
+            macro_f1=0.9,
+            baseline={
+                "loss": 0.6,
+                "macro_f1": 0.7,
+                "recalls": [0.9, 0.4, 0.4, 0.4],
+            },
+            loaded_stage=1,
+        )
+        with self.assertRaisesRegex(ValueError, "immediate predecessor"):
+            decide_model_promotion(
+                evidence, 3, 5, active_classes=(0, 1, 4)
+            )
+
+    def test_checkpoint_stage_rollback_fails_closed(self):
+        evidence = manifest(
+            2,
+            [100, 100, 100],
+            [0.95, 0.9, 0.85],
+            macro_f1=0.9,
+            baseline={
+                "loss": 0.6,
+                "macro_f1": 0.7,
+                "recalls": [0.9, 0.4, 0.4],
+            },
+            loaded_stage=3,
+        )
+        with self.assertRaisesRegex(ValueError, "immediate predecessor"):
+            decide_model_promotion(evidence, 2, 3)
+
+    def test_stage_transition_rejects_material_binary_loss_regression(self):
+        decision = decide_model_promotion(
+            manifest(
+                3,
+                [100, 100, 100, 50],
+                [0.95, 0.9, 0.85, 0.8],
+                macro_f1=0.9,
+                baseline={
+                    "loss": 0.6,
+                    "macro_f1": 0.7,
+                    "recalls": [0.9, 0.4, 0.4, 0.4],
+                    "binary": {
+                        "loss": 0.14,
+                        "macro_f1": 0.95,
+                        "recalls": [0.97, 0.94],
+                    },
+                },
+                loaded_stage=2,
+                binary={
+                    "loss": 0.16,
+                    "macro_f1": 0.95,
+                    "recalls": [0.97, 0.94],
+                },
+            ),
+            3,
+            5,
+            active_classes=(0, 1, 4),
+        )
+        self.assertFalse(decision["accepted"])
+        self.assertIn(
+            "binary_relative_loss_regression", decision["reason_codes"]
+        )
+
+    def test_stage_three_uses_compact_active_metric_classes(self):
+        evidence = manifest(
+            3,
+            [100, 80, 100, 50],
+            [0.9, 0.75, 0.7, 0.8],
+            macro_f1=0.76,
+        )
+        decision = decide_model_promotion(
+            evidence,
+            3,
+            5,
+            active_classes=(0, 2, 4),
+        )
+        self.assertTrue(decision["accepted"], decision["reason_codes"])
+        self.assertEqual(decision["active_exact_classes"], [0, 2, 4])
+
+    def test_stage_three_bootstrap_counts_inactive_rows_as_binary_support(self):
+        decision = decide_detailed_bootstrap(
+            {
+                "eval_loss": 0.2,
+                "accuracy": 260 / 330,
+                "macro_f1": 0.76,
+                "class_counts": {0: 100, 1: 80, 2: 100, 3: 50},
+                "per_class_recall": {
+                    0: 0.9, 1: 0.75, 2: 0.7, 3: 0.8,
+                },
+                "binary_eval_loss": 0.2,
+                "binary_accuracy": 0.9,
+                "binary_macro_f1": 0.9,
+                "binary_class_counts": {0: 100, 1: 230},
+                "binary_per_class_recall": {0: 0.9, 1: 0.9},
+            },
+            stage=3,
+            num_classes=5,
+            active_classes=(0, 2, 4),
+        )
+        self.assertTrue(decision["accepted"], decision["reason_codes"])
+        self.assertEqual(decision["validation_signature_count"], 330)
+
+    def test_same_active_stage_three_regression_is_rejected(self):
+        decision = decide_model_promotion(
+            manifest(
+                3, [100, 100, 100, 50], [0.85, 0.60, 0.52, 0.8],
+                macro_f1=0.66, loss=0.3,
+                baseline={
+                    "loss": 0.2,
+                    "macro_f1": 0.78,
+                    "recalls": [0.92, 0.76, 0.70, 0.8],
+                },
+                loaded_stage=3,
+            ),
+            3,
+            5,
+            active_classes=(0, 2, 4),
+        )
+        self.assertFalse(decision["accepted"])
+        self.assertIn("relative_loss_regression", decision["reason_codes"])
+
+    def test_expanded_stage_three_material_improvement_passes(self):
+        decision = decide_model_promotion(
+            manifest(
+                3, [100, 80, 100, 50], [0.92, 0.72, 0.75, 0.8],
+                macro_f1=0.79, loss=0.18,
+                baseline={
+                    "loss": 0.24,
+                    "macro_f1": 0.68,
+                    "recalls": [0.90, 0.0, 0.72, 0.8],
+                },
+                loaded_stage=3,
+            ),
+            3,
+            5,
+            active_classes=(0, 2, 4),
+        )
+        self.assertTrue(decision["accepted"], decision["reason_codes"])
 
     def test_signature_count_must_match_evaluated_support(self):
         with self.assertRaisesRegex(ValueError, "metric support"):

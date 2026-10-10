@@ -8,9 +8,10 @@ training or fuzzing input.
 
 ## Current evidence for the mini-benchmark
 
-The deployed trainer and serving contract currently support Stages 1 and 2.
-Stage 1 predicts reached versus unreachable; it does not distinguish deeper
-waypoints. No validated Stage-3 model or three-stage serving timeline exists.
+The deployed trainer and serving contract support the fixed three-stage
+curriculum. However, the retained historical reuse candidates below predate
+that stable integration and contain only Stage-1/2 checkpoints. No validated
+retained Stage-3 historical model timeline exists yet.
 
 | Case | Retained model evidence | Reuse status |
 | --- | --- | --- |
@@ -66,9 +67,10 @@ Before implementing or enabling replay, require:
    online training as complete. Report its historical training corpus and
    origin, and keep its metrics separate from a cold online-learning arm.
 
-A three-stage time-course replay is not currently possible. The current
-implementation and retained chronology contain only Stages 1 and 2, and the
-accepted Stage-2 model does not learn the two sparse intermediate classes well.
+A three-stage time-course replay is not currently possible. Although the
+current implementation supports all three stages, the retained chronology
+contains only Stages 1 and 2, and the accepted Stage-2 model does not learn the
+two sparse intermediate classes well.
 Build time-course replay only after every intended snapshot from one chronology
 is deliberately retained with activation times, model versions, compatibility
 metadata, and validation provenance. Until then, case-36 historical replay is

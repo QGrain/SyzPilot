@@ -33,9 +33,7 @@ def get_model_max_length(base_model):
 @dataclass
 class ControllerConfig:
     # Dashboard configuration
-    dashboard_token: str = os.getenv(
-        "DASHBOARD_TOKEN", "syzpilot-local-dev-token"
-    )
+    dashboard_token: str = os.getenv("DASHBOARD_TOKEN", "test-token-zzy")
     dashboard_enabled: bool = True
     direct_only: bool = field(default_factory=lambda: os.getenv(
         "SYZPILOT_DIRECT_ONLY", "false"
@@ -48,10 +46,18 @@ class ControllerConfig:
     data_root: str = field(default_factory=lambda: str(Path(
         os.getenv("SYZPILOT_DATA_ROOT") or str(BRAIN_DIR / "receiver_data")
     ).expanduser().resolve()))
-    min_samples_to_train: int = 1000                      # trigger a train run after this many new samples (matches receiver stage1_threshold)
+    min_samples_to_train: int = int(os.getenv(
+        "SYZPILOT_MIN_SAMPLES_TO_TRAIN", "1000"
+    ))
+    min_class_samples_to_train: int = int(os.getenv(
+        "SYZPILOT_MIN_CLASS_SAMPLES_TO_TRAIN", "100"
+    ))
     training_warmup_seconds: int = int(os.getenv(
         "SYZPILOT_TRAINING_WARMUP_SECONDS", "0"
     ))
+    curriculum_mode: str = os.getenv(
+        "SYZPILOT_CURRICULUM_MODE", "dense-paper"
+    ).strip().lower()
     base_model: str = field(default_factory=lambda: os.getenv(
         "SYZPILOT_BASE_MODEL_PATH",
         "/opt/syzpilot/models/SyzEncoder_224w_full/best_model/",
@@ -100,6 +106,9 @@ class ControllerConfig:
     ))
     continued_train_patience: int = int(os.getenv(
         "SYZPILOT_CONTINUED_TRAIN_PATIENCE", "2"
+    ))
+    model_rejection_cooldown_seconds: int = int(os.getenv(
+        "SYZPILOT_MODEL_REJECTION_COOLDOWN_SECONDS", "1800"
     ))
     trainset_rate: float = 0.9
     disable_wandb: bool = True
@@ -292,6 +301,17 @@ class ControllerConfig:
             raise ValueError("batch_size must be positive")
         if self.grad_acc_steps <= 0:
             raise ValueError("grad_acc_steps must be positive")
+        if self.model_rejection_cooldown_seconds < 0:
+            raise ValueError(
+                "model_rejection_cooldown_seconds must not be negative"
+            )
+        if (self.min_samples_to_train <= 0 or
+                self.min_class_samples_to_train <= 0):
+            raise ValueError("training sample thresholds must be positive")
+        if self.curriculum_mode not in ("dense-paper", "sparse-adaptive"):
+            raise ValueError(
+                "curriculum_mode must be dense-paper or sparse-adaptive"
+            )
         from model_promotion import PromotionThresholds
         PromotionThresholds(
             majority_margin=self.promotion_majority_margin,

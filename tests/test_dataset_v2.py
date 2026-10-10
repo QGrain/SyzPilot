@@ -24,6 +24,44 @@ def write_batch(root, batch_id, rows):
 
 
 class CanonicalDatasetTest(unittest.TestCase):
+    def test_empty_program_is_not_a_training_record(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            write_batch(root, 1, [
+                ("", [True, False]),
+                ("getpid()", [False, True]),
+            ])
+
+            records = load_canonical_records(root, 2, [1])
+
+            self.assertEqual(
+                set(records), {hashlib.sha1(b"getpid()").hexdigest()}
+            )
+
+    def test_sparse_classes_remain_after_deepest_label_deduplication(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            write_batch(root, 1, [
+                ("promoted()", [0, 1, 0]),
+                ("inactive()", [0, 1, 0]),
+            ])
+            write_batch(root, 2, [("promoted()", [0, 0, 1])])
+            dataset = ProgramDatasetV2_2(
+                root,
+                3,
+                [1, 2],
+                canonical_indices=[1, 2],
+                repeat=False,
+            )
+            self.assertEqual(
+                dataset.signatures,
+                {
+                    hashlib.sha1(b"promoted()").hexdigest(),
+                    hashlib.sha1(b"inactive()").hexdigest(),
+                },
+            )
+            self.assertEqual(dataset.raw_class_counts, {1: 1, 2: 1})
+
     def test_cross_batch_duplicates_keep_deepest_label(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

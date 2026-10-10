@@ -9,6 +9,7 @@ from typing import List
 
 import torch
 from torch.utils.data import IterableDataset
+from common.label_contract import is_model_eligible_program
 
 
 def load_canonical_records(data_root, num_classes, indices, exclude_signatures=None):
@@ -31,6 +32,8 @@ def load_canonical_records(data_root, num_classes, indices, exclude_signatures=N
             raise ValueError(f"batch {batch_id} program and label keys differ")
         for signature, program in programs.items():
             if signature in excluded:
+                continue
+            if not is_model_eligible_program(program):
                 continue
             label = list(labels[signature])
             if len(label) != num_classes:

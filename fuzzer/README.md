@@ -7,11 +7,8 @@ upstream Syzkaller commit
 `6e83b42dcfcd13c3b8e0d5c803cdcc424c0fbff9`. Use a clean clone and
 apply from the Syzkaller root. Do not apply it to an arbitrary newer
 Syzkaller revision, since its Go APIs and program mutation semantics change.
-The current patch corresponds to the reviewed SyzPilot-Fuzzer `v0.1.2`
-source release (`6a829a7`). It includes the authenticated generic seed
-catalog, additive cold-start seed injection, the directed corpus, bounded
-training-data buffering, online model hot replacement, and the reachability
-filter used by the functional pipeline.
+The current patch corresponds to the reviewed SyzPilot-Fuzzer `v0.2.0`
+source release (`212601e`).
 
 ```bash
 git clone https://github.com/google/syzkaller.git SyzPilot-fuzzer
@@ -36,88 +33,51 @@ functional workflow uses report-derived guidance only; target PoC injection
 is reserved for offline oracle comparisons and is not part of the artifact
 exercise.
 
-The default performance profile keeps the Collector training queue in memory
-and leaves `SyzPilot.durable_training_wal` disabled. Enable the WAL only for an
-explicit manager-process recovery experiment. For the predictor-only ablation,
-set `SyzPilot.enable_online_guidance=false`: cold-start guidance, online
-training, TorchServe model hot replacement, and reach filtering remain active,
-while post-model sequence and attribution guidance refreshes are disabled.
-For component ablations, keep online guidance enabled and independently set
-`SyzPilot.enable_sequence_guidance` or
-`SyzPilot.enable_attribution_guidance` to false. These component switches
-require the Brain bundled in this public revision or later; upgrade the Brain
-first or upgrade both sides together. Omitting the fields retains normal
-full-pipeline behavior.
+The performance profile keeps the Collector training queue in memory and
+leaves `SyzPilot.durable_training_wal` disabled by default. Enable it only for
+an explicit manager-process recovery experiment. The predictor-only ablation
+sets `SyzPilot.enable_online_guidance=false`: it retains cold-start guidance,
+online training, TorchServe model hot replacement, and reach filtering, while
+disabling only post-model sequence/attribution guidance refreshes. For component
+ablations, keep online guidance enabled and set `enable_sequence_guidance` or
+`enable_attribution_guidance` independently. Use these fields with the current
+public SyzPilot release and upgrade the Brain and Fuzzer together. All three
+guidance switches default to the normal full-pipeline behavior when omitted.
+
+The reachability filter accepts the fixed three-stage Brain protocol: binary
+Unreachable/Reachable predictions, ternary Unreachable/Shallow/Deep
+predictions, and exact-waypoint predictions. Sparse-adaptive Stage 3 may also
+return `Reach_Other` for reached samples whose exact waypoint is inactive. The
+filter treats that label as reached but does not grant an exact-waypoint smash
+bonus. Brain and Fuzzer releases must therefore be upgraded together.
 
 ## External baseline patches
 
-`SyzDirect.diff` and `MOCK.diff` archive the baseline-specific changes used by
-our evaluation. They are independent of `SyzPilot-fuzzer.diff`: apply each one
-only to its own source tree, never to Syzkaller or SyzPilot-Fuzzer.
+The remaining patches archive compatibility changes used to reproduce
+independent directed-fuzzing baselines. They are separate from the
+SyzPilot-Fuzzer patch above.
 
 ## SyzDirect
 
-The original [`seclab-fudan/SyzDirect`](https://github.com/seclab-fudan/SyzDirect)
-artifact did not run successfully in our evaluation environment without
-additional fixes. `SyzDirect.diff` targets the exact SyzDirect commit
-`02c9a6504a757e6cec0f10202624d175aa474d94` and preserves the compatibility
-and measurement changes used by our baseline runs. In particular, it:
+`SyzDirect.diff` targets the upstream
+[`seclab-fudan/SyzDirect`](https://github.com/seclab-fudan/SyzDirect) repository
+at commit `02c9a6504a757e6cec0f10202624d175aa474d94`. It contains build fixes,
+runtime configuration adjustments, and experiment instrumentation used by the
+SyzPilot evaluation.
 
-- makes the kernel/KCOV preparation less brittle and replaces the interactive
-  `oldconfig` invocation with `olddefconfig`;
-- guards several LLVM-IR extractors against missing initializers, unexpected
-  struct layouts, non-constant operands, and out-of-range fields;
-- reduces analyzer build pressure by disabling release debug information and
-  limits the embedded Syzkaller target registrations to Linux;
-- fixes the multi-case run counter/HTTP-port allocation and supplies the
-  Python dependencies required by the runner; and
-- records target-hit input and execution counts needed by our evaluation.
-
-Apply the patch from a clean checkout of that revision:
+Apply it from the SyzDirect repository root:
 
 ```bash
-git clone https://github.com/seclab-fudan/SyzDirect.git
-cd SyzDirect
-git checkout --detach 02c9a6504a757e6cec0f10202624d175aa474d94
-
-git apply --check /path/to/SyzPilot/fuzzer/SyzDirect.diff
+git checkout 02c9a6504a757e6cec0f10202624d175aa474d94
 git apply /path/to/SyzPilot/fuzzer/SyzDirect.diff
-
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -r source/syzdirect/requirements.txt
 ```
 
-Then configure the machine-specific paths and benchmark entries described by
-SyzDirect's `source/README.md`, build its function-model and kernel-analysis
-components, prepare each target kernel, and launch the runner from the patched
-tree. SyzDirect performs substantial per-kernel and per-target static analysis;
-do not treat patch application alone as a completed build or functional test.
-The patch has been checked with `git apply --check` against the revision above.
+The patch passes `git apply --check` against that revision.
 
 ## MOCK
 
-`MOCK.diff` archives the adjustments used with the Healer-based
-[`m0ck1ng/mock`](https://github.com/m0ck1ng/mock) baseline in our experiments.
-It expects the same pre-patch experimental MOCK checkout from which the diff
-was produced; that exact source revision is not distributed in this repository,
-and the patch is not intended for an arbitrary MOCK or Healer revision.
-
-From a compatible checkout, validate before applying and then follow MOCK's
-normal build and launch procedure:
-
-```bash
-cd /path/to/compatible-mock-checkout
-git apply --check /path/to/SyzPilot/fuzzer/MOCK.diff
-git apply /path/to/SyzPilot/fuzzer/MOCK.diff
-cargo build --release
-
-python3 -m pip install 'numpy<1.24' django torch torchvision torchaudio
-cd tools/model_manager
-python3 manage.py runserver 127.0.0.1:8000
-```
-
-Start the built `healer` binary in another terminal with the guest image,
-kernel image, and SSH key required by the target experiment. If
-`git apply --check` fails, stop and recover the matching pre-patch source tree;
-do not force this archival patch with `--reject` or `--3way`.
+`MOCK.diff` targets the Healer-based MOCK baseline used in the evaluation. The
+original source checkout and exact base revision are not distributed in this
+repository, so this file is retained as an archival patch rather than a
+standalone reproducible package. Apply and validate it against the original
+experiment checkout before use.

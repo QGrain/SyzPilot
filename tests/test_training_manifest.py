@@ -24,16 +24,137 @@ for module_name in ("config", "utils"):
 
 from train_v2 import (
     TrainerV2,
+    baseline_serving_objective,
     binary_serving_logits,
     checkpoint_selection,
     effective_eval_steps,
     require_single_process,
     should_evaluate_step,
+    validate_active_class_transition,
     write_training_manifest,
 )
 
 
 class TrainingManifestTest(unittest.TestCase):
+    def test_fresh_stage_three_baseline_uses_current_active_classes(self):
+        self.assertEqual(
+            baseline_serving_objective({
+                "train_stage": 3,
+                "active_classes": (0, 2, 4),
+                "loaded_checkpoint_stage": 0,
+                "loaded_active_classes": None,
+            }),
+            (3, (0, 2, 4)),
+        )
+        self.assertEqual(
+            baseline_serving_objective({
+                "train_stage": 3,
+                "active_classes": (0, 2, 4),
+                "loaded_checkpoint_stage": 3,
+                "loaded_active_classes": (0, 4),
+            }),
+            (3, (0, 4)),
+        )
+
+    def test_stage_three_active_classes_expand_monotonically(self):
+        validate_active_class_transition(3, (0, 2, 4), 3, (0, 4))
+        validate_active_class_transition(3, (0, 4), 3, (0, 4))
+        with self.assertRaisesRegex(ValueError, "cannot contract"):
+            validate_active_class_transition(3, (0, 4), 3, (0, 2, 4))
+
+    def test_stage_three_manifest_records_active_class_provenance(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            save_dir = Path(temp_dir)
+            checkpoint = save_dir / "step-100.pt"
+            checkpoint.write_bytes(b"stage-three")
+            manifest_path = write_training_manifest(
+                save_dir,
+                best_checkpoint=checkpoint,
+                best_step=100,
+                best_eval_loss=0.2,
+                final_step=100,
+                config={
+                    "train_stage": 3,
+                    "num_classes": 5,
+                    "curriculum_mode": "sparse-adaptive",
+                    "active_classes": (0, 2, 4),
+                    "loaded_active_classes": (0, 4),
+                    "loaded_checkpoint_stage": 3,
+                    "data_idx": [1],
+                    "test_data_idx": [2],
+                    "load_path": "",
+                    "total_steps": 100,
+                    "test_interval": 100,
+                    "min_steps": 100,
+                    "patience": 2,
+                    "num_warmup_steps": 10,
+                    "validation_signature_count": 80,
+                    "validation_signature_sha256": "c" * 64,
+                },
+                best_metrics={
+                    "accuracy": 0.8125,
+                    "f1_score": 0.78,
+                    "macro_f1": 0.75,
+                    "class_counts": {0: 40, 1: 15, 2: 15, 3: 10},
+                    "per_class_recall": {
+                        0: 0.9, 1: 0.7, 2: 0.7, 3: 0.8,
+                    },
+                    "binary_eval_loss": 0.2,
+                    "binary_accuracy": 0.85,
+                    "binary_macro_f1": 0.82,
+                    "binary_class_counts": {0: 40, 1: 40},
+                    "binary_per_class_recall": {0: 0.9, 1: 0.8},
+                },
+            )
+
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["active_exact_classes"], [0, 2, 4])
+            self.assertEqual(manifest["loaded_active_exact_classes"], [0, 4])
+            self.assertEqual(
+                manifest["metric_class_members"],
+                {"0": [0], "1": [2], "2": [4], "3": [1, 3]},
+            )
+
+    def test_dense_manifest_rejects_sparse_stage_three_classes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            save_dir = Path(temp_dir)
+            checkpoint = save_dir / "step-100.pt"
+            checkpoint.write_bytes(b"stage-three")
+            with self.assertRaisesRegex(
+                    ValueError, "requires every canonical class"):
+                write_training_manifest(
+                    save_dir,
+                    best_checkpoint=checkpoint,
+                    best_step=100,
+                    best_eval_loss=0.2,
+                    final_step=100,
+                    config={
+                        "train_stage": 3,
+                        "num_classes": 5,
+                        "curriculum_mode": "dense-paper",
+                        "active_classes": (0, 2, 4),
+                        "data_idx": [1],
+                        "test_data_idx": [2],
+                        "load_path": "",
+                        "total_steps": 100,
+                        "test_interval": 100,
+                        "min_steps": 100,
+                        "patience": 2,
+                        "num_warmup_steps": 10,
+                        "validation_signature_count": 80,
+                        "validation_signature_sha256": "c" * 64,
+                    },
+                    best_metrics={
+                        "accuracy": 0.8,
+                        "f1_score": 0.8,
+                        "macro_f1": 0.8,
+                        "class_counts": {0: 40, 1: 20, 2: 10, 3: 10},
+                        "per_class_recall": {
+                            0: 0.8, 1: 0.8, 2: 0.8, 3: 0.8,
+                        },
+                    },
+                )
+
     def test_checkpoint_selection_matches_curriculum_objective(self):
         lower_loss = {"eval_loss": 0.2, "macro_f1": 0.4}
         higher_macro = {"eval_loss": 0.5, "macro_f1": 0.7}
@@ -75,15 +196,27 @@ class TrainingManifestTest(unittest.TestCase):
             )[2],
         )
     def test_binary_projection_matches_each_serving_stage(self):
-        raw_logits = torch.tensor([[0.0, 1.0, -2.0]])
+        raw_logits = torch.tensor([[0.0, 3.0, -2.0, 3.0, -4.0]])
 
         stage_one = binary_serving_logits(raw_logits, 1)
         stage_two = binary_serving_logits(raw_logits, 2)
+        stage_three = binary_serving_logits(
+            raw_logits, 3, active_classes=(0, 2, 4)
+        )
 
         self.assertEqual(torch.argmax(stage_one, dim=1).item(), 0)
         self.assertEqual(torch.argmax(stage_two, dim=1).item(), 1)
-        self.assertEqual(stage_one[0, 1].item(), -0.5)
-        self.assertEqual(stage_two[0, 1].item(), 1.0)
+        self.assertEqual(stage_one[0, 1].item(), 0.0)
+        self.assertEqual(stage_two[0, 1].item(), 0.5)
+        self.assertEqual(torch.argmax(stage_three, dim=1).item(), 1)
+        self.assertEqual(stage_three[0, 1].item(), 3.0)
+
+        sparse_reached = binary_serving_logits(
+            torch.tensor([[0.0, -4.0, 8.0, -4.0, -4.0]]),
+            3,
+            active_classes=(0, 1, 4),
+        )
+        self.assertEqual(torch.argmax(sparse_reached, dim=1).item(), 1)
 
     def test_effective_eval_steps_covers_unique_records_once(self):
         self.assertEqual(effective_eval_steps(142, 512, 25), 1)

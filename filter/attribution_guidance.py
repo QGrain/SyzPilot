@@ -10,8 +10,11 @@ Used by the Brain controller to generate guidance for the fuzzer.
 
 import os
 import sys
+import hashlib
 import logging
 import math
+from dataclasses import dataclass, field
+from typing import Mapping, Optional, Tuple
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -28,10 +31,24 @@ repo_root = os.path.dirname(filter_dir)
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
-from model_v2 import TraceClassifierV2
-from model_v2 import TraceClassifierServingWrapper
-from common.curriculum import curriculum_class
-from dataset_v2 import load_canonical_records
+try:
+    from .model_v2 import TraceClassifierV2
+    from .model_v2 import TraceClassifierServingWrapper
+    from .dataset_v2 import load_canonical_records
+except ImportError:
+    # Controller loads this module with filter/ on sys.path when it runs as a
+    # script, while tests and package users import it as filter.*.
+    from model_v2 import TraceClassifierV2
+    from model_v2 import TraceClassifierServingWrapper
+    from dataset_v2 import load_canonical_records
+from common.curriculum import (
+    is_exact_curriculum_objective,
+    normalize_stage3_active_classes,
+    stage2_deep_class_start,
+)
+
+
+_CANDIDATE_SCAN_FACTOR = 8
 
 
 def replace_tokens(tokens):
@@ -100,12 +117,155 @@ def merge_syscall_attr(total_syscall_attr, new_syscall_attr):
         )
 
 
+@dataclass(frozen=True)
+class AttributionCandidate:
+    """One canonical program eligible for a curriculum objective."""
+
+    signature: str
+    program: str
+    canonical_class: int
+    depth_factor: float
+
+
+@dataclass(frozen=True)
+class AttributionCohort:
+    """A deterministic candidate order for one attribution objective."""
+
+    stage: int
+    objective: str
+    target_output: int
+    canonical_members: Tuple[int, ...]
+    active_exact_classes: Tuple[int, ...]
+    max_samples: int
+    depth_weight: float
+    candidates: Tuple[AttributionCandidate, ...]
+
+
+@dataclass
+class _AttributionCohortState:
+    """Mutable progress for fair round-robin attribution analysis."""
+
+    cohort: AttributionCohort
+    total_syscall_attr: dict = field(default_factory=dict)
+    selected_signatures: list = field(default_factory=list)
+    next_candidate: int = 0
+    examined: int = 0
+
+    def has_candidate(self):
+        candidate_budget = self.cohort.max_samples * _CANDIDATE_SCAN_FACTOR
+        return (
+            len(self.selected_signatures) < self.cohort.max_samples and
+            self.next_candidate < len(self.cohort.candidates) and
+            self.next_candidate < candidate_budget
+        )
+
+
+def _cohort_rank(deployment_version, signature):
+    payload = f"{deployment_version}\0{signature}".encode("utf-8")
+    return hashlib.blake2b(payload, digest_size=8).digest(), signature
+
+
+def _candidate_depth_factor(class_index, num_classes):
+    return 0.5 + 0.5 * class_index / (num_classes - 1)
+
+
+def select_attribution_cohorts(
+        records: Mapping[str, tuple], num_classes: int, stage: int,
+        deployment_version: int, active_classes=None):
+    """Build the fixed stage-aware attribution cohorts from canonical data."""
+    if num_classes < 2 or stage not in (1, 2, 3):
+        raise ValueError("invalid curriculum schema")
+    active = (
+        normalize_stage3_active_classes(active_classes, num_classes)
+        if stage == 3 else ()
+    )
+
+    if stage == 1:
+        specifications = [
+            ("reachable", 1, tuple(range(1, num_classes)), 48, 1.0)
+        ]
+    elif stage == 2:
+        deep_start = stage2_deep_class_start(num_classes)
+        specifications = [
+            ("shallow", 1, tuple(range(1, deep_start)), 24, 0.60),
+            ("deep", 2, tuple(range(deep_start, num_classes)), 24, 1.00),
+        ]
+    else:
+        reached = [class_index for class_index in active if class_index > 0]
+        if len(reached) > 16:
+            final_class = num_classes - 1
+            rotating = [
+                class_index for class_index in reached
+                if class_index != final_class
+            ]
+            offset = int(deployment_version) % len(rotating)
+            rotating = rotating[offset:] + rotating[:offset]
+            reached = sorted(rotating[:15] + [final_class])
+        specifications = [
+            (
+                f"exact:{class_index}", active.index(class_index),
+                (class_index,), 8,
+                _candidate_depth_factor(class_index, num_classes),
+            )
+            for class_index in reached
+        ]
+
+    cohorts = []
+    for objective, target_output, members, cap, depth_weight in specifications:
+        candidates = []
+        member_set = frozenset(members)
+        for signature, record in records.items():
+            program, _, canonical_class = record
+            if canonical_class not in member_set:
+                continue
+            sample_depth = (
+                _candidate_depth_factor(canonical_class, num_classes)
+                if stage == 1 else 1.0
+            )
+            candidates.append(AttributionCandidate(
+                signature=str(signature),
+                program=program,
+                canonical_class=canonical_class,
+                depth_factor=sample_depth,
+            ))
+        candidates.sort(
+            key=lambda item: _cohort_rank(
+                deployment_version, item.signature
+            )
+        )
+        cohorts.append(AttributionCohort(
+            stage=stage,
+            objective=objective,
+            target_output=target_output,
+            canonical_members=members,
+            active_exact_classes=active,
+            max_samples=cap,
+            depth_weight=depth_weight,
+            candidates=tuple(candidates),
+        ))
+    return cohorts
+
+
+def _normalize_positive_scores(scores):
+    positive = {
+        name: float(score)
+        for name, score in scores.items()
+        if math.isfinite(float(score)) and score > 0
+    }
+    norm = math.sqrt(sum(score * score for score in positive.values()))
+    return {
+        name: score / norm for name, score in positive.items()
+    } if norm > 0 else {}
+
+
 class AttributionProbabilityWrapper(nn.Module):
     """Expose curriculum probabilities as the Integrated Gradients target."""
 
-    def __init__(self, model, stage, cancel_event=None):
+    def __init__(self, model, stage, active_classes=None, cancel_event=None):
         super().__init__()
-        self.serving_model = TraceClassifierServingWrapper(model, stage=stage)
+        self.serving_model = TraceClassifierServingWrapper(
+            model, stage=stage, active_classes=active_classes
+        )
         self.cancel_event = cancel_event
 
     def forward(self, input_ids, attention_mask=None):
@@ -133,6 +293,7 @@ def run_attribution_for_guidance(
     data_indices,
     num_classes,
     stage,
+    active_classes=None,
     target_class=None,
     top_k=10,
     max_samples=50,
@@ -150,7 +311,8 @@ def run_attribution_for_guidance(
         data_dir: Directory containing progs_batch_*.pkl and labels_batch_*.pkl
         data_indices: List of batch indices to use for attribution
         num_classes: Number of classes in the model
-        stage: Active exact-waypoint curriculum stage (2)
+        stage: Exact-waypoint Stage 3, or Stage 1 for a single waypoint
+        active_classes: Canonical exact labels enabled by the Stage-3 model
         target_class: Optional reached class to analyze. None analyzes all
             reached classes.
         top_k: Number of top syscalls to return. None returns every positive
@@ -165,12 +327,19 @@ def run_attribution_for_guidance(
     Returns:
         Dict of {syscall_name: normalized_attribution_score}
     """
-    if stage != 2:
-        raise ValueError("attribution requires exact-waypoint curriculum stage 2")
+    if not is_exact_curriculum_objective(stage, num_classes):
+        raise ValueError("attribution requires an exact curriculum objective")
+    active_classes = (
+        normalize_stage3_active_classes(active_classes, num_classes)
+        if stage == 3 else None
+    )
     if target_class is not None and not 0 < target_class < num_classes:
         raise ValueError(
             f"target_class must be a reached class in [1, {num_classes - 1}]"
         )
+    if (stage == 3 and target_class is not None and
+            target_class not in active_classes):
+        raise ValueError("target_class is inactive in the Stage-3 model")
     if internal_batch_size <= 0:
         raise ValueError("internal_batch_size must be positive")
     if top_k is not None and (
@@ -186,7 +355,8 @@ def run_attribution_for_guidance(
     _raise_if_attribution_canceled(cancel_event)
     for program, label_bools, class_idx in records.values():
         _raise_if_attribution_canceled(cancel_event)
-        if class_idx == 0:
+        if (class_idx == 0 or
+                (stage == 3 and class_idx not in active_classes)):
             continue
         if target_class is not None and class_idx != target_class:
             continue
@@ -211,7 +381,12 @@ def run_attribution_for_guidance(
     # TrainerV2 checkpoints contain the full TraceClassifierV2 state dict, but
     # their parent directory is not a Hugging Face model directory. Recreate
     # the training architecture from the configured base encoder first.
-    model = TraceClassifierV2(base_model_path, num_classes, stage=stage)
+    model = TraceClassifierV2(
+        base_model_path,
+        num_classes,
+        stage=stage,
+        active_classes=active_classes,
+    )
     _raise_if_attribution_canceled(cancel_event)
     model.load_state_dict(
         torch.load(model_path, map_location="cpu", weights_only=True)
@@ -220,7 +395,10 @@ def run_attribution_for_guidance(
     model.to(device)
     model.eval()
     attribution_model = AttributionProbabilityWrapper(
-        model, stage=stage, cancel_event=cancel_event
+        model,
+        stage=stage,
+        active_classes=active_classes,
+        cancel_event=cancel_event,
     )
     attribution_model.to(device)
     attribution_model.eval()
@@ -248,21 +426,22 @@ def run_attribution_for_guidance(
             pred_class = torch.argmax(logits, dim=1).item()
         _raise_if_attribution_canceled(cancel_event)
 
-        grouped_true_class = curriculum_class(
-            true_class, num_classes, stage
+        target_output = (
+            active_classes.index(true_class) if stage == 3
+            else true_class
         )
 
         # Attribution guidance must only use correctly predicted, reached
         # samples. A positive sample misclassified as another reached class is
         # not evidence for either class's guidance.
-        if pred_class == 0 or pred_class != grouped_true_class:
+        if pred_class == 0 or pred_class != target_output:
             continue
 
         attributions, delta = lig.attribute(
             inputs=input_ids,
             baselines=torch.zeros_like(input_ids),
             additional_forward_args=(attention_mask,),
-            target=grouped_true_class,
+            target=target_output,
             n_steps=50,
             internal_batch_size=internal_batch_size,
             return_convergence_delta=True
@@ -302,3 +481,160 @@ def run_attribution_for_guidance(
                 f"returned {len(result)} syscall scores")
 
     return result
+
+
+def run_hierarchical_attribution_for_guidance(
+    model_path,
+    base_model_path,
+    tokenizer_path,
+    data_dir,
+    data_indices,
+    num_classes,
+    stage,
+    deployment_version,
+    active_classes=None,
+    max_length=1024,
+    device="cuda:0",
+    internal_batch_size=5,
+    cancel_event=None,
+):
+    """Compute one bounded IG snapshot for each supported stage objective."""
+    if stage not in (1, 2, 3):
+        raise ValueError("invalid curriculum stage")
+    if internal_batch_size <= 0:
+        raise ValueError("internal_batch_size must be positive")
+    active = (
+        normalize_stage3_active_classes(active_classes, num_classes)
+        if stage == 3 else None
+    )
+    _raise_if_attribution_canceled(cancel_event)
+
+    records = load_canonical_records(data_dir, num_classes, data_indices)
+    _raise_if_attribution_canceled(cancel_event)
+    cohorts = select_attribution_cohorts(
+        records, num_classes, stage, deployment_version, active
+    )
+    if not any(cohort.candidates for cohort in cohorts):
+        logger.warning("[Attribution] No reached candidates for Stage %d", stage)
+        return []
+
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+    tokenizer.pad_token = tokenizer.eos_token
+    model = TraceClassifierV2(
+        base_model_path,
+        num_classes,
+        stage=stage,
+        active_classes=active,
+    )
+    model.load_state_dict(
+        torch.load(model_path, map_location="cpu", weights_only=True)
+    )
+    _raise_if_attribution_canceled(cancel_event)
+    model.to(device)
+    model.eval()
+    attribution_model = AttributionProbabilityWrapper(
+        model,
+        stage=stage,
+        active_classes=active,
+        cancel_event=cancel_event,
+    )
+    attribution_model.to(device)
+    attribution_model.eval()
+    lig = LayerIntegratedGradients(
+        attribution_model, model.base_model.embeddings
+    )
+
+    states = [_AttributionCohortState(cohort) for cohort in cohorts]
+    while True:
+        progressed = False
+        for state in states:
+            if not state.has_candidate():
+                continue
+            progressed = True
+            _raise_if_attribution_canceled(cancel_event)
+            cohort = state.cohort
+            candidate = cohort.candidates[state.next_candidate]
+            state.next_candidate += 1
+            state.examined += 1
+            encoding = tokenizer(
+                candidate.program,
+                max_length=max_length,
+                padding="max_length",
+                truncation=True,
+                return_tensors="pt",
+            )
+            input_ids = encoding["input_ids"].long().to(device)
+            attention_mask = encoding["attention_mask"].long().to(device)
+
+            with torch.no_grad():
+                probabilities = attribution_model(input_ids, attention_mask)
+                predicted = torch.argmax(probabilities, dim=1).item()
+            _raise_if_attribution_canceled(cancel_event)
+            if predicted != cohort.target_output:
+                continue
+
+            attributions, _ = lig.attribute(
+                inputs=input_ids,
+                baselines=torch.zeros_like(input_ids),
+                additional_forward_args=(attention_mask,),
+                target=cohort.target_output,
+                n_steps=50,
+                internal_batch_size=internal_batch_size,
+                return_convergence_delta=True,
+            )
+            _raise_if_attribution_canceled(cancel_event)
+            token_attributions = (
+                attributions.sum(dim=-1).squeeze(0).tolist()
+            )
+            tokens = tokenizer.convert_ids_to_tokens(
+                input_ids.squeeze(0).tolist()
+            )
+            replace_tokens(tokens)
+            invocation_tokens, invocation_attrs = split_invocations(
+                tokens, token_attributions
+            )
+            syscall_attr = get_syscall_attr(
+                tokenizer, invocation_tokens, invocation_attrs
+            )
+            merge_syscall_attr(state.total_syscall_attr, {
+                name: score * candidate.depth_factor
+                for name, score in syscall_attr.items()
+            })
+            state.selected_signatures.append(candidate.signature)
+        if not progressed:
+            break
+
+    results = []
+    for state in states:
+        cohort = state.cohort
+        scores = _normalize_positive_scores(state.total_syscall_attr)
+        if len(state.selected_signatures) < 8 or not scores:
+            logger.info(
+                "[Attribution] Stage %d objective %s skipped: "
+                "%d/%d correctly predicted/examined samples",
+                stage, cohort.objective, len(state.selected_signatures),
+                state.examined,
+            )
+            continue
+        signature_digest = hashlib.sha256(
+            "\n".join(state.selected_signatures).encode("utf-8")
+        ).hexdigest()
+        results.append({
+            "stage": stage,
+            "objective": cohort.objective,
+            "canonical_members": list(cohort.canonical_members),
+            "active_exact_classes": list(cohort.active_exact_classes),
+            "deployment_version": int(deployment_version),
+            "selected_signature_digest": signature_digest,
+            "analyzed_count": len(state.selected_signatures),
+            "examined_count": state.examined,
+            "depth_weight": cohort.depth_weight,
+            "scores": scores,
+        })
+        logger.info(
+            "[Attribution] Stage %d objective %s examined %d candidates, "
+            "analyzed %d samples, and produced %d syscall scores",
+            stage, cohort.objective, state.examined,
+            len(state.selected_signatures), len(scores),
+        )
+    return results

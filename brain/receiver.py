@@ -6,6 +6,7 @@ import pickle
 import requests
 import threading
 import hashlib
+import math
 import tempfile
 import sys
 from pathlib import Path
@@ -15,7 +16,13 @@ from concurrent import futures
 repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
-from common.curriculum import CURRICULUM_SCHEMA_VERSION, infer_curriculum_stage
+from common.curriculum import (
+    CURRICULUM_SCHEMA_VERSION,
+    DENSE_PAPER_MODE,
+    SPARSE_ADAPTIVE_MODE,
+    infer_curriculum_stage,
+    normalize_curriculum_mode,
+)
 
 # Import grpc stubs
 import transmission_pb2, transmission_pb2_grpc
@@ -35,16 +42,19 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
     _OUTBOX_RETRY_MAX_SECONDS = 120
 
     def __init__(self, data_dir="./training_data", task_id="fuzzer_id@task_name@run_id",
-                 controller_addr=None, api_token=None, warmup_seconds=0):
+                 controller_addr=None, api_token=None, warmup_seconds=0,
+                 minimum_total_samples=1000, minimum_class_samples=100,
+                 curriculum_mode=DENSE_PAPER_MODE):
         self.task_id = task_id
         self.fuzzer_id, self.task_name, self.run_id = task_id.split('@')
         self.task_data_dir = os.path.join(data_dir, self.task_name, str(self.run_id))
         self.check_directories()
         self.batch_count = 0
         self.stage = 0
-        self.stage1_threshold = 1000
-        self.min_trainable_class_samples = 100
+        self.stage1_threshold = int(minimum_total_samples)
+        self.min_trainable_class_samples = int(minimum_class_samples)
         self.warmup_seconds = max(0, int(warmup_seconds))
+        self.curriculum_mode = normalize_curriculum_mode(curriculum_mode)
         self.controller_addr = controller_addr # supposed to be localhost:port
         self.api_token = api_token
         self.process_lock = threading.Lock()
@@ -279,6 +289,7 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
         state = {
             "schema_version": 1,
             "curriculum_schema": CURRICULUM_SCHEMA_VERSION,
+            "curriculum_mode": self.curriculum_mode,
             "pending": self.training_outbox,
             "last_queued_samples": {
                 str(stage): count
@@ -323,22 +334,31 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
                 raise ValueError("training outbox root must be an object")
             if state.get("schema_version") != 1:
                 raise ValueError("unsupported training outbox schema")
-            curriculum_schema = state.get("curriculum_schema")
-            legacy_curriculum = curriculum_schema is None
-            experimental_curriculum = (
-                curriculum_schema is not None and int(curriculum_schema) == 1
-            )
-            if (curriculum_schema is not None and
-                    int(curriculum_schema) not in (
-                        1, CURRICULUM_SCHEMA_VERSION
-                    )):
-                raise ValueError("unsupported training outbox curriculum schema")
+            curriculum_schema = int(state.get("curriculum_schema", 0))
+            stored_mode = state.get("curriculum_mode")
+            if (curriculum_schema != CURRICULUM_SCHEMA_VERSION or
+                    stored_mode != self.curriculum_mode):
+                archive_path = (
+                    f"{self._outbox_path}.curriculum-incompatible-"
+                    f"{time.time_ns()}"
+                )
+                os.replace(self._outbox_path, archive_path)
+                print(
+                    "[DataReceiver] Archived incompatible curriculum "
+                    f"outbox at {archive_path}; retained data will be "
+                    "re-evaluated"
+                )
+                self.outbox_wake.set()
+                return
             pending = state.get("pending")
             if pending is not None:
                 pending = {
                     "stage": int(pending["stage"]),
                     "batch_end": int(pending["batch_end"]),
                     "total_samples": int(pending["total_samples"]),
+                    "retry_after_unix": float(
+                        pending.get("retry_after_unix", 0)
+                    ),
                 }
                 if pending["stage"] not in (1, 2, 3):
                     raise ValueError("training outbox stage is invalid")
@@ -348,6 +368,9 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
                     raise ValueError("training outbox batch watermark is in the future")
                 if pending["total_samples"] > self.stats["total_samples"]:
                     raise ValueError("training outbox sample watermark is in the future")
+                if (not math.isfinite(pending["retry_after_unix"]) or
+                        pending["retry_after_unix"] < 0):
+                    raise ValueError("training outbox retry deadline is invalid")
             self.training_outbox = pending
             last_queued_samples = {
                 int(stage): int(count)
@@ -373,30 +396,7 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
                 for stage, batch_end in deferred_batch_end.items()
             ):
                 raise ValueError("training outbox deferred boundary is invalid")
-            legacy_stages = set(last_queued_samples).union(deferred_batch_end)
-            if pending is not None:
-                legacy_stages.add(pending["stage"])
-            if experimental_curriculum and any(
-                    stage > 1 for stage in legacy_stages):
-                archive_path = (
-                    f"{self._outbox_path}.three-stage-incompatible-"
-                    f"{time.time_ns()}"
-                )
-                os.replace(self._outbox_path, archive_path)
-                print(
-                    "[DataReceiver] Archived incompatible three-stage "
-                    f"training outbox at {archive_path}; retained data will "
-                    "be re-evaluated"
-                )
-                self.training_outbox = None
-                self.last_queued_samples = {}
-                self.deferred_batch_end = {}
-                return
-            if any(stage not in (1, 2) for stage in legacy_stages):
-                raise ValueError("training outbox has an invalid curriculum stage")
             self.deferred_batch_end = deferred_batch_end
-            if legacy_curriculum or experimental_curriculum:
-                self._persist_training_outbox_locked()
         except (
             OSError, AttributeError, KeyError, TypeError, ValueError,
             json.JSONDecodeError,
@@ -687,8 +687,8 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
 
         created = False
         with self.trigger_lock:
+            batch_end = max(self.processed_batch_ids, default=0)
             if self.training_outbox is None:
-                batch_end = max(self.processed_batch_ids, default=0)
                 if batch_end <= self.deferred_batch_end.get(stage, 0):
                     return
                 last_queued = self.last_queued_samples.get(stage, 0)
@@ -698,6 +698,7 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
                     "stage": stage,
                     "batch_end": batch_end,
                     "total_samples": total_samples,
+                    "retry_after_unix": 0.0,
                 }
                 self.training_outbox = pending
                 try:
@@ -706,8 +707,27 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
                     self.training_outbox = None
                     raise
                 created = True
+            elif (
+                    self.training_outbox.get("retry_after_unix", 0) > 0 and
+                    stage > self.training_outbox["stage"] and
+                    batch_end > self.deferred_batch_end.get(stage, 0)):
+                previous = self.training_outbox
+                self.training_outbox = {
+                    "stage": stage,
+                    "batch_end": batch_end,
+                    "total_samples": total_samples,
+                    "retry_after_unix": 0.0,
+                }
+                try:
+                    self._persist_training_outbox_locked()
+                except Exception:
+                    self.training_outbox = previous
+                    raise
+                created = True
             # Once queued, retain an immutable snapshot. Samples that arrive
-            # during training belong to the next threshold window.
+            # during training belong to the next threshold window. A request
+            # merely waiting on cooldown may advance to a newly trainable
+            # stage because no training has started for that snapshot.
         # Wake the worker only for a newly persisted request. Re-arming this
         # event for an existing queued request makes the worker's timed loop
         # spin without its five-second backoff while training is in progress.
@@ -719,11 +739,48 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
             if self.training_outbox is None:
                 return
             pending = dict(self.training_outbox)
+            retry_after = pending.get("retry_after_unix", 0)
+            if time.time() < retry_after:
+                return
+            if retry_after > 0:
+                previous = dict(self.training_outbox)
+                self.training_outbox["retry_after_unix"] = 0.0
+                try:
+                    self._persist_training_outbox_locked()
+                except Exception as error:
+                    self.training_outbox = previous
+                    print(
+                        f"[DataReceiver] Failed to persist expired training "
+                        f"cooldown: {error}"
+                    )
+                    return
+                pending = dict(self.training_outbox)
         result = self._trigger_training(pending)
         if result is None:
             return
-        actual_stage, status = result
-        if status not in ("queued", "up_to_date", "deferred", "rejected"):
+        actual_stage, status, retry_after = result
+        if status not in (
+                "queued", "up_to_date", "deferred", "rejected", "cooldown"):
+            return
+        if status == "cooldown":
+            with self.trigger_lock:
+                if self.training_outbox != pending:
+                    return
+                previous = dict(self.training_outbox)
+                self.training_outbox["retry_after_unix"] = retry_after
+                try:
+                    self._persist_training_outbox_locked()
+                except Exception as error:
+                    self.training_outbox = previous
+                    print(
+                        f"[DataReceiver] Failed to persist training cooldown: "
+                        f"{error}"
+                    )
+                    return
+            print(
+                f"[DataReceiver] Training retry deferred until "
+                f"{retry_after:.3f}"
+            )
             return
         if status == "queued":
             # Queued is not a commit: retain the outbox until the Controller
@@ -768,11 +825,11 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
             )
             if status == "rejected":
                 # The Controller may enforce Stage 1 for a request whose
-                # observed label distribution already qualifies for Stage 2.
-                # Consume both watermarks on rejection so the immutable
+                # observed label distribution already qualifies for a finer
+                # stage. Consume both watermarks on rejection so the immutable
                 # snapshot is not resubmitted every five seconds. A normal
-                # up-to-date Stage 1 response intentionally leaves Stage 2
-                # eligible on the same snapshot.
+                # up-to-date Stage 1 response intentionally leaves the finer
+                # stage eligible on the same snapshot.
                 requested_stage = pending["stage"]
                 self.last_queued_samples[requested_stage] = max(
                     self.last_queued_samples.get(requested_stage, 0),
@@ -801,8 +858,8 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
         """
         Select the most detailed trainable curriculum objective.
 
-        Stage 0 collects data, Stage 1 is binary reachability, and Stage 2
-        learns every waypoint class independently.
+        Stage 0 collects data, Stage 1 is binary reachability, Stage 2 groups
+        reached labels by depth, and Stage 3 learns supported exact labels.
         """
         if not label_dist:
             print(f"[DataReceiver] No label distribution found")
@@ -815,6 +872,7 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
             self.label_width,
             minimum_total=self.stage1_threshold,
             minimum_positive_class=self.min_trainable_class_samples,
+            curriculum_mode=self.curriculum_mode,
         )
 
     def _trigger_training(self, pending):
@@ -836,10 +894,26 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
 
             payload = response.json()
             status = payload.get("status")
-            if status not in ("queued", "up_to_date", "deferred", "rejected"):
+            if status not in (
+                    "queued", "up_to_date", "deferred", "rejected",
+                    "cooldown"):
                 print(f"[DataReceiver] Training request remains pending: {payload}")
                 return None
-            return int(payload.get("stage", pending["stage"])), status
+            retry_after = 0.0
+            if status == "cooldown":
+                retry_after = float(payload.get("retry_after_unix", 0))
+                if (not math.isfinite(retry_after) or
+                        retry_after <= time.time()):
+                    print(
+                        "[DataReceiver] Training cooldown response has an "
+                        "invalid retry deadline"
+                    )
+                    return None
+            return (
+                int(payload.get("stage", pending["stage"])),
+                status,
+                retry_after,
+            )
 
         except Exception as e:
             print(f"[DataReceiver] ERROR triggering training: {e}")
@@ -863,6 +937,8 @@ class MLTrainingDataServer(transmission_pb2_grpc.MLTrainingDataServiceServicer):
 
 def serve(port=50051, data_dir="./training_data", task_id="fuzzer_id@task_name@run_id",
           controller_addr=None, api_token=None, warmup_seconds=1800,
+          minimum_total_samples=1000, minimum_class_samples=100,
+          curriculum_mode=DENSE_PAPER_MODE,
           enable_compression=False, log_file=None):
     """Start training data server"""
     # Redirect stdout to log file if specified (preserves all print() output)
@@ -909,7 +985,9 @@ def serve(port=50051, data_dir="./training_data", task_id="fuzzer_id@task_name@r
 
     # Add service
     training_service = MLTrainingDataServer(
-        data_dir, task_id, controller_addr, api_token, warmup_seconds
+        data_dir, task_id, controller_addr, api_token, warmup_seconds,
+        minimum_total_samples, minimum_class_samples,
+        curriculum_mode,
     )
     transmission_pb2_grpc.add_MLTrainingDataServiceServicer_to_server(training_service, server)
 
@@ -939,6 +1017,12 @@ if __name__ == '__main__':
         '--warmup_seconds', type=int, default=1800,
         help='Minimum data-collection warm-up before online training',
     )
+    parser.add_argument('--minimum_total_samples', type=int, default=1000)
+    parser.add_argument('--minimum_class_samples', type=int, default=100)
+    parser.add_argument(
+        '--curriculum_mode', choices=(DENSE_PAPER_MODE, SPARSE_ADAPTIVE_MODE),
+        default=DENSE_PAPER_MODE,
+    )
     parser.add_argument('--enable_compression', type=bool, default=False, help='Enable compression')
     parser.add_argument('--log_file', type=str, default=None, help='Log file path (default: stdout)')
 
@@ -947,6 +1031,7 @@ if __name__ == '__main__':
 
     serve(
         args.port, args.data_dir, args.task_id, args.controller_addr,
-        args.api_token, args.warmup_seconds, args.enable_compression,
-        args.log_file,
+        args.api_token, args.warmup_seconds, args.minimum_total_samples,
+        args.minimum_class_samples, args.curriculum_mode,
+        args.enable_compression, args.log_file,
     )

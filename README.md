@@ -364,13 +364,18 @@ evidence, and remove only resources created by that run.
 
 ### 2.4 Train and Inspect the Model
 
-The current implementation uses a two-stage online curriculum:
+The current implementation uses the paper's fixed three-stage online
+curriculum:
 
-- Stage 1: binary classification of unreachable versus any reached waypoint;
-- Stage 2: multi-class prediction of the deepest reached waypoint.
+- Stage 1: Unreachable versus Reachable;
+- Stage 2: Unreachable versus Shallow versus Deep;
+- Stage 3: exact deepest-waypoint classes.
 
 The classifier keeps a common output structure across stages and records a
-training manifest for checkpoint compatibility and promotion decisions. See
+training manifest for checkpoint compatibility and promotion decisions. Dense
+Stage 3 is the stable default. The optional sparse-adaptive profile maps
+temporarily unsupported exact classes to `Reach_Other`; it remains an explicit
+engineering profile rather than a replacement for Stage 2. See
 [`filter/train_v2.py`](filter/train_v2.py) and
 [`docs/pretrain_syzencoder.md`](docs/pretrain_syzencoder.md).
 

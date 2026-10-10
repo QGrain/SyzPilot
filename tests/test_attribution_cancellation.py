@@ -129,7 +129,8 @@ class AttributionCancellationTests(unittest.TestCase):
                         data_dir="data",
                         data_indices=[1],
                         num_classes=3,
-                        stage=2,
+                        stage=3,
+                        active_classes=[0, 1, 2],
                         target_class=2,
                         max_length=2,
                         device="cpu",
@@ -186,7 +187,19 @@ class AttributionCancellationTests(unittest.TestCase):
                     data_dir="data",
                     data_indices=[1],
                     num_classes=3,
-                    stage=2,
+                    stage=3,
+                    active_classes=[0, 1, 2],
+                    internal_batch_size=0,
+                )
+            with self.assertRaisesRegex(ValueError, "must be positive"):
+                attribution_guidance.run_attribution_for_guidance(
+                    model_path="checkpoint.pt",
+                    base_model_path="encoder",
+                    tokenizer_path="tokenizer",
+                    data_dir="data",
+                    data_indices=[1],
+                    num_classes=2,
+                    stage=1,
                     internal_batch_size=0,
                 )
         finally:
@@ -230,7 +243,8 @@ class AttributionCancellationTests(unittest.TestCase):
                         data_dir="data",
                         data_indices=[1],
                         num_classes=3,
-                        stage=2,
+                        stage=3,
+                        active_classes=[0, 1, 2],
                         cancel_event=cancel_event,
                     )
 

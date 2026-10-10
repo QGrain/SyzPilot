@@ -19,6 +19,11 @@ BRAIN_DIR = REPO_ROOT / "brain"
 sys.path.insert(0, str(BRAIN_DIR))
 
 import transmission_pb2
+from common.curriculum import (
+    CURRICULUM_SCHEMA_VERSION,
+    DENSE_PAPER_MODE,
+    SPARSE_ADAPTIVE_MODE,
+)
 from receiver import MLTrainingDataServer
 
 
@@ -251,13 +256,13 @@ class ReceiverValidationTest(unittest.TestCase):
         self.assertEqual(self.receiver._judge_stage({0: 900, 1: 100}), 1)
         self.assertEqual(
             self.receiver._judge_stage({0: 700, 1: 100, 2: 100, 3: 100}),
-            1,
+            2,
         )
         self.assertEqual(
             self.receiver._judge_stage(
                 {0: 600, 1: 100, 2: 100, 3: 100, 4: 100}
             ),
-            2,
+            3,
         )
         self.assertEqual(
             self.receiver._judge_stage(
@@ -266,46 +271,68 @@ class ReceiverValidationTest(unittest.TestCase):
             1,
         )
 
-    def test_experimental_stage_two_outbox_is_archived(self):
-        Path(self.receiver._outbox_path).write_text(json.dumps({
-            "schema_version": 1,
-            "curriculum_schema": 1,
-            "pending": None,
-            "last_queued_samples": {"2": 0},
-            "deferred_batch_end": {},
-        }), encoding="utf-8")
-
-        restarted = MLTrainingDataServer(
-            data_dir=self.temp_dir.name,
-            task_id="fuzzer@test-task@1",
+    def test_incompatible_curriculum_outboxes_are_archived(self):
+        states = (
+            {"schema_version": 1, "curriculum_schema": 1},
+            {
+                "schema_version": 1,
+                "curriculum_schema": 3,
+                "curriculum_mode": SPARSE_ADAPTIVE_MODE,
+            },
+            {
+                "schema_version": 1,
+                "curriculum_schema": CURRICULUM_SCHEMA_VERSION,
+            },
+            {
+                "schema_version": 1,
+                "curriculum_schema": CURRICULUM_SCHEMA_VERSION,
+                "curriculum_mode": SPARSE_ADAPTIVE_MODE,
+            },
         )
+        outbox_path = Path(self.receiver._outbox_path)
+        for archive_count, state in enumerate(states, start=1):
+            with self.subTest(state=state):
+                outbox_path.write_text(json.dumps(state), encoding="utf-8")
+                restarted = MLTrainingDataServer(
+                    data_dir=self.temp_dir.name,
+                    task_id="fuzzer@test-task@1",
+                )
 
-        self.assertIsNone(restarted.training_outbox)
-        self.assertEqual(restarted.last_queued_samples, {})
-        self.assertFalse(Path(restarted._outbox_path).exists())
-        self.assertEqual(len(list(self.data_dir.glob(
-            "training_outbox.json.three-stage-incompatible-*"
-        ))), 1)
+                self.assertIsNone(restarted.training_outbox)
+                self.assertEqual(restarted.last_queued_samples, {})
+                self.assertTrue(restarted.outbox_wake.is_set())
+                self.assertFalse(outbox_path.exists())
+                self.assertEqual(len(list(self.data_dir.glob(
+                    "training_outbox.json.curriculum-incompatible-*"
+                ))), archive_count)
 
-    def test_experimental_stage_one_outbox_migrates_to_schema_two(self):
-        Path(self.receiver._outbox_path).write_text(json.dumps({
-            "schema_version": 1,
-            "curriculum_schema": 1,
-            "pending": None,
-            "last_queued_samples": {"1": 0},
-            "deferred_batch_end": {},
-        }), encoding="utf-8")
-
-        restarted = MLTrainingDataServer(
-            data_dir=self.temp_dir.name,
-            task_id="fuzzer@test-task@1",
-        )
-
-        state = json.loads(Path(restarted._outbox_path).read_text(
-            encoding="utf-8"
+    def test_stage_three_outbox_survives_receiver_restart(self):
+        self.receiver.process_training_batch(make_batch(
+            7, [make_example("final$target()", [False, False, True])]
         ))
-        self.assertEqual(state["curriculum_schema"], 2)
-        self.assertEqual(restarted.last_queued_samples, {1: 0})
+        self.receiver.training_outbox = {
+            "stage": 3,
+            "batch_end": 7,
+            "total_samples": 1,
+        }
+        self.receiver.last_queued_samples = {1: 0, 3: 1}
+        self.receiver.deferred_batch_end = {3: 7}
+        with self.receiver.trigger_lock:
+            self.receiver._persist_training_outbox_locked()
+
+        restarted = MLTrainingDataServer(
+            data_dir=self.temp_dir.name,
+            task_id="fuzzer@test-task@1",
+        )
+
+        self.assertEqual(restarted.training_outbox, {
+            "stage": 3,
+            "batch_end": 7,
+            "total_samples": 1,
+            "retry_after_unix": 0.0,
+        })
+        self.assertEqual(restarted.last_queued_samples, {1: 0, 3: 1})
+        self.assertEqual(restarted.deferred_batch_end, {3: 7})
 
     def test_training_trigger_respects_warmup_gate(self):
         self.receiver.controller_addr = "localhost:1"
@@ -346,7 +373,7 @@ class ReceiverValidationTest(unittest.TestCase):
         self.receiver.stats["label_distribution"] = {0: 700, 1: 150, 2: 150}
 
         self.receiver.check_and_trigger_training()
-        self.assertEqual(self.receiver.training_outbox["stage"], 2)
+        self.assertEqual(self.receiver.training_outbox["stage"], 3)
         self.assertTrue(Path(self.receiver._outbox_path).is_file())
 
         with mock.patch.object(self.receiver, "_trigger_training", return_value=None):
@@ -354,7 +381,7 @@ class ReceiverValidationTest(unittest.TestCase):
         self.assertIsNotNone(self.receiver.training_outbox)
 
         with mock.patch.object(
-            self.receiver, "_trigger_training", return_value=(1, "queued")
+            self.receiver, "_trigger_training", return_value=(1, "queued", 0)
         ):
             self.receiver._drain_training_outbox()
         self.assertIsNotNone(self.receiver.training_outbox)
@@ -371,7 +398,8 @@ class ReceiverValidationTest(unittest.TestCase):
         )
 
         with mock.patch.object(
-            self.receiver, "_trigger_training", return_value=(1, "up_to_date")
+            self.receiver, "_trigger_training",
+            return_value=(1, "up_to_date", 0)
         ):
             self.receiver._drain_training_outbox()
         self.assertIsNone(self.receiver.training_outbox)
@@ -384,6 +412,155 @@ class ReceiverValidationTest(unittest.TestCase):
         # This unit test injected in-memory counters without committed files;
         # restart must reject the resulting future watermark.
         self.assertEqual(restarted.last_queued_samples, {})
+
+    def test_training_cooldown_retains_snapshot_and_survives_restart(self):
+        self.receiver.process_training_batch(make_batch(
+            1, [make_example("unreached()", [True, False, False])]
+        ))
+        self.receiver.process_training_batch(make_batch(
+            2, [make_example("reached()", [False, True, False])]
+        ))
+        self.receiver.controller_addr = "localhost:1"
+        self.receiver.api_token = "token"
+        self.receiver.stage1_threshold = 2
+        self.receiver.min_trainable_class_samples = 1
+        self.receiver.warmup_seconds = 0
+        self.receiver.check_and_trigger_training()
+        pending = dict(self.receiver.training_outbox)
+        self.assertEqual(pending["stage"], 1)
+
+        with (
+            mock.patch.object(
+                self.receiver, "_trigger_training",
+                return_value=(1, "cooldown", 1600.0),
+            ),
+            mock.patch("receiver.time.time", return_value=1000.0),
+        ):
+            self.receiver._drain_training_outbox()
+
+        self.assertEqual(
+            self.receiver.training_outbox["retry_after_unix"], 1600.0
+        )
+        self.assertEqual(self.receiver.last_queued_samples, {})
+
+        restarted = MLTrainingDataServer(
+            data_dir=self.temp_dir.name,
+            task_id="fuzzer@test-task@1",
+        )
+        self.assertEqual(
+            restarted.training_outbox["retry_after_unix"], 1600.0
+        )
+
+        with (
+            mock.patch.object(
+                restarted, "_trigger_training",
+                return_value=(1, "up_to_date", 0),
+            ) as trigger,
+            mock.patch("receiver.time.time", return_value=1200.0),
+        ):
+            restarted._drain_training_outbox()
+        trigger.assert_not_called()
+        self.assertIsNotNone(restarted.training_outbox)
+
+        retry_pending = {
+            **restarted.training_outbox,
+            "retry_after_unix": 0.0,
+        }
+        with (
+            mock.patch.object(
+                restarted, "_trigger_training",
+                return_value=(1, "up_to_date", 0),
+            ) as trigger,
+            mock.patch("receiver.time.time", return_value=1600.0),
+        ):
+            restarted._drain_training_outbox()
+        trigger.assert_called_once_with(retry_pending)
+        self.assertIsNone(restarted.training_outbox)
+        self.assertEqual(restarted.last_queued_samples, {1: 2})
+
+    def test_training_cooldown_does_not_delay_new_stage(self):
+        self.receiver.process_training_batch(make_batch(
+            1, [make_example("unreached()", [True, False, False])]
+        ))
+        self.receiver.process_training_batch(make_batch(
+            2, [make_example("shallow()", [False, True, False])]
+        ))
+        self.receiver.controller_addr = "localhost:1"
+        self.receiver.api_token = "token"
+        self.receiver.stage1_threshold = 2
+        self.receiver.min_trainable_class_samples = 1
+        self.receiver.warmup_seconds = 0
+        self.receiver.check_and_trigger_training()
+
+        with (
+            mock.patch.object(
+                self.receiver, "_trigger_training",
+                return_value=(1, "cooldown", 1600.0),
+            ),
+            mock.patch("receiver.time.time", return_value=1000.0),
+        ):
+            self.receiver._drain_training_outbox()
+        self.assertEqual(self.receiver.training_outbox["stage"], 1)
+
+        self.receiver.process_training_batch(make_batch(
+            3, [make_example("deep()", [False, False, True])]
+        ))
+
+        expected = {
+            # Receiver requests the finest data-ready objective. The
+            # Controller still enforces the mandatory 1 -> 2 -> 3 sequence.
+            "stage": 3,
+            "batch_end": 3,
+            "total_samples": 3,
+            "retry_after_unix": 0.0,
+        }
+        self.assertEqual(self.receiver.training_outbox, expected)
+        with (
+            mock.patch.object(
+                self.receiver, "_trigger_training",
+                return_value=(2, "queued", 0),
+            ) as trigger,
+            mock.patch("receiver.time.time", return_value=1200.0),
+        ):
+            self.receiver._drain_training_outbox()
+        trigger.assert_called_once_with(expected)
+
+    def test_expired_cooldown_marks_request_in_flight_before_post(self):
+        self.receiver.process_training_batch(make_batch(
+            1, [make_example("unreached()", [True, False, False])]
+        ))
+        self.receiver.process_training_batch(make_batch(
+            2, [make_example("shallow()", [False, True, False])]
+        ))
+        self.receiver.controller_addr = "localhost:1"
+        self.receiver.api_token = "token"
+        self.receiver.stage1_threshold = 2
+        self.receiver.min_trainable_class_samples = 1
+        self.receiver.warmup_seconds = 0
+        self.receiver.check_and_trigger_training()
+        with self.receiver.trigger_lock:
+            self.receiver.training_outbox["retry_after_unix"] = 1.0
+            self.receiver._persist_training_outbox_locked()
+
+        def receive_new_stage_data(pending):
+            self.assertEqual(pending["retry_after_unix"], 0.0)
+            self.receiver.process_training_batch(make_batch(
+                3, [make_example("deep()", [False, False, True])]
+            ))
+            return 1, "queued", 0
+
+        with mock.patch.object(
+                self.receiver, "_trigger_training",
+                side_effect=receive_new_stage_data) as trigger:
+            self.receiver._drain_training_outbox()
+
+        trigger.assert_called_once()
+        self.assertEqual(self.receiver.training_outbox, {
+            "stage": 1,
+            "batch_end": 2,
+            "total_samples": 2,
+            "retry_after_unix": 0.0,
+        })
 
     def test_training_outbox_backoff_is_capped_and_resets(self):
         self.receiver.training_outbox = {
@@ -447,16 +624,16 @@ class ReceiverValidationTest(unittest.TestCase):
         self.receiver.stats["total_samples"] = 1000
         self.receiver.stats["label_distribution"] = {0: 800, 1: 100, 2: 100}
         self.receiver.check_and_trigger_training()
-        self.assertEqual(self.receiver.training_outbox["stage"], 2)
+        self.assertEqual(self.receiver.training_outbox["stage"], 3)
         self.assertEqual(self.receiver.training_outbox["batch_end"], 2)
 
         with mock.patch.object(
-            self.receiver, "_trigger_training", return_value=(1, "deferred")
+            self.receiver, "_trigger_training", return_value=(1, "deferred", 0)
         ):
             self.receiver._drain_training_outbox()
         self.assertIsNone(self.receiver.training_outbox)
         self.assertEqual(self.receiver.last_queued_samples, {})
-        self.assertEqual(self.receiver.deferred_batch_end, {2: 2})
+        self.assertEqual(self.receiver.deferred_batch_end, {3: 2})
 
         # The periodic outbox loop must not recreate the same deferred
         # snapshot before a newer committed batch exists.
@@ -479,7 +656,7 @@ class ReceiverValidationTest(unittest.TestCase):
         self.assertIsNotNone(self.receiver.training_outbox)
 
         with mock.patch.object(
-            self.receiver, "_trigger_training", return_value=(1, "rejected")
+            self.receiver, "_trigger_training", return_value=(1, "rejected", 0)
         ):
             self.receiver._drain_training_outbox()
 
@@ -496,7 +673,7 @@ class ReceiverValidationTest(unittest.TestCase):
         self.receiver.check_and_trigger_training()
         self.assertIsNotNone(self.receiver.training_outbox)
 
-    def test_rejected_forced_stage_one_consumes_stage_two_request(self):
+    def test_rejected_forced_stage_one_consumes_finer_stage_request(self):
         self.receiver.controller_addr = "localhost:1"
         self.receiver.api_token = "token"
         self.receiver.label_width = 3
@@ -504,15 +681,15 @@ class ReceiverValidationTest(unittest.TestCase):
         self.receiver.stats["total_samples"] = 1000
         self.receiver.stats["label_distribution"] = {0: 800, 1: 100, 2: 100}
         self.receiver.check_and_trigger_training()
-        self.assertEqual(self.receiver.training_outbox["stage"], 2)
+        self.assertEqual(self.receiver.training_outbox["stage"], 3)
 
         with mock.patch.object(
-            self.receiver, "_trigger_training", return_value=(1, "rejected")
+            self.receiver, "_trigger_training", return_value=(1, "rejected", 0)
         ):
             self.receiver._drain_training_outbox()
 
         self.assertEqual(
-            self.receiver.last_queued_samples, {1: 1000, 2: 1000}
+            self.receiver.last_queued_samples, {1: 1000, 3: 1000}
         )
         self.receiver.check_and_trigger_training()
         self.assertIsNone(self.receiver.training_outbox)
@@ -529,7 +706,8 @@ class ReceiverValidationTest(unittest.TestCase):
 
         with (
             mock.patch.object(
-                self.receiver, "_trigger_training", return_value=(1, "deferred")
+                self.receiver, "_trigger_training",
+                return_value=(1, "deferred", 0)
             ),
             mock.patch.object(
                 self.receiver, "_persist_training_outbox_locked",

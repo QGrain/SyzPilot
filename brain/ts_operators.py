@@ -8,6 +8,7 @@ from time import monotonic, sleep, time
 
 import psutil
 import requests
+from common.curriculum import normalize_stage3_active_classes
 try:
     from .utils import api_request
     from .gpu_admission import validate_existing_torchserve_config
@@ -63,7 +64,8 @@ class ServeOperator:
         return environment
 
     ### Deploy-related functions
-    def create_index2name(self, num_labels, task_dir, stage, force=True):
+    def create_index2name(self, num_labels, task_dir, stage,
+                          active_classes=None, force=True):
         t0 = time()
         # Can I change the filename of index_to_name.json? To be tested
         os.makedirs(task_dir, exist_ok=True)
@@ -71,16 +73,32 @@ class ServeOperator:
         if os.path.isfile(index2name_path) and force == False:
             print(f'[ServeOperator][INFO] {index2name_path} already exist and force==False')
             return index2name_path
-        if stage not in (1, 2):
+        if stage not in (1, 2, 3):
             raise ValueError(f"invalid training stage: {stage}")
         if num_labels < 2:
             raise ValueError("num_labels must be at least 2")
+        if stage == 2 and num_labels < 3:
+            raise ValueError("Stage 2 requires at least 3 exact labels")
         if stage == 1:
             index2name = {"0": "Unreachable", "1": "Reachable"}
+        elif stage == 2:
+            index2name = {
+                "0": "Unreachable",
+                "1": "Reach_Shallow",
+                "2": "Reach_Deep",
+            }
         else:
-            index2name = {"0": "Unreachable"}
-            for i in range(1, num_labels):
-                index2name[str(i)] = "Reach_Func%s" % str(i)
+            active = normalize_stage3_active_classes(
+                active_classes, num_labels
+            )
+            index2name = {}
+            for compact_index, exact_class in enumerate(active):
+                index2name[str(compact_index)] = (
+                    "Unreachable" if exact_class == 0
+                    else f"Reach_Func{exact_class}"
+                )
+            if len(active) < num_labels:
+                index2name[str(len(active))] = "Reach_Other"
 
         with open(index2name_path, 'w') as f:
             json.dump(index2name, f, indent=4)

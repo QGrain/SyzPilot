@@ -2,8 +2,16 @@
 
 from dataclasses import asdict, dataclass
 import math
+from pathlib import Path
 import re
+import sys
 from typing import Any, Dict, Mapping, Optional
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from common.curriculum import curriculum_output_classes
 
 
 @dataclass(frozen=True)
@@ -18,6 +26,7 @@ class PromotionThresholds:
     stage2_min_reached_recall: float = 0.40
     stage2_min_final_recall: float = 0.50
     relative_loss_tolerance: float = 1e-4
+    stage_transition_binary_loss_ratio: float = 0.10
     relative_macro_f1_tolerance: float = 0.02
     relative_mean_recall_tolerance: float = 0.02
     relative_class_recall_tolerance: float = 0.05
@@ -37,6 +46,7 @@ class PromotionThresholds:
             self.relative_macro_f1_tolerance,
             self.relative_mean_recall_tolerance,
             self.relative_class_recall_tolerance,
+            self.stage_transition_binary_loss_ratio,
             self.material_macro_f1_improvement,
             self.material_min_recall_improvement,
         )
@@ -119,12 +129,21 @@ def _binary_metric_view(
 def _append_relative_regressions(
         reasons: list, candidate: Mapping[str, Any],
         baseline: Mapping[str, Any], thresholds: PromotionThresholds,
-        reason_prefix: str = "") -> None:
-    expected_classes = len(candidate["recalls"])
-    candidate_mean_recall = sum(candidate["recalls"].values()) / expected_classes
-    baseline_mean_recall = sum(baseline["recalls"].values()) / expected_classes
-    if (candidate["loss"] > baseline["loss"] +
-            thresholds.relative_loss_tolerance):
+        reason_prefix: str = "", class_indices=None,
+        loss_tolerance: Optional[float] = None) -> None:
+    if class_indices is None:
+        class_indices = tuple(candidate["recalls"])
+    else:
+        class_indices = tuple(class_indices)
+    candidate_mean_recall = sum(
+        candidate["recalls"][index] for index in class_indices
+    ) / len(class_indices)
+    baseline_mean_recall = sum(
+        baseline["recalls"][index] for index in class_indices
+    ) / len(class_indices)
+    if loss_tolerance is None:
+        loss_tolerance = thresholds.relative_loss_tolerance
+    if candidate["loss"] > baseline["loss"] + loss_tolerance:
         reasons.append(f"{reason_prefix}relative_loss_regression")
     if (candidate["macro_f1"] < baseline["macro_f1"] -
             thresholds.relative_macro_f1_tolerance):
@@ -136,19 +155,22 @@ def _append_relative_regressions(
             candidate["recalls"][class_index] <
             baseline["recalls"][class_index] -
             thresholds.relative_class_recall_tolerance
-            for class_index in range(expected_classes)):
+            for class_index in class_indices):
         reasons.append(f"{reason_prefix}relative_class_recall_regression")
 
 
 def decide_model_promotion(
         manifest: Mapping[str, Any], stage: int, num_classes: int,
-        thresholds: Optional[PromotionThresholds] = None) -> Dict[str, Any]:
+        thresholds: Optional[PromotionThresholds] = None,
+        active_classes=None) -> Dict[str, Any]:
     """Return an auditable decision without mutating controller state."""
     thresholds = thresholds or PromotionThresholds()
     thresholds.validate()
-    if stage not in (1, 2):
+    if stage not in (1, 2, 3):
         raise ValueError(f"invalid curriculum stage: {stage}")
-    expected_classes = 2 if stage == 1 else num_classes
+    expected_classes = curriculum_output_classes(
+        num_classes, stage, active_classes
+    )
     if expected_classes < 2:
         raise ValueError("promotion requires at least two active classes")
     signature_count = int(manifest["validation_signature_count"])
@@ -180,7 +202,16 @@ def decide_model_promotion(
         if min(candidate["recalls"].values()) < thresholds.stage1_min_recall:
             reasons.append("low_class_recall")
     else:
-        if min(candidate["counts"].values()) < thresholds.stage2_min_support:
+        exact_metric_classes = (
+            tuple(range(len(active_classes)))
+            if stage == 3 else tuple(range(expected_classes))
+        )
+        reached_metric_classes = exact_metric_classes[1:]
+        final_metric_class = exact_metric_classes[-1]
+        if min(
+                candidate["counts"][index]
+                for index in exact_metric_classes
+        ) < thresholds.stage2_min_support:
             reasons.append("insufficient_class_support")
         if candidate["macro_f1"] < thresholds.stage2_min_macro_f1:
             reasons.append("low_macro_f1")
@@ -190,25 +221,29 @@ def decide_model_promotion(
         if any(
                 candidate["recalls"][class_index] <
                 thresholds.stage2_min_reached_recall
-                for class_index in range(1, expected_classes)
+                for class_index in reached_metric_classes
         ):
             reasons.append("low_reached_recall")
-        if (candidate["recalls"][expected_classes - 1] <
+        if (candidate["recalls"][final_metric_class] <
                 thresholds.stage2_min_final_recall):
-            reasons.append("low_final_recall")
+            reasons.append(
+                "low_deep_recall" if stage == 2 else "low_final_recall"
+            )
 
         binary_candidate = _binary_metric_view(manifest, "")
+        active_positive_support = sum(
+            candidate["counts"][class_index]
+            for class_index in range(1, expected_classes)
+        )
         collapsed_counts = {
             0: candidate["counts"][0],
-            1: sum(
-                candidate["counts"][class_index]
-                for class_index in range(1, expected_classes)
-            ),
+            1: active_positive_support,
         }
-        if (binary_candidate["counts"] != collapsed_counts or
+        support_matches = binary_candidate["counts"] == collapsed_counts
+        if (not support_matches or
                 sum(binary_candidate["counts"].values()) != signature_count):
             raise ValueError(
-                "binary validation support does not match exact classes"
+                "binary validation support does not match the holdout"
             )
         if min(binary_candidate["counts"].values()) < (
                 thresholds.stage1_min_support):
@@ -221,6 +256,15 @@ def decide_model_promotion(
 
     baseline = None
     loaded_stage = int(manifest.get("loaded_checkpoint_stage", 0))
+    allowed_loaded_stages = {stage}
+    if stage > 1:
+        allowed_loaded_stages.add(stage - 1)
+    if (manifest.get("loaded_checkpoint") and
+            loaded_stage not in allowed_loaded_stages):
+        raise ValueError(
+            "loaded checkpoint stage must match the candidate stage or its "
+            "immediate predecessor"
+        )
     if manifest.get("loaded_checkpoint") and loaded_stage == stage:
         baseline = _metric_view(manifest, "baseline", expected_classes)
         if baseline["counts"] != candidate["counts"]:
@@ -228,11 +272,29 @@ def decide_model_promotion(
                 "baseline and candidate validation support do not match"
             )
         _append_relative_regressions(
-            reasons, candidate, baseline, thresholds
+            reasons,
+            candidate,
+            baseline,
+            thresholds,
+            class_indices=(
+                range(len(active_classes)) if stage == 3 else None
+            ),
         )
 
-        candidate_min_recall = min(candidate["recalls"].values())
-        baseline_min_recall = min(baseline["recalls"].values())
+        material_classes = (
+            range(len(active_classes)) if stage == 3
+            else candidate["recalls"]
+        )
+        candidate_min_recall = min(
+            candidate["recalls"][index] for index in material_classes
+        )
+        material_classes = (
+            range(len(active_classes)) if stage == 3
+            else baseline["recalls"]
+        )
+        baseline_min_recall = min(
+            baseline["recalls"][index] for index in material_classes
+        )
         materially_better = (
             candidate["loss"] <= baseline["loss"] -
             thresholds.material_loss_improvement or
@@ -245,18 +307,40 @@ def decide_model_promotion(
             reasons.append("no_material_improvement")
 
     binary_baseline = None
-    if stage == 2 and manifest.get("loaded_checkpoint"):
+    binary_loss_gate = None
+    if stage in (2, 3) and manifest.get("loaded_checkpoint"):
         binary_baseline = _binary_metric_view(manifest, "baseline")
         if binary_baseline["counts"] != binary_candidate["counts"]:
             raise ValueError(
                 "binary baseline and candidate support do not match"
             )
+        binary_loss_tolerance = thresholds.relative_loss_tolerance
+        gate_mode = "same_stage_absolute"
+        if (loaded_stage, stage) in ((1, 2), (2, 3)):
+            gate_mode = "stage_transition_relative"
+            binary_loss_tolerance = max(
+                binary_loss_tolerance,
+                binary_baseline["loss"] *
+                thresholds.stage_transition_binary_loss_ratio,
+            )
+        binary_loss_gate = {
+            "mode": gate_mode,
+            "loaded_stage": loaded_stage,
+            "candidate_stage": stage,
+            "baseline_loss": binary_baseline["loss"],
+            "candidate_loss": binary_candidate["loss"],
+            "absolute_tolerance": binary_loss_tolerance,
+            "maximum_candidate_loss": (
+                binary_baseline["loss"] + binary_loss_tolerance
+            ),
+        }
         _append_relative_regressions(
             reasons,
             binary_candidate,
             binary_baseline,
             thresholds,
             reason_prefix="binary_",
+            loss_tolerance=binary_loss_tolerance,
         )
 
     return {
@@ -269,8 +353,12 @@ def decide_model_promotion(
         "thresholds": asdict(thresholds),
         "candidate": candidate,
         "baseline": baseline,
-        "binary_candidate": binary_candidate if stage == 2 else None,
+        "active_exact_classes": (
+            list(active_classes) if stage == 3 else []
+        ),
+        "binary_candidate": binary_candidate if stage in (2, 3) else None,
         "binary_baseline": binary_baseline,
+        "binary_loss_gate": binary_loss_gate,
         "validation_signature_count": signature_count,
         "validation_signature_sha256": signature_digest,
     }
@@ -340,4 +428,46 @@ def decide_stage2_bootstrap(
         stage=2,
         num_classes=num_classes,
         thresholds=thresholds,
+    )
+
+
+def decide_detailed_bootstrap(
+        metrics: Mapping[str, Any], stage: int, num_classes: int,
+        active_classes=None,
+        thresholds: Optional[PromotionThresholds] = None) -> Dict[str, Any]:
+    """Apply absolute Stage-2/3 gates to in-memory validation metrics."""
+    if stage not in (2, 3):
+        raise ValueError("detailed bootstrap requires Stage 2 or Stage 3")
+    exact_support = sum(
+        int(count) for count in metrics["class_counts"].values()
+    )
+    binary_support = sum(
+        int(count) for count in metrics["binary_class_counts"].values()
+    )
+    manifest = {
+        "validation_signature_count": binary_support,
+        "validation_signature_sha256": "0" * 64,
+        "best_eval_loss": metrics["eval_loss"],
+        "best_eval_accuracy": metrics["accuracy"],
+        "best_eval_macro_f1": metrics["macro_f1"],
+        "validation_class_counts": metrics["class_counts"],
+        "validation_per_class_recall": metrics["per_class_recall"],
+        "binary_eval_loss": metrics["binary_eval_loss"],
+        "binary_eval_accuracy": metrics["binary_accuracy"],
+        "binary_eval_macro_f1": metrics["binary_macro_f1"],
+        "binary_validation_class_counts": metrics["binary_class_counts"],
+        "binary_validation_per_class_recall": metrics[
+            "binary_per_class_recall"
+        ],
+        "loaded_checkpoint": None,
+        "loaded_checkpoint_stage": 0,
+    }
+    if exact_support != binary_support:
+        raise ValueError("detailed bootstrap metric support does not match")
+    return decide_model_promotion(
+        manifest,
+        stage=stage,
+        num_classes=num_classes,
+        thresholds=thresholds,
+        active_classes=active_classes,
     )

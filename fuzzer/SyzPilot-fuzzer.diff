@@ -3175,10 +3175,10 @@ index 91ecb49..38973d2 100644
  	if i < 0 || i >= Status(len(_Status_index)-1) {
 diff --git a/pkg/fuzzer/rfilter/rfilter.go b/pkg/fuzzer/rfilter/rfilter.go
 new file mode 100644
-index 0000000..6c99411
+index 0000000..890efb5
 --- /dev/null
 +++ b/pkg/fuzzer/rfilter/rfilter.go
-@@ -0,0 +1,464 @@
+@@ -0,0 +1,492 @@
 +package rfilter
 +
 +import (
@@ -3187,6 +3187,8 @@ index 0000000..6c99411
 +	"log"
 +	"math"
 +	"math/rand/v2"
++	"strconv"
++	"strings"
 +	"sync"
 +	"sync/atomic"
 +	"time"
@@ -3358,7 +3360,31 @@ index 0000000..6c99411
 +		expected["Reach_Shallow"] = struct{}{}
 +		expected["Reach_Deep"] = struct{}{}
 +	default:
-+		for index := 1; index <= targetCount; index++ {
++		_, hasOther := prediction["Reach_Other"]
++		exactClasses := make(map[int]struct{})
++		for label := range prediction {
++			if label == "Unreachable" || label == "Reach_Other" {
++				continue
++			}
++			indexText, exactLabel := strings.CutPrefix(label, "Reach_Func")
++			index, err := strconv.Atoi(indexText)
++			if !exactLabel || err != nil || index < 1 || index > targetCount {
++				return fmt.Errorf("invalid exact prediction label %q", label)
++			}
++			exactClasses[index] = struct{}{}
++		}
++		if _, hasFinal := exactClasses[targetCount]; !hasFinal {
++			return fmt.Errorf("missing final-target probability")
++		}
++		if hasOther {
++			if len(exactClasses) >= targetCount {
++				return fmt.Errorf("Reach_Other requires an inactive waypoint")
++			}
++			expected["Reach_Other"] = struct{}{}
++		} else if len(exactClasses) != targetCount {
++			return fmt.Errorf("full exact prediction omits waypoint labels")
++		}
++		for index := range exactClasses {
 +			expected[fmt.Sprintf("Reach_Func%d", index)] = struct{}{}
 +		}
 +	}
@@ -3466,7 +3492,6 @@ index 0000000..6c99411
 +	if unreachableProb >= maxProb {
 +		return false
 +	}
-+	N := len(predMap)
 +	smashProb := 0.0
 +	if reachableProb, binaryStage := predMap["Reachable"]; binaryStage {
 +		// Stage 1 only predicts generic reachability, so treat its single
@@ -3483,13 +3508,16 @@ index 0000000..6c99411
 +		deepScore := 1 - math.Pow(1-deepProb, rfs.schedCfg.Beta)
 +		smashProb = (shallowScore + 2*deepScore) / 2
 +	} else {
-+		for i := 1; i < N; i++ {
-+			if vi, exists := predMap[fmt.Sprintf("Reach_Func%d", i)]; exists {
-+				ki := float64(i)
-+				smashProb += ki * (1 - math.Pow(1-vi, rfs.schedCfg.Beta))
++		for label, probability := range predMap {
++			indexText, exactLabel := strings.CutPrefix(label, "Reach_Func")
++			index, err := strconv.Atoi(indexText)
++			if !exactLabel || err != nil || index < 1 || index > rfs.targetCount {
++				continue
 +			}
++			smashProb += float64(index) *
++				(1 - math.Pow(1-probability, rfs.schedCfg.Beta))
 +		}
-+		smashProb /= float64(N - 1)
++		smashProb /= float64(rfs.targetCount)
 +	}
 +	smashProb *= rfs.schedCfg.Alpha
 +	finalProb := rfs.timeDecayProb(smashProb)
@@ -3645,10 +3673,10 @@ index 0000000..6c99411
 +}
 diff --git a/pkg/fuzzer/rfilter/rfilter_test.go b/pkg/fuzzer/rfilter/rfilter_test.go
 new file mode 100644
-index 0000000..0e10961
+index 0000000..76b24f7
 --- /dev/null
 +++ b/pkg/fuzzer/rfilter/rfilter_test.go
-@@ -0,0 +1,458 @@
+@@ -0,0 +1,485 @@
 +package rfilter
 +
 +import (
@@ -3719,6 +3747,10 @@ index 0000000..0e10961
 +		{"waypoint-two-targets", map[string]float64{
 +			"Unreachable": 0.2, "Reach_Func1": 0.3, "Reach_Func2": 0.5,
 +		}, 2},
++		{"sparse-waypoint-three-targets", map[string]float64{
++			"Unreachable": 0.2, "Reach_Func2": 0.3,
++			"Reach_Func3": 0.4, "Reach_Other": 0.1,
++		}, 3},
 +	}
 +	for _, test := range valid {
 +		t.Run(test.name, func(t *testing.T) {
@@ -3736,6 +3768,9 @@ index 0000000..0e10961
 +		{"Unreachable": 0.5, "Reachable": 0.5, "Reach_Deep": 0},
 +		{"Unreachable": 0.5, "Reachable": math.NaN()},
 +		{"Unreachable": 0.5, "Reachable": math.Inf(1)},
++		{"Unreachable": 0.5, "Reach_Func1": 0.2, "Reach_Other": 0.3},
++		{"Unreachable": 0.5, "Reach_Func2": 0.2, "Reach_Unknown": 0.3},
++		{"Unreachable": 0.1, "Reach_Func1": 0.2, "Reach_Func2": 0.3, "Reach_Other": 0.4},
 +	}
 +	for index, prediction := range invalid {
 +		if err := ValidatePrediction(prediction, 2); err == nil {
@@ -3746,6 +3781,26 @@ index 0000000..0e10961
 +		"Unreachable": 0.2, "Reach_Shallow": 0.3, "Reach_Deep": 0.5,
 +	}, 1); err == nil {
 +		t.Fatal("Stage 2 prediction accepted for a single target")
++	}
++	if err := ValidatePrediction(map[string]float64{
++		"Unreachable": 0.2, "Reach_Func1": 0.6, "Reach_Other": 0.2,
++	}, 1); err == nil {
++		t.Fatal("Reach_Other accepted without an inactive waypoint")
++	}
++}
++
++func TestReachOtherHasNoDepthSmashBonus(t *testing.T) {
++	config := testConfig()
++	config.TargetPCs = []string{"0x1", "0x2", "0x3"}
++	config.SchedulingStrategy.Type = 2
++	source := NewRFSource(&testSource{}, config, predictorFunc(
++		func([][]byte) ([]map[string]float64, []error) { return nil, nil },
++	))
++	defer source.Close()
++	if source.SmashOrNot(map[string]float64{
++		"Unreachable": 0, "Reach_Func3": 0, "Reach_Other": 1,
++	}) {
++		t.Fatal("Reach_Other received an exact-waypoint smash bonus")
 +	}
 +}
 +

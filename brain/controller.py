@@ -14,6 +14,10 @@ import subprocess
 import stat
 import signal
 
+repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
+
 from datetime import datetime
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
@@ -35,19 +39,25 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from config import ControllerConfig
 from guidance_engine import GuidanceEngine, GuidanceConfig, MutationTemplate
+from hierarchical_attribution import HierarchicalAttributionStore
 from log_manager import LogManager, init_log_manager, get_log_manager
 from syzlang_manifest import SyzlangIndex
 from model_promotion import PromotionThresholds, decide_model_promotion
-
-repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if repo_root not in sys.path:
-    sys.path.insert(0, repo_root)
 from common.curriculum import (
     CURRICULUM_SCHEMA_VERSION,
+    DENSE_PAPER_MODE,
     curriculum_class,
+    curriculum_metric_class_members,
     curriculum_output_classes,
+    normalize_curriculum_mode,
+    normalize_stage3_active_classes,
+    stage3_active_classes,
 )
-from common.label_contract import is_positive_one_hot, one_hot_label_class
+from common.label_contract import (
+    is_model_eligible_program,
+    is_positive_one_hot,
+    one_hot_label_class,
+)
 
 # ====== Global configuration and constants ======
 config = ControllerConfig()
@@ -148,6 +158,9 @@ class FuzzerTask:
     report_path: str = ""  # path to crash report for path-based analysis
     report_text: str = field(default="", repr=False)  # validated immutable report
     guidance_engine: Optional[GuidanceEngine] = field(default=None, repr=False)
+    attribution_store: HierarchicalAttributionStore = field(
+        default_factory=HierarchicalAttributionStore, repr=False
+    )
     guidance_version: int = 0  # how many guidance rounds have been sent
     static_analysis_done: bool = False  # whether static analysis has been run
     guidance_cancel: threading.Event = field(
@@ -170,18 +183,24 @@ class FuzzerTask:
             )
 
 def next_curriculum_stage(
-        requested_stage: int, last_successful_stage: int, num_classes: int) -> int:
+        requested_stage: int, last_successful_stage: int, num_classes: int,
+        curriculum_mode: str) -> int:
     """Return the next mandatory objective for a fixed-width classifier head."""
-    if requested_stage not in (1, 2):
+    normalize_curriculum_mode(curriculum_mode)
+    if requested_stage not in (1, 2, 3):
         raise ValueError(f"invalid requested curriculum stage: {requested_stage}")
-    if last_successful_stage not in (0, 1, 2):
+    if last_successful_stage not in (0, 1, 2, 3):
         raise ValueError(
             f"invalid last successful curriculum stage: {last_successful_stage}"
         )
     if num_classes < 2:
         raise ValueError("curriculum learning requires at least two output classes")
+    if num_classes == 2:
+        # With one reached label, binary reachability is already the exact
+        # objective; aggregate and exact follow-up stages add no information.
+        return 1
 
-    valid_stages = (1, 2)
+    valid_stages = (1, 2, 3)
     if last_successful_stage == 0:
         return valid_stages[0]
     if last_successful_stage not in valid_stages:
@@ -192,6 +211,21 @@ def next_curriculum_stage(
         return last_successful_stage
     current_index = valid_stages.index(last_successful_stage)
     return valid_stages[min(current_index + 1, len(valid_stages) - 1)]
+
+
+def validate_curriculum_transition(
+        candidate_stage: int, last_successful_stage: int, num_classes: int,
+        curriculum_mode: str) -> None:
+    """Reject a persisted candidate that skips or regresses an objective."""
+    expected_stage = next_curriculum_stage(
+        candidate_stage, last_successful_stage, num_classes, curriculum_mode
+    )
+    if candidate_stage != expected_stage:
+        raise ValueError(
+            f"invalid curriculum transition from Stage "
+            f"{last_successful_stage} to Stage {candidate_stage}; "
+            f"expected Stage {expected_stage}"
+        )
 
 class RegistrationPayload(BaseModel):
     uuid: str
@@ -504,12 +538,11 @@ def load_batch_signatures(
     return signatures
 
 
-def curriculum_split_class_counts(
+def canonical_split_classes(
         data_dir: str, num_classes: int, canonical_indices: List[int],
         member_indices: List[int], exclude_indices: List[int],
-        stage: int,
-        cancel_event: Optional[threading.Event] = None) -> Dict[int, int]:
-    """Count active curriculum classes in a canonical batch membership view."""
+        cancel_event: Optional[threading.Event] = None) -> Dict[str, int]:
+    """Return deepest exact labels for one signature-disjoint split."""
     import pickle
 
     canonical_classes = {}
@@ -519,15 +552,22 @@ def curriculum_split_class_counts(
     exclude_set = set(exclude_indices)
     for batch_index in sorted(set(canonical_indices)):
         _check_training_launch_canceled(cancel_event)
-        path = Path(data_dir) / f"labels_batch_{batch_index}.pkl"
-        with path.open("rb") as file_handle:
+        programs_path = Path(data_dir) / f"progs_batch_{batch_index}.pkl"
+        labels_path = Path(data_dir) / f"labels_batch_{batch_index}.pkl"
+        with programs_path.open("rb") as file_handle:
+            programs = pickle.load(file_handle)  # nosec B301 - local Receiver state
+        with labels_path.open("rb") as file_handle:
             labels = pickle.load(file_handle)  # nosec B301 - local Receiver state
         _check_training_launch_canceled(cancel_event)
-        if not isinstance(labels, dict):
-            raise ValueError(f"batch {batch_index} labels must be a dictionary")
+        if not isinstance(programs, dict) or not isinstance(labels, dict):
+            raise ValueError(f"batch {batch_index} payloads must be dictionaries")
+        if programs.keys() != labels.keys():
+            raise ValueError(f"batch {batch_index} program and label keys differ")
         for item_index, (signature, label) in enumerate(labels.items()):
             if item_index % 256 == 0:
                 _check_training_launch_canceled(cancel_event)
+            if not is_model_eligible_program(programs[signature]):
+                continue
             selected_class = one_hot_label_class(label, num_classes)
             if selected_class is None:
                 raise ValueError(
@@ -541,17 +581,33 @@ def curriculum_split_class_counts(
             if batch_index in exclude_set:
                 excluded_signatures.add(signature)
 
+    return {
+        signature: canonical_classes[signature]
+        for signature in member_signatures - excluded_signatures
+        if signature in canonical_classes
+    }
+
+
+def curriculum_split_class_counts(
+        data_dir: str, num_classes: int, canonical_indices: List[int],
+        member_indices: List[int], exclude_indices: List[int],
+        stage: int, active_classes=None,
+        cancel_event: Optional[threading.Event] = None) -> Dict[int, int]:
+    """Count active curriculum classes in a canonical batch membership view."""
+    split_classes = canonical_split_classes(
+        data_dir, num_classes, canonical_indices, member_indices,
+        exclude_indices, cancel_event=cancel_event,
+    )
     counts = {
         class_index: 0
         for class_index in range(
-            curriculum_output_classes(num_classes, stage)
+            curriculum_output_classes(num_classes, stage, active_classes)
         )
     }
-    for signature in member_signatures - excluded_signatures:
-        exact_class = canonical_classes.get(signature)
-        if exact_class is None:
-            raise ValueError("member signature is missing from canonical data")
-        counts[curriculum_class(exact_class, num_classes, stage)] += 1
+    for exact_class in split_classes.values():
+        counts[curriculum_class(
+            exact_class, num_classes, stage, active_classes
+        )] += 1
     return counts
 
 # Add log reading utility function
@@ -654,6 +710,9 @@ def start_receiver(task_id: str, task_name: str, run_id: int, grpc_port: int,
         "--controller_addr", controller_addr,
         "--api_token", api_token,
         "--warmup_seconds", str(config.training_warmup_seconds),
+        "--minimum_total_samples", str(config.min_samples_to_train),
+        "--minimum_class_samples", str(config.min_class_samples_to_train),
+        "--curriculum_mode", config.curriculum_mode,
         "--log_file", log_file
     ]
     try:
@@ -862,6 +921,7 @@ class Controller:
             state = {
                 "schema_version": 1,
                 "curriculum_schema": CURRICULUM_SCHEMA_VERSION,
+                "curriculum_mode": config.curriculum_mode,
                 "training_round": task.training_round,
                 "last_trained_batch": task.last_trained_batch,
                 "last_successful_checkpoint": task.last_successful_checkpoint,
@@ -900,50 +960,55 @@ class Controller:
         state_path = self._training_state_path(task)
         if not state_path.is_file():
             return
-        recovered_seen_batches = False
+        state_needs_persist = False
         try:
             state = json.loads(state_path.read_text(encoding="utf-8"))
             if not isinstance(state, dict):
                 raise ValueError("training state root must be an object")
             if state.get("schema_version") != 1:
                 raise ValueError("unsupported training state schema")
+            curriculum_schema = int(state.get("curriculum_schema", 0))
+            stored_mode = state.get("curriculum_mode")
+            if (curriculum_schema != CURRICULUM_SCHEMA_VERSION or
+                    stored_mode != config.curriculum_mode):
+                archive_path = state_path.with_name(
+                    f"{state_path.stem}.curriculum-incompatible-"
+                    f"{time.time_ns()}{state_path.suffix}"
+                )
+                os.replace(state_path, archive_path)
+                logger.warning(
+                    "[%s] Archived incompatible curriculum training state "
+                    "at %s; retained data will be retrained",
+                    task.task_id,
+                    archive_path,
+                )
+                return
             last_successful_stage = int(state.get("last_successful_stage", 0))
             pending_stage = int(state.get("pending_stage", 0))
-            curriculum_schema = state.get("curriculum_schema")
-            if curriculum_schema is None:
-                if (last_successful_stage not in (0, 1, 2) or
-                        pending_stage not in (0, 1, 2)):
-                    raise ValueError("legacy two-stage state has an invalid stage")
-                recovered_seen_batches = True
-            elif int(curriculum_schema) == 1:
-                if last_successful_stage > 1 or pending_stage > 1:
-                    archive_path = state_path.with_name(
-                        f"{state_path.stem}.three-stage-incompatible-"
-                        f"{time.time_ns()}{state_path.suffix}"
-                    )
-                    os.replace(state_path, archive_path)
-                    logger.warning(
-                        "[%s] Archived incompatible three-stage training "
-                        "state at %s; retained data will be retrained",
-                        task.task_id,
-                        archive_path,
-                    )
-                    return
-                recovered_seen_batches = True
-            elif int(curriculum_schema) != CURRICULUM_SCHEMA_VERSION:
-                raise ValueError("unsupported curriculum schema")
-            elif (last_successful_stage not in (0, 1, 2) or
-                    pending_stage not in (0, 1, 2)):
+            if (last_successful_stage not in (0, 1, 2, 3) or
+                    pending_stage not in (0, 1, 2, 3)):
                 raise ValueError("training state has an invalid curriculum stage")
             raw_evaluation_watermarks = state.get(
                 "evaluation_watermarks", {}
             )
             if not isinstance(raw_evaluation_watermarks, dict):
                 raise ValueError("model evaluation watermarks must be an object")
+            watermark_stages = {int(stage) for stage in raw_evaluation_watermarks}
+            if any(stage not in (1, 2, 3) for stage in watermark_stages):
+                raise ValueError("invalid model evaluation watermark stage")
+            pending_model_name = state.get("pending_model_name", "")
+            pending_num_classes = int(state.get("pending_num_classes", 0))
+            if pending_model_name:
+                validate_curriculum_transition(
+                    pending_stage,
+                    last_successful_stage,
+                    pending_num_classes,
+                    stored_mode,
+                )
             evaluation_watermarks = {}
             for raw_stage, raw_watermark in raw_evaluation_watermarks.items():
                 watermark_stage = int(raw_stage)
-                if (watermark_stage not in (1, 2) or
+                if (watermark_stage not in (1, 2, 3) or
                         not isinstance(raw_watermark, dict)):
                     raise ValueError("invalid model evaluation watermark")
                 watermark = dict(raw_watermark)
@@ -956,6 +1021,10 @@ class Controller:
                         any(not isinstance(reason, str) for reason in reasons)):
                     raise ValueError("invalid model evaluation watermark")
                 watermark["reason_codes"] = reasons
+                retry_after = float(watermark.get("retry_after_unix", 0))
+                if not math.isfinite(retry_after) or retry_after < 0:
+                    raise ValueError("invalid model retry cooldown watermark")
+                watermark["retry_after_unix"] = retry_after
                 evaluation_watermarks[watermark_stage] = watermark
             with task.training_lock:
                 task.training_round = int(state.get("training_round", 0))
@@ -971,7 +1040,7 @@ class Controller:
                 task.deployment_version = int(state.get("deployment_version", 0))
                 task.model_name = state.get("model_name", "")
                 task.model_version = state.get("model_version", "")
-                task.pending_model_name = state.get("pending_model_name", "")
+                task.pending_model_name = pending_model_name
                 task.pending_model_version = state.get("pending_model_version", "")
                 task.pending_checkpoint = state.get("pending_checkpoint", "")
                 task.pending_manifest = state.get("pending_manifest", "")
@@ -981,7 +1050,7 @@ class Controller:
                 task.pending_training_round = int(
                     state.get("pending_training_round", 0)
                 )
-                task.pending_num_classes = int(state.get("pending_num_classes", 0))
+                task.pending_num_classes = pending_num_classes
                 task.pending_seen_training_batches = sorted(set(map(
                     int, state.get("pending_seen_training_batches", [])
                 )))
@@ -998,16 +1067,16 @@ class Controller:
                         task.seen_training_batches = list(range(
                             1, task.last_trained_batch + 1
                         ))
-                    recovered_seen_batches = True
+                    state_needs_persist = True
 
                 if (task.pending_model_name and
                         not task.pending_seen_training_batches):
                     task.pending_seen_training_batches = (
                         self._manifest_seen_training_batches(task.pending_manifest)
                     )
-                    recovered_seen_batches = bool(
+                    state_needs_persist = bool(
                         task.pending_seen_training_batches
-                    ) or recovered_seen_batches
+                    ) or state_needs_persist
         except (
             OSError, AttributeError, KeyError, TypeError, ValueError,
             json.JSONDecodeError,
@@ -1015,7 +1084,7 @@ class Controller:
             logger.error(f"[{task.task_id}] Failed to load training state: {error}")
             return
 
-        if recovered_seen_batches:
+        if state_needs_persist:
             try:
                 self._persist_training_state(task)
             except Exception as error:
@@ -1629,6 +1698,7 @@ class Controller:
                 ),
             },
             "model": {
+                "curriculum_mode": config.curriculum_mode,
                 "training_round": task.training_round,
                 "deployment_version": task.deployment_version,
                 "name": task.model_name,
@@ -1955,13 +2025,13 @@ class Controller:
             task_id: The task identifier (fuzzer_id@task_name@run_id)
             batch_start: Starting batch index (kept for API compatibility)
             batch_end: Highest committed Receiver batch ID in this snapshot
-            stage: Training stage (1=binary, 2=exact waypoint-level)
+            stage: Requested curriculum stage (1=binary, 2=ternary, 3=exact)
         """
         t = self.global_tasks.get(task_id)
         if not t:
             self._remove_training_waiter(task_id)
             raise HTTPException(status_code=404, detail="task not found")
-        if stage not in (1, 2):
+        if stage not in (1, 2, 3):
             self._remove_training_waiter(task_id)
             raise HTTPException(status_code=400, detail=f"invalid training stage: {stage}")
 
@@ -1998,6 +2068,17 @@ class Controller:
                             status_code=500,
                             detail="incomplete pending deployment state",
                         )
+                    try:
+                        validate_curriculum_transition(
+                            t.pending_stage,
+                            t.last_successful_stage,
+                            t.pending_num_classes,
+                            config.curriculum_mode,
+                        )
+                    except ValueError as error:
+                        raise HTTPException(
+                            status_code=409, detail=str(error)
+                        ) from error
                     t.training_in_progress = True
                     t.active_training_id = training_id
                     pending_stage = t.pending_stage
@@ -2013,9 +2094,9 @@ class Controller:
                         "batch_end": pending_batch,
                         "deployment_retry": True,
                     }
-                # Stages are mandatory and monotonic. A snapshot may already
-                # satisfy a later distribution gate, but it must still train
-                # each preceding objective before advancing.
+                # Stages are monotonic and advance one objective at a time.
+                # Sparse-adaptive only changes the exact labels exposed by
+                # Stage 3; it does not skip the aggregate Stage-2 bridge.
                 if t.last_successful_stage == 0:
                     effective_stage = 1
                 else:
@@ -2046,6 +2127,24 @@ class Controller:
                         "reason_codes": list(
                             rejected_watermark.get("reason_codes", [])
                         ),
+                    }
+                retry_after = float(
+                    (rejected_watermark or {}).get("retry_after_unix", 0)
+                )
+                if (rejected_watermark is not None and
+                        t.last_successful_stage >= effective_stage and
+                        time.time() < retry_after):
+                    self._remove_training_waiter(task_id)
+                    return {
+                        "status": "cooldown",
+                        "stage": effective_stage,
+                        "round": t.training_round,
+                        "batch_end": rejected_watermark["batch_end"],
+                        "reason_codes": list(dict.fromkeys([
+                            *rejected_watermark.get("reason_codes", []),
+                            "retry_cooldown",
+                        ])),
+                        "retry_after_unix": retry_after,
                     }
                 next_round = t.training_round + 1
                 last_trained_batch = t.last_trained_batch
@@ -2099,10 +2198,19 @@ class Controller:
             num_classes = len(first_label)
             try:
                 effective_stage = next_curriculum_stage(
-                    stage, t.last_successful_stage, num_classes
+                    stage, t.last_successful_stage, num_classes,
+                    config.curriculum_mode,
                 )
             except ValueError as error:
                 raise HTTPException(status_code=409, detail=str(error)) from error
+            if (batch_end > 0 and batch_end <= last_trained_batch and
+                    effective_stage <= loaded_checkpoint_stage):
+                return {
+                    "status": "up_to_date",
+                    "stage": effective_stage,
+                    "round": t.training_round,
+                    "batch_end": last_trained_batch,
+                }
             full_retrain = (
                 last_trained_batch == 0 or
                 effective_stage > t.last_successful_stage
@@ -2158,18 +2266,15 @@ class Controller:
                 set(train_indices).union(seen_training_batches)
             )
 
-            excluded_signatures = load_batch_signatures(
-                data_dir, test_exclude_indices,
+            train_exact_classes = canonical_split_classes(
+                data_dir, num_classes, batch_indices, train_indices, [],
                 cancel_event=t.training_cancel,
             )
-            validation_signatures = (
-                load_batch_signatures(
-                    data_dir, test_indices,
-                    cancel_event=t.training_cancel,
-                )
-                - excluded_signatures
+            validation_exact_classes = canonical_split_classes(
+                data_dir, num_classes, batch_indices, test_indices,
+                test_exclude_indices, cancel_event=t.training_cancel,
             )
-            if not validation_signatures:
+            if not validation_exact_classes:
                 logger.info(
                     f"Deferring training for task {t.task_id}: snapshot "
                     f"boundary {max(batch_indices)} has no signature-disjoint "
@@ -2182,10 +2287,57 @@ class Controller:
                     "batch_end": max(batch_indices),
                     "reason": "no signature-disjoint validation examples",
                 }
-            validation_signature_count = len(validation_signatures)
-            validation_signature_sha256 = hashlib.sha256(
-                "\n".join(sorted(validation_signatures)).encode("utf-8")
-            ).hexdigest()
+            active_classes = None
+            loaded_active_classes = None
+            if loaded_checkpoint_stage == 3:
+                loaded_manifest = json.loads(
+                    Path(t.last_training_manifest).read_text(encoding="utf-8")
+                )
+                loaded_active_classes = self._manifest_active_classes(
+                    loaded_manifest, 3, num_classes
+                )
+            if effective_stage == 3:
+                all_exact_classes = canonical_split_classes(
+                    data_dir, num_classes, batch_indices, batch_indices, [],
+                    cancel_event=t.training_cancel,
+                )
+
+                def exact_counts(values):
+                    counts = {
+                        class_index: 0 for class_index in range(num_classes)
+                    }
+                    for exact_class in values:
+                        counts[exact_class] += 1
+                    return counts
+
+                active_classes = stage3_active_classes(
+                    exact_counts(all_exact_classes.values()),
+                    num_classes,
+                    minimum_class_samples=(
+                        config.min_class_samples_to_train
+                    ),
+                    train_counts=exact_counts(train_exact_classes.values()),
+                    validation_counts=exact_counts(
+                        validation_exact_classes.values()
+                    ),
+                    minimum_validation_samples=(
+                        config.promotion_stage2_min_support
+                    ),
+                    previous_active_classes=loaded_active_classes,
+                    curriculum_mode=config.curriculum_mode,
+                )
+                if not active_classes:
+                    logger.info(
+                        f"Deferring training for task {t.task_id}: Stage-3 "
+                        "mandatory/active classes lack split evidence"
+                    )
+                    return {
+                        "status": "deferred",
+                        "stage": effective_stage,
+                        "round": next_round,
+                        "batch_end": max(batch_indices),
+                        "reason": "incomplete Stage-3 active split evidence",
+                    }
 
             train_class_counts = curriculum_split_class_counts(
                 data_dir,
@@ -2194,6 +2346,7 @@ class Controller:
                 train_indices,
                 [],
                 effective_stage,
+                active_classes,
                 cancel_event=t.training_cancel,
             )
             validation_class_counts = curriculum_split_class_counts(
@@ -2203,24 +2356,72 @@ class Controller:
                 test_indices,
                 test_exclude_indices,
                 effective_stage,
+                active_classes,
                 cancel_event=t.training_cancel,
             )
-            if (any(count == 0 for count in train_class_counts.values()) or
-                    any(count == 0 for count in validation_class_counts.values())):
+            required_metric_classes = (
+                range(len(active_classes)) if effective_stage == 3
+                else train_class_counts
+            )
+            missing_train_classes = [
+                index for index in required_metric_classes
+                if train_class_counts[index] == 0
+            ]
+            validation_min_support = (
+                config.promotion_stage1_min_support
+                if effective_stage == 1
+                else config.promotion_stage2_min_support
+            )
+            under_supported_validation_classes = [
+                index for index in required_metric_classes
+                if validation_class_counts[index] < validation_min_support
+            ]
+            binary_validation_counts = None
+            under_supported_binary_classes = []
+            if effective_stage > 1:
+                binary_validation_counts = {
+                    0: validation_class_counts[0],
+                    1: sum(
+                        count for index, count
+                        in validation_class_counts.items() if index > 0
+                    ),
+                }
+                under_supported_binary_classes = [
+                    index for index, count
+                    in binary_validation_counts.items()
+                    if count < config.promotion_stage1_min_support
+                ]
+            if (missing_train_classes or
+                    under_supported_validation_classes or
+                    under_supported_binary_classes):
                 logger.info(
                     f"Deferring training for task {t.task_id}: curriculum "
-                    f"class coverage is incomplete; train={train_class_counts}, "
-                    f"validation={validation_class_counts}"
+                    "split support cannot pass the promotion gate; "
+                    f"train={train_class_counts}, "
+                    f"validation={validation_class_counts}, "
+                    f"validation_min_support={validation_min_support}, "
+                    f"binary_validation={binary_validation_counts}"
                 )
                 return {
                     "status": "deferred",
                     "stage": effective_stage,
                     "round": next_round,
                     "batch_end": max(batch_indices),
-                    "reason": "incomplete train/validation curriculum classes",
+                    "reason": "insufficient train/validation curriculum support",
                     "train_class_counts": train_class_counts,
                     "validation_class_counts": validation_class_counts,
+                    "validation_min_support": validation_min_support,
+                    "binary_validation_class_counts": binary_validation_counts,
                 }
+
+            # Fingerprint the complete holdout. Stage 3 evaluates exact metrics
+            # only on active classes, but its binary regression gate must retain
+            # every reached sample, including sparse intermediate waypoints.
+            validation_signatures = set(validation_exact_classes)
+            validation_signature_count = len(validation_signatures)
+            validation_signature_sha256 = hashlib.sha256(
+                "\n".join(sorted(validation_signatures)).encode("utf-8")
+            ).hexdigest()
 
             save_dir = os.path.abspath(
                 os.path.join(config.data_root, t.task_name, str(t.run_id), "models")
@@ -2279,6 +2480,7 @@ class Controller:
                 "--num_warmup_steps", str(config.num_warmup_steps),
                 "--num_classes", str(num_classes),
                 "--train_stage", str(effective_stage),
+                "--curriculum_mode", config.curriculum_mode,
                 "--base_model_path", config.base_model,
                 "--tokenizer_path", config.tokenizer,
                 "--freeze_layers",
@@ -2316,12 +2518,25 @@ class Controller:
             # first optimization run for a new objective still needs the full
             # profile rather than the shorter same-stage continuation profile.
             is_first_stage_train = (
-                not load_path or loaded_checkpoint_stage != effective_stage
+                not load_path or
+                loaded_checkpoint_stage != effective_stage or
+                (effective_stage == 3 and
+                 loaded_active_classes != active_classes)
             )
             if load_path:
                 cmd.extend([
                     "--load_path", load_path,
                     "--loaded_checkpoint_stage", str(loaded_checkpoint_stage),
+                ])
+                if loaded_checkpoint_stage == 3:
+                    cmd.extend([
+                        "--loaded_active_classes",
+                        ",".join(map(str, loaded_active_classes)),
+                    ])
+            if effective_stage == 3:
+                cmd.extend([
+                    "--active_classes",
+                    ",".join(map(str, active_classes)),
                 ])
             if is_first_stage_train:
                 cmd.extend([
@@ -2349,6 +2564,7 @@ class Controller:
                 f"requested_stage={stage}, effective_stage={effective_stage}, "
                 f"boundary={max(batch_indices)}, train={train_indices}, "
                 f"test={test_indices}, load_path={load_path or 'none'}, "
+                f"active_classes={active_classes or 'grouped'}, "
                 f"training_profile="
                 f"{'first-stage' if is_first_stage_train else 'continued'}"
             )
@@ -2653,17 +2869,61 @@ class Controller:
         return cleanup_confirmed
 
     @staticmethod
-    def _load_training_manifest(model_dir: str, stage: int, num_classes: int):
+    def _manifest_active_classes(
+            manifest: Dict[str, Any], stage: int,
+            num_classes: int) -> Optional[Tuple[int, ...]]:
+        """Validate the manifest's exact-to-metric curriculum mapping."""
+        raw_active = manifest.get("active_exact_classes", [])
+        if not isinstance(raw_active, list):
+            raise ValueError("manifest active exact classes must be a list")
+        if stage == 3:
+            active = normalize_stage3_active_classes(
+                raw_active, num_classes
+            )
+        else:
+            if raw_active:
+                raise ValueError(
+                    "non-Stage-3 manifest has active exact classes"
+                )
+            active = None
+        expected_members = {
+            str(metric_index): list(exact_classes)
+            for metric_index, exact_classes in curriculum_metric_class_members(
+                num_classes, stage, active
+            ).items()
+        }
+        if manifest.get("metric_class_members") != expected_members:
+            raise ValueError("manifest metric class mapping is invalid")
+        return active
+
+    @staticmethod
+    def _load_training_manifest(
+            model_dir: str, stage: int, num_classes: int,
+            curriculum_mode: str):
         manifest_path = Path(model_dir) / "training_manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if manifest.get("schema_version") != 1:
             raise ValueError("unsupported training manifest schema")
         if manifest.get("curriculum_schema") != CURRICULUM_SCHEMA_VERSION:
             raise ValueError("unsupported training manifest curriculum schema")
+        expected_mode = normalize_curriculum_mode(curriculum_mode)
+        manifest_mode = normalize_curriculum_mode(
+            manifest.get("curriculum_mode")
+        )
+        if manifest_mode != expected_mode:
+            raise ValueError("training manifest curriculum mode mismatch")
         if int(manifest.get("train_stage", 0)) != stage:
             raise ValueError("training manifest stage mismatch")
         if int(manifest.get("num_classes", 0)) != num_classes:
             raise ValueError("training manifest class-count mismatch")
+        active_classes = Controller._manifest_active_classes(
+            manifest, stage, num_classes
+        )
+        if (stage == 3 and expected_mode == DENSE_PAPER_MODE and
+                active_classes != tuple(range(num_classes))):
+            raise ValueError(
+                "dense-paper Stage-3 manifest omits canonical classes"
+            )
         best_eval_loss = float(manifest.get("best_eval_loss", math.nan))
         if not math.isfinite(best_eval_loss):
             raise ValueError("training manifest best eval loss is not finite")
@@ -2674,7 +2934,9 @@ class Controller:
                     raise ValueError(f"training manifest {metric_name} is invalid")
         validation_counts = manifest.get("validation_class_counts")
         if validation_counts is not None:
-            expected_classes = curriculum_output_classes(num_classes, stage)
+            expected_classes = curriculum_output_classes(
+                num_classes, stage, active_classes
+            )
             normalized_counts = {
                 str(int(class_index)): int(count)
                 for class_index, count in validation_counts.items()
@@ -2736,8 +2998,9 @@ class Controller:
             self, task: FuzzerTask, training_id: str, stage: int,
             batch_boundary: int, manifest_path: Optional[Path],
             manifest: Dict[str, Any],
-            decision: Dict[str, Any]) -> None:
+            decision: Dict[str, Any], quality_rejection: bool = True) -> None:
         """Persist a terminal rejected snapshot without advancing active state."""
+        evaluated_at = time.time()
         watermark = {
             "batch_end": int(batch_boundary),
             "disposition": "rejected",
@@ -2747,10 +3010,15 @@ class Controller:
                 manifest.get("checkpoint_sha256", "")
             ),
             "evaluated_at": datetime.now().astimezone().isoformat(),
+            "retry_after_unix": 0.0,
         }
         with task.training_lock:
             if task.active_training_id != training_id:
                 raise RuntimeError("stale training cannot record an evaluation")
+            if quality_rejection and task.last_successful_stage >= stage:
+                watermark["retry_after_unix"] = (
+                    evaluated_at + config.model_rejection_cooldown_seconds
+                )
             previous = task.evaluation_watermarks.get(stage)
             task.evaluation_watermarks[stage] = watermark
         try:
@@ -2791,6 +3059,7 @@ class Controller:
             manifest_path,
             manifest or {},
             decision,
+            quality_rejection=False,
         )
         return decision_path
 
@@ -2811,6 +3080,24 @@ class Controller:
             raise ValueError("manifest baseline checkpoint is not the active checkpoint")
         if int(manifest.get("loaded_checkpoint_stage", 0)) != task.last_successful_stage:
             raise ValueError("manifest baseline checkpoint stage mismatch")
+        loaded_active = manifest.get("loaded_active_exact_classes", [])
+        if task.last_successful_stage == 3:
+            active_manifest = json.loads(
+                Path(task.last_training_manifest).read_text(encoding="utf-8")
+            )
+            expected_active = list(Controller._manifest_active_classes(
+                active_manifest,
+                3,
+                int(active_manifest["num_classes"]),
+            ))
+            if loaded_active != expected_active:
+                raise ValueError(
+                    "manifest baseline Stage-3 active classes mismatch"
+                )
+        elif loaded_active:
+            raise ValueError(
+                "non-Stage-3 baseline has loaded active exact classes"
+            )
         expected_digest = str(manifest.get("loaded_checkpoint_sha256", ""))
         digest = hashlib.sha256()
         with active_path.open("rb") as file_handle:
@@ -2833,6 +3120,12 @@ class Controller:
             if (task.active_training_id != training_id or
                     not task.pending_model_name):
                 return None
+            validate_curriculum_transition(
+                task.pending_stage,
+                task.last_successful_stage,
+                task.pending_num_classes,
+                config.curriculum_mode,
+            )
             rollback = {
                 field_name: getattr(task, field_name)
                 for field_name in (
@@ -3023,6 +3316,19 @@ class Controller:
                     pending_stage = task.pending_stage
                     pending_num_classes = task.pending_num_classes
                 try:
+                    pending_active_classes = None
+                    if pending_stage == 3:
+                        pending_manifest_data = json.loads(
+                            Path(pending_manifest).read_text(encoding="utf-8")
+                        )
+                        pending_active_classes = self._manifest_active_classes(
+                            pending_manifest_data,
+                            pending_stage,
+                            pending_num_classes,
+                        )
+                    pending_deployment_args = (
+                        pending_active_classes,
+                    ) if pending_stage == 3 else ()
                     self._ensure_pending_model_deployed(
                         task,
                         candidate_name,
@@ -3030,6 +3336,7 @@ class Controller:
                         pending_torchscript,
                         pending_num_classes,
                         pending_stage,
+                        *pending_deployment_args,
                     )
                 except Exception as error:
                     logger.error(
@@ -3128,7 +3435,10 @@ class Controller:
 
             try:
                 manifest_path, manifest, best_checkpoint = self._load_training_manifest(
-                    model_dir, stage, num_classes
+                    model_dir, stage, num_classes, config.curriculum_mode
+                )
+                active_classes = self._manifest_active_classes(
+                    manifest, stage, num_classes
                 )
             except Exception as error:
                 logger.error(f"[{task.task_id}] Invalid training manifest: {error}")
@@ -3172,6 +3482,7 @@ class Controller:
                     stage,
                     num_classes,
                     thresholds=self._promotion_thresholds(),
+                    active_classes=active_classes,
                 )
                 promotion_decision.update({
                     "task_id": task.task_id,
@@ -3253,7 +3564,7 @@ class Controller:
                     try:
                         torchscript_path = self._export_torchscript(
                             task, best_checkpoint, num_classes, stage,
-                            candidate_name, training_gpu,
+                            candidate_name, training_gpu, active_classes,
                         )
                     finally:
                         # Export loads and traces the model on the same GPU as
@@ -3313,9 +3624,13 @@ class Controller:
                     return
 
                 try:
+                    deployment_args = (
+                        active_classes,
+                    ) if stage == 3 else ()
                     self._deploy_to_torchserve(
                         task, candidate_name, candidate_version,
                         torchscript_path, num_classes, stage,
+                        *deployment_args,
                     )
                 except Exception as error:
                     # The accepted checkpoint and exported model are already
@@ -3376,7 +3691,8 @@ class Controller:
 
     def _ensure_pending_model_deployed(
             self, task: FuzzerTask, model_name: str, model_version: str,
-            torchscript_path: str, num_classes: int, stage: int):
+            torchscript_path: str, num_classes: int, stage: int,
+            active_classes=None):
         """Ensure a durable pending candidate has a live TorchServe worker."""
         try:
             model_info = self.torchserve_operator.get_model_info(model_name)
@@ -3399,9 +3715,10 @@ class Controller:
             self.torchserve_operator.unregister_model(
                 model_name, model_version
             )
+        deployment_args = (active_classes,) if stage == 3 else ()
         self._deploy_to_torchserve(
             task, model_name, model_version, torchscript_path,
-            num_classes, stage,
+            num_classes, stage, *deployment_args,
         )
 
     @staticmethod
@@ -3420,7 +3737,8 @@ class Controller:
 
     def _export_torchscript(self, task: FuzzerTask, ckpt_path: Path,
                             num_classes: int, stage: int,
-                            artifact_name: str, training_gpu: str) -> str:
+                            artifact_name: str, training_gpu: str,
+                            active_classes=None) -> str:
         """Export trained model checkpoint to TorchScript format."""
         import importlib
         import sys
@@ -3455,14 +3773,21 @@ class Controller:
         logger.info(f"[{task.task_id}] Exporting TorchScript from {ckpt_path}")
 
         # Load model
-        model = TraceClassifierV2(config.base_model, num_classes, stage=stage)
+        model = TraceClassifierV2(
+            config.base_model,
+            num_classes,
+            stage=stage,
+            active_classes=active_classes,
+        )
         state_dict = self._load_export_state_dict(torch, ckpt_path)
         try:
             model.load_state_dict(state_dict)
         finally:
             del state_dict
         model.eval()
-        serving_model = TraceClassifierServingWrapper(model, stage=stage)
+        serving_model = TraceClassifierServingWrapper(
+            model, stage=stage, active_classes=active_classes
+        )
         serving_model.eval()
 
         device_index = int(training_gpu)
@@ -3531,13 +3856,15 @@ class Controller:
 
     def _deploy_to_torchserve(self, task: FuzzerTask, model_name: str,
                               model_version: str, torchscript_path: str,
-                              num_classes: int, stage: int):
+                              num_classes: int, stage: int,
+                              active_classes=None):
         """Pack .mar and register model on TorchServe."""
         # Create index_to_name.json
         index2name_path = self.torchserve_operator.create_index2name(
             num_classes,
             os.path.join(self.torchserve_operator.model_dir, model_name),
             stage=stage,
+            active_classes=active_classes,
         )
 
         # Pack .mar file (force=True to allow re-deployment of retrained models)
@@ -3773,6 +4100,8 @@ class Controller:
     def _model_quality_allows_attribution(
             save_dir: str, stage: int, num_classes: int) -> bool:
         """Fail closed unless the selected checkpoint has reliable metrics."""
+        if stage not in (1, 2, 3):
+            return False
         try:
             manifest = json.loads(
                 (Path(save_dir) / "training_manifest.json").read_text(
@@ -3787,7 +4116,16 @@ class Controller:
                     "validation_class_counts"
                 ].items()
             }
-            expected_classes = curriculum_output_classes(num_classes, stage)
+            active_classes = Controller._manifest_active_classes(
+                manifest, stage, num_classes
+            )
+            expected_classes = curriculum_output_classes(
+                num_classes, stage, active_classes
+            )
+            required_outputs = (
+                range(len(active_classes))
+                if stage == 3 else range(expected_classes)
+            )
         except (
             OSError, AttributeError, KeyError, TypeError, ValueError,
             json.JSONDecodeError,
@@ -3799,7 +4137,10 @@ class Controller:
             and config.attribution_min_accuracy <= accuracy <= 1.0
             and 0.0 <= weighted_f1 <= 1.0
             and set(validation_counts) == set(range(expected_classes))
-            and all(count > 0 for count in validation_counts.values())
+            and all(
+                validation_counts[index] > 0
+                for index in required_outputs
+            )
         )
 
     def _run_guidance_pipeline(self, task: FuzzerTask, stage: int,
@@ -3836,6 +4177,19 @@ class Controller:
         if engine is None:
             return
         logger.info(f"[{task.task_id}] Starting guidance pipeline (stage={stage})")
+        active_classes = None
+        if stage == 3:
+            manifest = json.loads(
+                (Path(save_dir) / "training_manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            active_classes = self._manifest_active_classes(
+                manifest, stage, num_classes
+            )
+        task.attribution_store.begin_deployment(
+            task.deployment_version, stage, active_classes
+        )
 
         # Load training data for sequence mining and counting
         programs, labels = self._load_training_data(task)
@@ -3853,24 +4207,13 @@ class Controller:
         if not self._task_accepts_guidance(task):
             return
 
-        # Step 2: Attribution belongs to the newly deployed model snapshot.
-        # Invalidate the previous snapshot before applying quality/data gates,
-        # so a skipped or failed recomputation cannot be published as evidence
-        # from the current stage/model version. The Fuzzer keeps its previously
-        # acknowledged guidance until the complete new payload is sent.
-        engine.update_attribution({})
-
-        # Stage 1 only learns generic reachability. Stage 2 provides exact
-        # waypoint-specific positive predictions.
+        # Step 2: Attribute the objective learned by the active curriculum
+        # stage. A skipped objective leaves other bounded snapshots intact.
         if not task.enable_attribution_guidance:
+            engine.update_attribution({})
             logger.info(
                 f"[{task.task_id}] Skipping attribution: disabled by "
                 "experiment profile"
-            )
-        elif stage == 1:
-            logger.info(
-                f"[{task.task_id}] Skipping attribution: Stage {stage} "
-                "does not learn reached-class distinctions"
             )
         elif not self._model_quality_allows_attribution(
                 save_dir, stage, num_classes):
@@ -3879,15 +4222,12 @@ class Controller:
                 f"did not meet accuracy threshold "
                 f"{config.attribution_min_accuracy:.2f}"
             )
-        elif n_final_target >= 100:
-            self._run_attribution_analysis(
-                task, engine, ckpt_path, num_classes, stage
-            )
+            self._publish_hierarchical_attribution(task, engine)
         else:
-            logger.info(
-                f"[{task.task_id}] Skipping attribution: only "
-                f"{n_final_target} final-target samples (need 100+)"
+            self._run_attribution_analysis(
+                task, engine, ckpt_path, num_classes, stage, active_classes
             )
+            self._publish_hierarchical_attribution(task, engine)
         if not self._task_accepts_guidance(task):
             return
 
@@ -4084,7 +4424,8 @@ class Controller:
             logger.warning(f"[{task.task_id}] No static analysis results (no KallGraph data or crash report)")
 
     def _run_attribution_analysis(self, task: FuzzerTask, engine: GuidanceEngine,
-                                   ckpt_path: str, num_classes: int, stage: int):
+                                   ckpt_path: str, num_classes: int, stage: int,
+                                   active_classes=None):
         """Run Captum IG attribution to find syscalls that drive target prediction."""
         global_acquired = False
         physical_acquired = False
@@ -4138,7 +4479,7 @@ class Controller:
                 )
                 return
             self._run_attribution_analysis_on_reserved_gpu(
-                task, engine, ckpt_path, num_classes, stage
+                task, engine, ckpt_path, num_classes, stage, active_classes
             )
         except Exception as e:
             logger.error(f"[{task.task_id}] Attribution analysis failed: {e}")
@@ -4150,7 +4491,8 @@ class Controller:
 
     def _run_attribution_analysis_on_reserved_gpu(
             self, task: FuzzerTask, engine: GuidanceEngine,
-            ckpt_path: str, num_classes: int, stage: int):
+            ckpt_path: str, num_classes: int, stage: int,
+            active_classes=None):
         """Compute attribution while the controller-wide GPU slot is held."""
         import sys as _sys
         filter_dir = os.path.abspath(os.path.join(
@@ -4162,7 +4504,9 @@ class Controller:
             brain_utils = _sys.modules.pop("utils", None)
             _sys.modules.pop("attribution_guidance", None)
             try:
-                from attribution_guidance import run_attribution_for_guidance
+                from attribution_guidance import (
+                    run_hierarchical_attribution_for_guidance,
+                )
             finally:
                 if brain_utils is not None:
                     _sys.modules["utils"] = brain_utils
@@ -4180,7 +4524,7 @@ class Controller:
                 f"configured attribution GPU {attribution_index} is unavailable"
             )
         try:
-            scores = run_attribution_for_guidance(
+            results = run_hierarchical_attribution_for_guidance(
                 model_path=ckpt_path,
                 base_model_path=config.base_model,
                 tokenizer_path=config.tokenizer,
@@ -4188,9 +4532,8 @@ class Controller:
                 data_indices=batch_indices,
                 num_classes=num_classes,
                 stage=stage,
-                target_class=num_classes - 1,
-                top_k=None,
-                max_samples=50,
+                deployment_version=task.deployment_version,
+                active_classes=active_classes,
                 max_length=1024,
                 device=f"cuda:{attribution_index}",
                 internal_batch_size=(
@@ -4203,47 +4546,52 @@ class Controller:
             # lease becomes available to a fallback trainer.
             with _torch.cuda.device(attribution_index):
                 _torch.cuda.empty_cache()
-        if scores and self._task_accepts_guidance(task):
-            try:
-                manifest = SyzlangIndex.load_cached(
-                    config.syzlang_manifest_path,
-                    expected_os=task.target_os,
-                    expected_arch=task.target_arch,
-                    expected_revision=task.target_revision,
-                    expected_producer_revision=task.producer_revision,
-                    max_bytes=config.syzlang_manifest_max_bytes,
-                )
-                filtered = manifest.filter_generation_scores(
-                    scores,
-                    descriptions_mode=task.descriptions_mode,
-                )
-            except (OSError, ValueError) as error:
-                logger.error(
-                    f"[{task.task_id}] Attribution manifest filtering "
-                    f"failed closed: {error}"
-                )
-                return
-            filtered_scores = {
-                entry["name"]: float(entry["weight"])
-                for entry in filtered.entries
-            }
-            norm = math.sqrt(sum(
-                score * score for score in filtered_scores.values()
-            ))
-            normalized_scores = {
-                name: score / norm
-                for name, score in filtered_scores.items()
-            } if norm > 0 else {}
-            scores = dict(sorted(
-                normalized_scores.items(),
-                key=lambda item: (-item[1], item[0]),
-            )[:15])
-            engine.update_attribution(scores)
+        if results and self._task_accepts_guidance(task):
+            replaced = task.attribution_store.replace(results)
             logger.info(
-                f"[{task.task_id}] Attribution manifest filter: "
-                f"accepted={len(scores)}, rejected={dict(filtered.rejected)}, "
-                f"top={list(scores.keys())[:5]}"
+                f"[{task.task_id}] Replaced {replaced} hierarchical "
+                f"attribution snapshots: "
+                f"{task.attribution_store.audit_state()}"
             )
+
+    def _publish_hierarchical_attribution(
+            self, task: FuzzerTask, engine: GuidanceEngine):
+        """Apply the Syzlang trust boundary and publish bounded IG scores."""
+        fused = task.attribution_store.fuse()
+        if not fused.scores:
+            engine.update_attribution({})
+            return
+        try:
+            manifest = SyzlangIndex.load_cached(
+                config.syzlang_manifest_path,
+                expected_os=task.target_os,
+                expected_arch=task.target_arch,
+                expected_revision=task.target_revision,
+                expected_producer_revision=task.producer_revision,
+                max_bytes=config.syzlang_manifest_max_bytes,
+            )
+            filtered = manifest.filter_generation_scores(
+                fused.scores,
+                descriptions_mode=task.descriptions_mode,
+            )
+        except (OSError, ValueError) as error:
+            logger.error(
+                f"[{task.task_id}] Attribution manifest filtering "
+                f"failed closed: {error}"
+            )
+            engine.update_attribution({})
+            return
+        allowed = [entry["name"] for entry in filtered.entries]
+        scores = task.attribution_store.publication_scores(
+            allowed_names=allowed, limit=15
+        )
+        engine.update_attribution(scores)
+        logger.info(
+            f"[{task.task_id}] Hierarchical attribution publication: "
+            f"accepted={len(scores)}, rejected={dict(filtered.rejected)}, "
+            f"top={list(scores.keys())[:5]}, "
+            f"snapshots={task.attribution_store.audit_state()}"
+        )
 
     def _run_sequence_mining(self, task: FuzzerTask, engine: GuidanceEngine,
                               programs: list, labels: list, num_classes: int,
@@ -4263,7 +4611,7 @@ class Controller:
             )
             if stage == 1:
                 target_class = -1
-            elif stage == 2:
+            elif stage in (2, 3):
                 target_class = num_classes - 1
             else:
                 raise ValueError(f"invalid curriculum stage: {stage}")

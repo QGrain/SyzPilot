@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -30,6 +31,7 @@ from controller import (
     FuzzerTask,
     RegistrationPayload,
     build_training_split,
+    canonical_split_classes,
     list_committed_batch_indices,
     next_curriculum_stage,
     resolve_guidance_context,
@@ -37,6 +39,8 @@ from controller import (
     validate_guidance_context,
 )
 from guidance_engine import GuidanceConfig, GuidanceEngine
+from common.curriculum import DENSE_PAPER_MODE, SPARSE_ADAPTIVE_MODE
+from filter.dataset_v2 import load_canonical_records
 
 
 class FakeProcess:
@@ -93,6 +97,44 @@ def passing_stage_one_promotion_metrics():
         "loaded_checkpoint": None,
         "loaded_checkpoint_stage": 0,
     }
+
+
+def curriculum_manifest_fields(num_classes=3, stage=1, active_classes=None):
+    active = list(active_classes or [])
+    members = controller_module.curriculum_metric_class_members(
+        num_classes, stage, active if stage == 3 else None
+    )
+    return {
+        "curriculum_schema": controller_module.CURRICULUM_SCHEMA_VERSION,
+        "curriculum_mode": controller_module.config.curriculum_mode,
+        "active_exact_classes": active,
+        "metric_class_members": {
+            str(metric_class): list(exact_classes)
+            for metric_class, exact_classes in members.items()
+        },
+    }
+
+
+def write_guidance_manifest(
+        directory, *, accuracy=0.90, weighted_f1=0.80,
+        validation_counts=None, num_classes=3, stage=3,
+        active_classes=None):
+    if active_classes is None and stage == 3:
+        active_classes = list(range(num_classes))
+    manifest = {
+        **curriculum_manifest_fields(
+            num_classes=num_classes, stage=stage,
+            active_classes=active_classes,
+        ),
+        "best_eval_accuracy": accuracy,
+        "best_eval_weighted_f1": weighted_f1,
+        "validation_class_counts": validation_counts or {
+            "0": 10, "1": 5, "2": 5,
+        },
+    }
+    (Path(directory) / "training_manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
 
 
 def write_committed_batch(data_dir, batch_id, labels=None):
@@ -310,6 +352,8 @@ class TrainingStateTest(unittest.TestCase):
             controller_module.ControllerConfig(ts_max_batch_delay_ms=-1)
         with self.assertRaisesRegex(ValueError, "ts_max_batch_delay_ms"):
             controller_module.ControllerConfig(ts_max_batch_delay_ms=1001)
+        with self.assertRaisesRegex(ValueError, "curriculum_mode"):
+            controller_module.ControllerConfig(curriculum_mode="automatic")
 
     def test_torchserve_batch_environment_overrides_in_fresh_process(self):
         environment = os.environ.copy()
@@ -373,6 +417,7 @@ class TrainingStateTest(unittest.TestCase):
             (1000, 100, 200, 2),
         )
         self.assertEqual(defaults.training_warmup_seconds, 0)
+        self.assertEqual(defaults.model_rejection_cooldown_seconds, 1800)
         self.assertTrue(defaults.first_train_exit_on_promotion)
         self.assertEqual(
             (
@@ -398,6 +443,10 @@ class TrainingStateTest(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "warmup steps"):
             controller_module.ControllerConfig(num_warmup_steps=501)
+        with self.assertRaisesRegex(ValueError, "must not be negative"):
+            controller_module.ControllerConfig(
+                model_rejection_cooldown_seconds=-1
+            )
 
     def test_attribution_gpu_is_serialized_across_tasks(self):
         instance = Controller()
@@ -417,7 +466,8 @@ class TrainingStateTest(unittest.TestCase):
         first_entered = threading.Event()
         allow_first_exit = threading.Event()
 
-        def reserved_body(task, engine, ckpt_path, num_classes, stage):
+        def reserved_body(
+                task, engine, ckpt_path, num_classes, stage, active_classes):
             nonlocal active, maximum_active
             try:
                 with state_lock:
@@ -915,6 +965,12 @@ class TrainingStateTest(unittest.TestCase):
             with (
                 mock.patch.object(controller_module.config, "data_root", str(data_root)),
                 mock.patch.object(
+                    controller_module.config, "promotion_stage1_min_support", 1
+                ),
+                mock.patch.object(
+                    controller_module.config, "promotion_stage2_min_support", 1
+                ),
+                mock.patch.object(
                     instance, "_acquire_training_gpu_async",
                     new=mock.AsyncMock(return_value=None),
                 ),
@@ -1197,63 +1253,69 @@ class TrainingStateTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_curriculum_progresses_from_binary_to_exact(self):
-        self.assertEqual(next_curriculum_stage(2, 0, 2), 1)
-        self.assertEqual(next_curriculum_stage(2, 1, 2), 2)
-        self.assertEqual(next_curriculum_stage(2, 1, 3), 2)
-        self.assertEqual(next_curriculum_stage(2, 2, 3), 2)
-        with self.assertRaisesRegex(ValueError, "invalid requested"):
-            next_curriculum_stage(3, 2, 3)
+    def test_curriculum_progresses_through_supported_objectives(self):
+        dense = DENSE_PAPER_MODE
+        sparse = SPARSE_ADAPTIVE_MODE
+        self.assertEqual(next_curriculum_stage(2, 0, 2, dense), 1)
+        self.assertEqual(next_curriculum_stage(2, 1, 2, dense), 1)
+        self.assertEqual(next_curriculum_stage(2, 1, 3, dense), 2)
+        self.assertEqual(next_curriculum_stage(2, 2, 3, dense), 2)
+        self.assertEqual(next_curriculum_stage(3, 1, 3, dense), 2)
+        self.assertEqual(next_curriculum_stage(3, 1, 3, sparse), 2)
+        self.assertEqual(next_curriculum_stage(3, 2, 3, dense), 3)
+        self.assertEqual(next_curriculum_stage(3, 2, 3, sparse), 3)
 
-    def test_legacy_two_stage_state_preserves_exact_stage_two(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            data_root = Path(temp_dir) / "data"
-            state_dir = data_root / "task" / "1"
-            state_dir.mkdir(parents=True)
-            (state_dir / "training_state.json").write_text(json.dumps({
+    def test_incompatible_curriculum_states_are_archived(self):
+        states = (
+            {"schema_version": 1, "last_successful_stage": 2},
+            {
                 "schema_version": 1,
+                "curriculum_schema": 1,
                 "last_successful_stage": 2,
-                "last_trained_batch": 10,
-            }), encoding="utf-8")
-            instance = Controller()
-            task = FuzzerTask(
-                task_id="fuzzer@task@1", task_name="task", run_id=1,
-                fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
-            )
-            with mock.patch.object(
-                    controller_module.config, "data_root", str(data_root)):
-                instance._load_training_state(task)
-
-            self.assertEqual(task.last_successful_stage, 2)
-            self.assertEqual(task.last_trained_batch, 10)
-
-    def test_experimental_stage_two_state_is_archived(self):
+            },
+            {
+                "schema_version": 1,
+                "curriculum_schema": 3,
+                "curriculum_mode": DENSE_PAPER_MODE,
+                "last_successful_stage": 1,
+            },
+            {
+                "schema_version": 1,
+                "curriculum_schema": controller_module.CURRICULUM_SCHEMA_VERSION,
+                "last_successful_stage": 1,
+            },
+            {
+                "schema_version": 1,
+                "curriculum_schema": controller_module.CURRICULUM_SCHEMA_VERSION,
+                "curriculum_mode": SPARSE_ADAPTIVE_MODE,
+                "last_successful_stage": 1,
+            },
+        )
         with tempfile.TemporaryDirectory() as temp_dir:
             data_root = Path(temp_dir) / "data"
             state_dir = data_root / "task" / "1"
             state_dir.mkdir(parents=True)
             state_path = state_dir / "training_state.json"
-            state_path.write_text(json.dumps({
-                "schema_version": 1,
-                "curriculum_schema": 1,
-                "last_successful_stage": 2,
-                "last_trained_batch": 10,
-            }), encoding="utf-8")
-            instance = Controller()
-            task = FuzzerTask(
-                task_id="fuzzer@task@1", task_name="task", run_id=1,
-                fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
-            )
-            with mock.patch.object(
-                    controller_module.config, "data_root", str(data_root)):
-                instance._load_training_state(task)
+            for archive_count, state in enumerate(states, start=1):
+                with self.subTest(state=state):
+                    state_path.write_text(json.dumps(state), encoding="utf-8")
+                    instance = Controller()
+                    task = FuzzerTask(
+                        task_id="fuzzer@task@1", task_name="task", run_id=1,
+                        fuzzer_id="fuzzer", mode="direct",
+                        callback_addr="localhost:1",
+                    )
+                    with mock.patch.object(
+                            controller_module.config, "data_root",
+                            str(data_root)):
+                        instance._load_training_state(task)
 
-            self.assertEqual(task.last_successful_stage, 0)
-            self.assertEqual(task.last_trained_batch, 0)
-            self.assertFalse(state_path.exists())
-            self.assertEqual(len(list(state_dir.glob(
-                "training_state.three-stage-incompatible-*.json"
-            ))), 1)
+                    self.assertEqual(task.last_successful_stage, 0)
+                    self.assertEqual(task.last_trained_batch, 0)
+                    self.assertFalse(state_path.exists())
+                    self.assertEqual(len(list(state_dir.glob(
+                        "training_state.curriculum-incompatible-*.json"
+                    ))), archive_count)
 
     def test_unknown_training_state_schema_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1262,7 +1324,7 @@ class TrainingStateTest(unittest.TestCase):
             state_dir.mkdir(parents=True)
             (state_dir / "training_state.json").write_text(json.dumps({
                 "schema_version": 99,
-                "curriculum_schema": 2,
+                "curriculum_schema": controller_module.CURRICULUM_SCHEMA_VERSION,
                 "last_successful_stage": 2,
                 "last_trained_batch": 10,
             }), encoding="utf-8")
@@ -1290,6 +1352,7 @@ class TrainingStateTest(unittest.TestCase):
                         "batch_end": 7,
                         "disposition": "rejected",
                         "reason_codes": ["low_class_recall"],
+                        "retry_after_unix": 1234.5,
                     }
                 },
             )
@@ -1309,6 +1372,132 @@ class TrainingStateTest(unittest.TestCase):
                 recovered.evaluation_watermarks[1]["reason_codes"],
                 ["low_class_recall"],
             )
+            self.assertEqual(
+                recovered.evaluation_watermarks[1]["retry_after_unix"],
+                1234.5,
+            )
+
+    def test_accepted_stage_rejection_cools_down_newer_snapshots(self):
+        instance = Controller()
+        task = FuzzerTask(
+            task_id="fuzzer@task@1", task_name="task", run_id=1,
+            fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
+            last_successful_stage=1, training_round=4,
+            evaluation_watermarks={
+                1: {
+                    "batch_end": 10,
+                    "disposition": "rejected",
+                    "reason_codes": ["no_material_improvement"],
+                    "retry_after_unix": time.time() + 600,
+                }
+            },
+        )
+        instance.global_tasks[task.task_id] = task
+
+        response = asyncio.run(instance.start_trainer(
+            task.task_id, batch_start=0, batch_end=20, stage=1
+        ))
+
+        self.assertEqual(response["status"], "cooldown")
+        self.assertIn("retry_cooldown", response["reason_codes"])
+        self.assertEqual(task.training_round, 4)
+        self.assertFalse(task.training_in_progress)
+
+    def test_rejected_evaluation_sets_cooldown_only_for_accepted_stage(self):
+        instance = Controller()
+        decision = {"reason_codes": ["no_material_improvement"]}
+        manifest = {"checkpoint_sha256": "a" * 64}
+
+        cases = (
+            (0, 1, 0.0),
+            (1, 1, 1600.0),
+            (1, 2, 0.0),
+            (2, 2, 1600.0),
+        )
+        for successful_stage, rejected_stage, expected_retry_after in cases:
+            with self.subTest(
+                    successful_stage=successful_stage,
+                    rejected_stage=rejected_stage):
+                task = FuzzerTask(
+                    task_id="fuzzer@task@1", task_name="task", run_id=1,
+                    fuzzer_id="fuzzer", mode="direct",
+                    callback_addr="localhost:1",
+                    active_training_id="training-1",
+                    last_successful_stage=successful_stage,
+                )
+                with (
+                    mock.patch.object(instance, "_persist_training_state"),
+                    mock.patch.object(
+                        controller_module.config,
+                        "model_rejection_cooldown_seconds", 600,
+                    ),
+                    mock.patch.object(
+                        controller_module.time, "time", return_value=1000.0
+                    ),
+                ):
+                    instance._record_rejected_evaluation(
+                        task, "training-1", rejected_stage, 10, None,
+                        manifest, decision,
+                    )
+
+                self.assertEqual(
+                    task.evaluation_watermarks[rejected_stage][
+                        "retry_after_unix"
+                    ],
+                    expected_retry_after,
+                )
+
+    def test_invalid_evaluation_does_not_start_retry_cooldown(self):
+        instance = Controller()
+        task = FuzzerTask(
+            task_id="fuzzer@task@1", task_name="task", run_id=1,
+            fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
+            active_training_id="training-1", last_successful_stage=1,
+        )
+        with (
+            mock.patch.object(
+                instance, "_write_promotion_decision",
+                return_value=Path("decision.json"),
+            ),
+            mock.patch.object(instance, "_persist_training_state"),
+            mock.patch.object(
+                controller_module.config,
+                "model_rejection_cooldown_seconds", 600,
+            ),
+            mock.patch.object(
+                controller_module.time, "time", return_value=1000.0
+            ),
+        ):
+            instance._record_invalid_evaluation(
+                task, "training-1", 1, 10, "/tmp/model",
+                ValueError("invalid manifest"),
+            )
+
+        self.assertEqual(
+            task.evaluation_watermarks[1]["retry_after_unix"], 0.0
+        )
+
+    def test_rejection_cooldown_does_not_delay_first_stage_model(self):
+        instance = Controller()
+        task = FuzzerTask(
+            task_id="fuzzer@task@1", task_name="task", run_id=1,
+            fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
+            evaluation_watermarks={
+                1: {
+                    "batch_end": 10,
+                    "disposition": "rejected",
+                    "reason_codes": ["low_class_recall"],
+                    "retry_after_unix": time.time() + 600,
+                }
+            },
+        )
+        instance.global_tasks[task.task_id] = task
+
+        with self.assertRaisesRegex(
+                controller_module.HTTPException, "Data directory not found"):
+            asyncio.run(instance.start_trainer(
+                task.task_id, batch_start=0, batch_end=20, stage=1
+            ))
 
     def test_non_object_evaluation_watermarks_fail_closed(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1317,7 +1506,7 @@ class TrainingStateTest(unittest.TestCase):
             state_dir.mkdir(parents=True)
             (state_dir / "training_state.json").write_text(json.dumps({
                 "schema_version": 1,
-                "curriculum_schema": 2,
+                "curriculum_schema": controller_module.CURRICULUM_SCHEMA_VERSION,
                 "last_successful_stage": 1,
                 "last_trained_batch": 7,
                 "evaluation_watermarks": [],
@@ -1634,6 +1823,12 @@ class TrainingStateTest(unittest.TestCase):
             with (
                 mock.patch.object(
                     controller_module.config, "data_root", str(data_root)
+                ),
+                mock.patch.object(
+                    controller_module.config, "promotion_stage1_min_support", 1
+                ),
+                mock.patch.object(
+                    controller_module.config, "promotion_stage2_min_support", 1
                 ),
                 mock.patch.object(
                     instance, "_acquire_training_gpu_async",
@@ -2036,6 +2231,12 @@ class TrainingStateTest(unittest.TestCase):
             with (
                 mock.patch.object(controller_module.config, "data_root", str(data_root)),
                 mock.patch.object(controller_module.config, "log_dir", str(log_root)),
+                mock.patch.object(
+                    controller_module.config, "promotion_stage1_min_support", 1
+                ),
+                mock.patch.object(
+                    controller_module.config, "promotion_stage2_min_support", 1
+                ),
                 mock.patch.object(instance, "_acquire_training_gpu", return_value="0"),
                 mock.patch.object(instance, "_alloc_port", return_value=29999),
                 mock.patch.object(
@@ -2092,6 +2293,12 @@ class TrainingStateTest(unittest.TestCase):
             with (
                 mock.patch.object(controller_module.config, "data_root", str(data_root)),
                 mock.patch.object(controller_module.config, "log_dir", str(log_root)),
+                mock.patch.object(
+                    controller_module.config, "promotion_stage1_min_support", 1
+                ),
+                mock.patch.object(
+                    controller_module.config, "promotion_stage2_min_support", 1
+                ),
                 mock.patch.object(instance, "_acquire_training_gpu", return_value="0"),
                 mock.patch.object(instance, "_alloc_port", return_value=29999),
                 mock.patch("builtins.open", side_effect=selective_open),
@@ -2207,6 +2414,35 @@ class TrainingStateTest(unittest.TestCase):
             self.assertEqual(programs, [first_program])
             self.assertEqual(labels, [[False, False, True]])
 
+    def test_controller_split_matches_dataset_empty_program_filter(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            empty_signature = hashlib.sha1(b"").hexdigest()
+            valid_program = "getpid()"
+            valid_signature = hashlib.sha1(
+                valid_program.encode("utf-8")
+            ).hexdigest()
+            programs = {
+                empty_signature: "",
+                valid_signature: valid_program,
+            }
+            labels = {
+                empty_signature: [True, False],
+                valid_signature: [False, True],
+            }
+            with (data_dir / "progs_batch_1.pkl").open("wb") as handle:
+                pickle.dump(programs, handle)
+            with (data_dir / "labels_batch_1.pkl").open("wb") as handle:
+                pickle.dump(labels, handle)
+
+            controller_records = canonical_split_classes(
+                str(data_dir), 2, [1], [1], []
+            )
+            dataset_records = load_canonical_records(data_dir, 2, [1])
+
+            self.assertEqual(set(controller_records), set(dataset_records))
+            self.assertEqual(controller_records, {valid_signature: 1})
+
     def test_continued_split_uses_only_new_data_plus_old_replay(self):
         train_indices, test_indices = build_training_split(
             list(range(1, 16)),
@@ -2236,7 +2472,7 @@ class TrainingStateTest(unittest.TestCase):
             (model_dir / "step-400.pt").write_bytes(b"worse-final")
             manifest = {
                 "schema_version": 1,
-                "curriculum_schema": 2,
+                **curriculum_manifest_fields(),
                 "train_stage": 1,
                 "num_classes": 3,
                 "best_checkpoint": str(best),
@@ -2249,14 +2485,40 @@ class TrainingStateTest(unittest.TestCase):
             )
 
             _, loaded, checkpoint = Controller._load_training_manifest(
-                temp_dir, stage=1, num_classes=3
+                temp_dir, stage=1, num_classes=3,
+                curriculum_mode=controller_module.config.curriculum_mode,
             )
             self.assertEqual(loaded["best_step"], 200)
             self.assertEqual(checkpoint, best)
 
+            with self.assertRaisesRegex(ValueError, "curriculum mode mismatch"):
+                Controller._load_training_manifest(
+                    temp_dir, stage=1, num_classes=3,
+                    curriculum_mode=SPARSE_ADAPTIVE_MODE,
+                )
+
+            del manifest["curriculum_mode"]
+            (model_dir / "training_manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "invalid curriculum mode"):
+                Controller._load_training_manifest(
+                    temp_dir, stage=1, num_classes=3,
+                    curriculum_mode=controller_module.config.curriculum_mode,
+                )
+            manifest["curriculum_mode"] = (
+                controller_module.config.curriculum_mode
+            )
+            (model_dir / "training_manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+
             best.write_bytes(b"tampered")
             with self.assertRaisesRegex(ValueError, "hash mismatch"):
-                Controller._load_training_manifest(temp_dir, stage=1, num_classes=3)
+                Controller._load_training_manifest(
+                    temp_dir, stage=1, num_classes=3,
+                    curriculum_mode=controller_module.config.curriculum_mode,
+                )
 
             manifest["best_eval_loss"] = math.nan
             best.write_bytes(b"best")
@@ -2264,7 +2526,10 @@ class TrainingStateTest(unittest.TestCase):
                 json.dumps(manifest), encoding="utf-8"
             )
             with self.assertRaisesRegex(ValueError, "not finite"):
-                Controller._load_training_manifest(temp_dir, stage=1, num_classes=3)
+                Controller._load_training_manifest(
+                    temp_dir, stage=1, num_classes=3,
+                    curriculum_mode=controller_module.config.curriculum_mode,
+                )
 
     def test_stage_two_request_launches_mandatory_stage_one_without_committing_round(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2290,6 +2555,12 @@ class TrainingStateTest(unittest.TestCase):
             with (
                 mock.patch.object(controller_module.config, "data_root", str(data_root)),
                 mock.patch.object(controller_module.config, "log_dir", str(log_root)),
+                mock.patch.object(
+                    controller_module.config, "promotion_stage1_min_support", 1
+                ),
+                mock.patch.object(
+                    controller_module.config, "promotion_stage2_min_support", 1
+                ),
                 mock.patch.object(instance, "_acquire_training_gpu", return_value="0"),
                 mock.patch.object(instance, "_alloc_port", return_value=29999),
                 mock.patch.object(controller_module.subprocess, "Popen", return_value=fake_process) as popen,
@@ -2372,6 +2643,12 @@ class TrainingStateTest(unittest.TestCase):
             with (
                 mock.patch.object(controller_module.config, "data_root", str(data_root)),
                 mock.patch.object(controller_module.config, "log_dir", str(log_root)),
+                mock.patch.object(
+                    controller_module.config, "promotion_stage1_min_support", 1
+                ),
+                mock.patch.object(
+                    controller_module.config, "promotion_stage2_min_support", 1
+                ),
                 mock.patch.object(instance, "_acquire_training_gpu", return_value="0"),
                 mock.patch.object(instance, "_alloc_port", return_value=29999),
                 mock.patch.object(
@@ -2400,7 +2677,7 @@ class TrainingStateTest(unittest.TestCase):
             task.training_in_progress = False
             task.active_training_id = ""
 
-    def test_stage_two_same_boundary_reuses_unseen_holdout(self):
+    def test_sparse_stage_three_request_launches_mandatory_stage_two(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_root = Path(temp_dir) / "data"
             log_root = Path(temp_dir) / "logs"
@@ -2425,6 +2702,17 @@ class TrainingStateTest(unittest.TestCase):
             with (
                 mock.patch.object(controller_module.config, "data_root", str(data_root)),
                 mock.patch.object(controller_module.config, "log_dir", str(log_root)),
+                mock.patch.object(
+                    controller_module.config, "promotion_stage1_min_support", 1
+                ),
+                mock.patch.object(
+                    controller_module.config, "promotion_stage2_min_support", 1
+                ),
+                mock.patch.object(
+                    controller_module.config,
+                    "curriculum_mode",
+                    SPARSE_ADAPTIVE_MODE,
+                ),
                 mock.patch.object(instance, "_acquire_training_gpu", return_value="0"),
                 mock.patch.object(instance, "_alloc_port", return_value=29999),
                 mock.patch.object(
@@ -2433,13 +2721,15 @@ class TrainingStateTest(unittest.TestCase):
                 mock.patch.object(instance, "_start_daemon_thread"),
             ):
                 response = asyncio.run(instance.start_trainer(
-                    task.task_id, batch_start=0, batch_end=3, stage=2
+                    task.task_id, batch_start=0, batch_end=3, stage=3
                 ))
 
             command = popen.call_args.args[0]
+            stage_index = command.index("--train_stage") + 1
             excluded = command[command.index("--test_exclude_data_idx") + 1]
             test_indices = command[command.index("--test_data_idx") + 1]
             self.assertEqual(response["stage"], 2)
+            self.assertEqual(command[stage_index], "2")
             self.assertEqual(set(map(int, excluded.split(","))), {1, 2})
             self.assertEqual(test_indices, "3")
             self.assertIn("--load_path", command)
@@ -2459,7 +2749,7 @@ class TrainingStateTest(unittest.TestCase):
             task.training_in_progress = False
             task.active_training_id = ""
 
-    def test_single_waypoint_stage_two_launch_uses_exact_objective(self):
+    def test_single_waypoint_request_retains_binary_exact_objective(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_root = Path(temp_dir) / "data"
             log_root = Path(temp_dir) / "logs"
@@ -2497,15 +2787,9 @@ class TrainingStateTest(unittest.TestCase):
                     task.task_id, batch_start=0, batch_end=3, stage=2
                 ))
 
-            command = popen.call_args.args[0]
-            selected_stage = command[command.index("--train_stage") + 1]
-            self.assertEqual(response["stage"], 2)
-            self.assertEqual(selected_stage, "2")
-
-            task.trainer_log_fh.close()
-            task.trainer_log_fh = None
-            task.training_in_progress = False
-            task.active_training_id = ""
+            self.assertEqual(response["status"], "up_to_date")
+            self.assertEqual(response["stage"], 1)
+            popen.assert_not_called()
 
     def test_trainer_defers_snapshot_without_disjoint_validation_signatures(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2608,6 +2892,164 @@ class TrainingStateTest(unittest.TestCase):
             )
             self.assertFalse(task.training_in_progress)
             acquire_gpu.assert_not_called()
+
+    def test_stage_two_defers_support_that_cannot_pass_promotion(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = Path(temp_dir) / "data"
+            data_dir = data_root / "task" / "1"
+            data_dir.mkdir(parents=True)
+            for batch_id in (1, 2, 3):
+                write_balanced_committed_batch(data_dir, batch_id)
+            checkpoint = Path(temp_dir) / "stage1.pt"
+            checkpoint.write_bytes(b"checkpoint")
+
+            instance = Controller()
+            task = FuzzerTask(
+                task_id="fuzzer@task@1", task_name="task", run_id=1,
+                fuzzer_id="fuzzer", mode="direct",
+                callback_addr="localhost:1", last_successful_stage=1,
+                last_successful_checkpoint=str(checkpoint),
+            )
+            instance.global_tasks[task.task_id] = task
+            with (
+                mock.patch.object(
+                    controller_module.config, "data_root", str(data_root)
+                ),
+                mock.patch.object(
+                    controller_module,
+                    "curriculum_split_class_counts",
+                    side_effect=(
+                        {0: 80, 1: 40, 2: 40},
+                        {0: 32, 1: 20, 2: 12},
+                    ),
+                ),
+                mock.patch.object(instance, "_acquire_training_gpu") as acquire_gpu,
+            ):
+                response = asyncio.run(instance.start_trainer(
+                    task.task_id, batch_start=0, batch_end=3, stage=2
+                ))
+
+            self.assertEqual(response["status"], "deferred")
+            self.assertEqual(response["validation_min_support"], 16)
+            self.assertEqual(
+                response["binary_validation_class_counts"], {0: 32, 1: 32}
+            )
+            acquire_gpu.assert_not_called()
+
+    def test_stage_two_defers_binary_support_that_cannot_pass_promotion(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_root = Path(temp_dir) / "data"
+            data_dir = data_root / "task" / "1"
+            data_dir.mkdir(parents=True)
+            for batch_id in (1, 2, 3):
+                write_balanced_committed_batch(data_dir, batch_id)
+            checkpoint = Path(temp_dir) / "stage1.pt"
+            checkpoint.write_bytes(b"checkpoint")
+
+            instance = Controller()
+            task = FuzzerTask(
+                task_id="fuzzer@task@1", task_name="task", run_id=1,
+                fuzzer_id="fuzzer", mode="direct",
+                callback_addr="localhost:1", last_successful_stage=1,
+                last_successful_checkpoint=str(checkpoint),
+            )
+            instance.global_tasks[task.task_id] = task
+            with (
+                mock.patch.object(
+                    controller_module.config, "data_root", str(data_root)
+                ),
+                mock.patch.object(
+                    controller_module,
+                    "curriculum_split_class_counts",
+                    side_effect=(
+                        {0: 80, 1: 40, 2: 40},
+                        {0: 16, 1: 16, 2: 16},
+                    ),
+                ),
+                mock.patch.object(instance, "_acquire_training_gpu") as acquire_gpu,
+            ):
+                response = asyncio.run(instance.start_trainer(
+                    task.task_id, batch_start=0, batch_end=3, stage=2
+                ))
+
+            self.assertEqual(response["status"], "deferred")
+            self.assertEqual(
+                response["binary_validation_class_counts"], {0: 16, 1: 32}
+            )
+            acquire_gpu.assert_not_called()
+
+    def test_sparse_stage_three_preflight_treats_other_as_binary_only(self):
+        validation_cases = (
+            {0: 32, 1: 32, 2: 0},
+            {0: 32, 1: 16, 2: 16},
+        )
+        for validation_counts in validation_cases:
+            with self.subTest(validation_counts=validation_counts), \
+                    tempfile.TemporaryDirectory() as temp_dir:
+                data_root = Path(temp_dir) / "data"
+                log_root = Path(temp_dir) / "logs"
+                data_dir = data_root / "task" / "1"
+                data_dir.mkdir(parents=True)
+                for batch_id in (1, 2, 3):
+                    write_balanced_committed_batch(data_dir, batch_id)
+                checkpoint = Path(temp_dir) / "stage2.pt"
+                checkpoint.write_bytes(b"checkpoint")
+
+                instance = Controller()
+                task = FuzzerTask(
+                    task_id="fuzzer@task@1", task_name="task", run_id=1,
+                    fuzzer_id="fuzzer", mode="direct",
+                    callback_addr="localhost:1", last_successful_stage=2,
+                    last_successful_checkpoint=str(checkpoint),
+                )
+                instance.global_tasks[task.task_id] = task
+                fake_process = FakeProcess()
+                with (
+                    mock.patch.object(
+                        controller_module.config, "data_root", str(data_root)
+                    ),
+                    mock.patch.object(
+                        controller_module.config, "log_dir", str(log_root)
+                    ),
+                    mock.patch.object(
+                        controller_module.config,
+                        "curriculum_mode",
+                        SPARSE_ADAPTIVE_MODE,
+                    ),
+                    mock.patch.object(
+                        controller_module,
+                        "stage3_active_classes",
+                        return_value=(0, 2),
+                    ),
+                    mock.patch.object(
+                        controller_module,
+                        "curriculum_split_class_counts",
+                        side_effect=(
+                            {0: 80, 1: 40, 2: 0},
+                            validation_counts,
+                        ),
+                    ),
+                    mock.patch.object(
+                        instance, "_acquire_training_gpu", return_value="0"
+                    ),
+                    mock.patch.object(instance, "_alloc_port", return_value=29999),
+                    mock.patch.object(
+                        controller_module.subprocess,
+                        "Popen",
+                        return_value=fake_process,
+                    ) as popen,
+                    mock.patch.object(instance, "_start_daemon_thread"),
+                ):
+                    response = asyncio.run(instance.start_trainer(
+                        task.task_id, batch_start=0, batch_end=3, stage=3
+                    ))
+
+                self.assertEqual(response["stage"], 3)
+                popen.assert_called_once()
+                task.trainer_log_fh.close()
+                task.trainer_log_fh = None
+                task.training_in_progress = False
+                task.active_training_id = ""
 
     def test_manual_attributor_endpoint_fails_closed(self):
         instance = Controller()
@@ -2783,7 +3225,7 @@ class TrainingStateTest(unittest.TestCase):
             checkpoint.write_bytes(b"best")
             manifest = {
                 "schema_version": 1,
-                "curriculum_schema": 2,
+                **curriculum_manifest_fields(),
                 "train_stage": 1,
                 "num_classes": 3,
                 "best_checkpoint": str(checkpoint),
@@ -2854,7 +3296,7 @@ class TrainingStateTest(unittest.TestCase):
             self.assertEqual(task.pending_model_name, "")
             self.assertFalse(task.training_in_progress)
             export.assert_called_once_with(
-                task, checkpoint, 3, 1, "reach_filter_test_v1", "0"
+                task, checkpoint, 3, 1, "reach_filter_test_v1", "0", None
             )
             release_gpu.assert_called_once_with("0")
             deploy.assert_called_once_with(
@@ -2875,7 +3317,7 @@ class TrainingStateTest(unittest.TestCase):
             })
             manifest = {
                 "schema_version": 1,
-                "curriculum_schema": 2,
+                **curriculum_manifest_fields(),
                 "train_stage": 1,
                 "num_classes": 3,
                 "best_checkpoint": str(checkpoint),
@@ -2934,7 +3376,7 @@ class TrainingStateTest(unittest.TestCase):
             checkpoint.write_bytes(b"best")
             manifest = {
                 "schema_version": 1,
-                "curriculum_schema": 2,
+                **curriculum_manifest_fields(),
                 "train_stage": 1,
                 "num_classes": 3,
                 "best_checkpoint": str(checkpoint),
@@ -2993,7 +3435,7 @@ class TrainingStateTest(unittest.TestCase):
             checkpoint.write_bytes(b"best")
             manifest = {
                 "schema_version": 1,
-                "curriculum_schema": 2,
+                **curriculum_manifest_fields(),
                 "train_stage": 1,
                 "num_classes": 3,
                 "best_checkpoint": str(checkpoint),
@@ -3040,7 +3482,7 @@ class TrainingStateTest(unittest.TestCase):
                 )
 
             export.assert_called_once_with(
-                task, checkpoint, 3, 1, "reach_filter_test_v1", "0"
+                task, checkpoint, 3, 1, "reach_filter_test_v1", "0", None
             )
 
             self.assertEqual(task.training_round, 0)
@@ -3058,7 +3500,7 @@ class TrainingStateTest(unittest.TestCase):
             checkpoint.write_bytes(b"best")
             manifest = {
                 "schema_version": 1,
-                "curriculum_schema": 2,
+                **curriculum_manifest_fields(),
                 "train_stage": 1,
                 "num_classes": 3,
                 "best_checkpoint": str(checkpoint),
@@ -3119,7 +3561,7 @@ class TrainingStateTest(unittest.TestCase):
             checkpoint.write_bytes(b"best")
             manifest = {
                 "schema_version": 1,
-                "curriculum_schema": 2,
+                **curriculum_manifest_fields(),
                 "train_stage": 1,
                 "num_classes": 3,
                 "best_checkpoint": str(checkpoint),
@@ -3341,7 +3783,7 @@ class TrainingStateTest(unittest.TestCase):
             checkpoint.write_bytes(b"best")
             manifest = {
                 "schema_version": 1,
-                "curriculum_schema": 2,
+                **curriculum_manifest_fields(),
                 "train_stage": 1,
                 "num_classes": 3,
                 "best_checkpoint": str(checkpoint),
@@ -3387,7 +3829,7 @@ class TrainingStateTest(unittest.TestCase):
                 )
 
             export.assert_called_once_with(
-                task, checkpoint, 3, 1, "reach_filter_test_v1", "2"
+                task, checkpoint, 3, 1, "reach_filter_test_v1", "2", None
             )
             release_gpu.assert_called_once_with("2")
             release_port.assert_called_once_with(
@@ -3425,6 +3867,29 @@ class TrainingStateTest(unittest.TestCase):
             mock.ANY,
         )
 
+    def test_pending_deployment_cannot_skip_stage_two(self):
+        instance = Controller()
+        task = FuzzerTask(
+            task_id="fuzzer@task@1", task_name="task", run_id=1,
+            fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
+            last_successful_stage=1,
+            pending_model_name="candidate", pending_model_version="2",
+            pending_checkpoint="best.pt", pending_manifest="manifest.json",
+            pending_torchscript="candidate.pt",
+            pending_stage=3, pending_batch=7, pending_training_round=2,
+            pending_num_classes=3,
+            pending_seen_training_batches=[1, 2, 3, 4, 5, 6],
+        )
+        instance.global_tasks[task.task_id] = task
+
+        with self.assertRaisesRegex(Exception, "expected Stage 2"):
+            asyncio.run(instance.start_trainer(
+                task.task_id, batch_start=0, batch_end=7, stage=3
+            ))
+
+        self.assertFalse(task.training_in_progress)
+        self.assertEqual(task.pending_model_name, "candidate")
+
     def test_training_state_recovers_seen_batches_from_manifests(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_root = Path(temp_dir) / "data"
@@ -3440,10 +3905,14 @@ class TrainingStateTest(unittest.TestCase):
             }), encoding="utf-8")
             (state_dir / "training_state.json").write_text(json.dumps({
                 "schema_version": 1,
+                "curriculum_schema": controller_module.CURRICULUM_SCHEMA_VERSION,
+                "curriculum_mode": DENSE_PAPER_MODE,
                 "last_trained_batch": 4,
                 "last_training_manifest": str(active_manifest),
                 "pending_model_name": "candidate",
                 "pending_manifest": str(pending_manifest),
+                "pending_stage": 1,
+                "pending_num_classes": 3,
             }), encoding="utf-8")
 
             instance = Controller()
@@ -3468,6 +3937,8 @@ class TrainingStateTest(unittest.TestCase):
             state_dir.mkdir(parents=True)
             (state_dir / "training_state.json").write_text(json.dumps({
                 "schema_version": 1,
+                "curriculum_schema": controller_module.CURRICULUM_SCHEMA_VERSION,
+                "curriculum_mode": DENSE_PAPER_MODE,
                 "last_trained_batch": 3,
             }), encoding="utf-8")
             instance = Controller()
@@ -3576,7 +4047,7 @@ class TrainingStateTest(unittest.TestCase):
             self.assertEqual(task.pending_model_name, "")
             self.assertFalse(task.training_in_progress)
 
-    def test_stage_one_guidance_skips_multiclass_attribution(self):
+    def test_stage_one_guidance_runs_generic_reachable_attribution(self):
         instance = Controller()
         engine = mock.Mock()
         engine.version = 1
@@ -3599,6 +4070,10 @@ class TrainingStateTest(unittest.TestCase):
             mock.patch.object(
                 instance, "_load_training_data", return_value=(programs, labels)
             ),
+            mock.patch.object(
+                instance, "_model_quality_allows_attribution",
+                return_value=True,
+            ),
             mock.patch.object(instance, "_run_attribution_analysis") as attribution,
             mock.patch.object(instance, "_run_sequence_mining") as sequence,
             mock.patch.object(
@@ -3610,48 +4085,112 @@ class TrainingStateTest(unittest.TestCase):
                 save_dir="model", ckpt_path="checkpoint.pt",
             )
 
-        attribution.assert_not_called()
+        attribution.assert_called_once_with(
+            task, engine, "checkpoint.pt", 3, 1, None
+        )
         sequence.assert_called_once()
         engine.update_attribution.assert_called_once_with({})
 
     def test_attribution_requires_selected_checkpoint_quality(self):
         instance = Controller()
         with tempfile.TemporaryDirectory() as temp_dir:
-            manifest_path = Path(temp_dir) / "training_manifest.json"
-            manifest_path.write_text(json.dumps({
-                "best_eval_accuracy": 0.84,
-                "best_eval_weighted_f1": 0.95,
-                "validation_class_counts": {"0": 10, "1": 5, "2": 5},
-            }), encoding="utf-8")
-            self.assertFalse(
-                instance._model_quality_allows_attribution(temp_dir, 2, 3)
+            write_guidance_manifest(
+                temp_dir, accuracy=0.84, weighted_f1=0.95
             )
-            manifest_path.write_text(json.dumps({
-                "best_eval_accuracy": 0.85,
-                "best_eval_weighted_f1": 0.80,
-                "validation_class_counts": {"0": 10, "1": 5, "2": 5},
-            }), encoding="utf-8")
+            self.assertFalse(
+                instance._model_quality_allows_attribution(temp_dir, 3, 3)
+            )
+            write_guidance_manifest(
+                temp_dir, accuracy=0.85, weighted_f1=0.80
+            )
+            self.assertTrue(
+                instance._model_quality_allows_attribution(temp_dir, 3, 3)
+            )
+            write_guidance_manifest(
+                temp_dir, accuracy=2.0, weighted_f1=0.80
+            )
+            self.assertFalse(
+                instance._model_quality_allows_attribution(temp_dir, 3, 3)
+            )
+            write_guidance_manifest(
+                temp_dir, validation_counts={"0": 10, "1": 5, "2": 0}
+            )
+            self.assertFalse(
+                instance._model_quality_allows_attribution(temp_dir, 3, 3)
+            )
+            write_guidance_manifest(
+                temp_dir, stage=2,
+                validation_counts={"0": 10, "1": 5, "2": 5},
+            )
             self.assertTrue(
                 instance._model_quality_allows_attribution(temp_dir, 2, 3)
             )
-            manifest_path.write_text(json.dumps({
-                "best_eval_accuracy": 2.0,
-                "best_eval_weighted_f1": 0.80,
-                "validation_class_counts": {"0": 10, "1": 5, "2": 5},
-            }), encoding="utf-8")
-            self.assertFalse(
-                instance._model_quality_allows_attribution(temp_dir, 2, 3)
+            write_guidance_manifest(
+                temp_dir, stage=1,
+                validation_counts={"0": 10, "1": 10},
             )
-            manifest_path.write_text(json.dumps({
+            self.assertTrue(
+                instance._model_quality_allows_attribution(temp_dir, 1, 3)
+            )
+            single_target_manifest = {
+                **curriculum_manifest_fields(num_classes=2, stage=1),
                 "best_eval_accuracy": 0.90,
-                "best_eval_weighted_f1": 0.80,
-                "validation_class_counts": {"0": 10, "1": 5, "2": 0},
-            }), encoding="utf-8")
-            self.assertFalse(
-                instance._model_quality_allows_attribution(temp_dir, 2, 3)
+                "best_eval_weighted_f1": 0.85,
+                "validation_class_counts": {"0": 10, "1": 10},
+            }
+            (Path(temp_dir) / "training_manifest.json").write_text(
+                json.dumps(single_target_manifest), encoding="utf-8"
+            )
+            self.assertTrue(
+                instance._model_quality_allows_attribution(temp_dir, 1, 2)
             )
 
-    def test_stage_two_guidance_uses_final_target_attribution(self):
+    def test_single_waypoint_stage_one_runs_exact_attribution(self):
+        instance = Controller()
+        engine = mock.Mock()
+        engine.version = 1
+        engine.get_static_weights.return_value = {}
+        engine.get_attribution_weights.return_value = {}
+        engine.compute_guidance.return_value = {
+            "version": 1,
+            "syscall_weights": {},
+            "mutation_templates": [],
+        }
+        task = FuzzerTask(
+            task_id="fuzzer@task@1", task_name="task", run_id=1,
+            fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
+            guidance_engine=engine, static_analysis_done=True,
+        )
+        instance.global_tasks[task.task_id] = task
+        labels = [[False, True] for _ in range(100)]
+        programs = ["getpid()" for _ in labels]
+        with (
+            mock.patch.object(
+                instance, "_load_training_data", return_value=(programs, labels)
+            ),
+            mock.patch.object(
+                instance, "_model_quality_allows_attribution", return_value=True
+            ) as quality,
+            mock.patch.object(instance, "_run_attribution_analysis") as attribution,
+            mock.patch.object(instance, "_run_sequence_mining") as sequence,
+            mock.patch.object(
+                instance, "_send_guidance_if_active", return_value=True
+            ),
+        ):
+            instance._run_guidance_pipeline_locked(
+                task, stage=1, num_classes=2,
+                save_dir="model", ckpt_path="checkpoint.pt",
+            )
+
+        quality.assert_called_once_with("model", 1, 2)
+        attribution.assert_called_once_with(
+            task, engine, "checkpoint.pt", 2, 1, None
+        )
+        sequence.assert_called_once_with(
+            task, engine, programs, labels, 2, 1
+        )
+
+    def test_stage_three_guidance_uses_final_target_attribution(self):
         instance = Controller()
         engine = mock.Mock()
         engine.version = 1
@@ -3670,34 +4209,40 @@ class TrainingStateTest(unittest.TestCase):
         instance.global_tasks[task.task_id] = task
         labels = [[False, False, True] for _ in range(100)]
         programs = ["getpid()" for _ in labels]
-        with (
-            mock.patch.object(
-                instance, "_load_training_data", return_value=(programs, labels)
-            ),
-            mock.patch.object(
-                instance, "_model_quality_allows_attribution", return_value=True
-            ) as quality,
-            mock.patch.object(instance, "_run_attribution_analysis") as attribution,
-            mock.patch.object(instance, "_run_sequence_mining") as sequence,
-            mock.patch.object(
-                instance, "_send_guidance_if_active", return_value=True
-            ),
-        ):
-            instance._run_guidance_pipeline_locked(
-                task, stage=2, num_classes=3,
-                save_dir="model", ckpt_path="checkpoint.pt",
-            )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            write_guidance_manifest(temp_dir)
+            with (
+                mock.patch.object(
+                    instance, "_load_training_data",
+                    return_value=(programs, labels),
+                ),
+                mock.patch.object(
+                    instance, "_model_quality_allows_attribution",
+                    return_value=True,
+                ) as quality,
+                mock.patch.object(
+                    instance, "_run_attribution_analysis"
+                ) as attribution,
+                mock.patch.object(instance, "_run_sequence_mining") as sequence,
+                mock.patch.object(
+                    instance, "_send_guidance_if_active", return_value=True
+                ),
+            ):
+                instance._run_guidance_pipeline_locked(
+                    task, stage=3, num_classes=3,
+                    save_dir=temp_dir, ckpt_path="checkpoint.pt",
+                )
 
         attribution.assert_called_once_with(
-            task, engine, "checkpoint.pt", 3, 2
+            task, engine, "checkpoint.pt", 3, 3, (0, 1, 2)
         )
-        quality.assert_called_once_with("model", 2, 3)
+        quality.assert_called_once_with(temp_dir, 3, 3)
         sequence.assert_called_once_with(
-            task, engine, programs, labels, 3, 2
+            task, engine, programs, labels, 3, 3
         )
         engine.update_attribution.assert_called_once_with({})
 
-    def test_stage_two_guidance_rejects_shallow_only_evidence(self):
+    def test_stage_two_guidance_attributes_shallow_objective(self):
         instance = Controller()
         engine = mock.Mock()
         engine.version = 1
@@ -3734,7 +4279,9 @@ class TrainingStateTest(unittest.TestCase):
                 save_dir="model", ckpt_path="checkpoint.pt",
             )
 
-        attribution.assert_not_called()
+        attribution.assert_called_once_with(
+            task, engine, "checkpoint.pt", 3, 2, None
+        )
         sequence.assert_not_called()
         engine.update_attribution.assert_called_once_with({})
         engine.update_sequence_patterns.assert_called_once_with([])
@@ -3755,9 +4302,19 @@ class TrainingStateTest(unittest.TestCase):
             "read": 3.0,
             "write": 4.0,
         }
-        attribution_runner = mock.Mock(return_value=raw_scores)
+        attribution_runner = mock.Mock(return_value=[{
+            "stage": 3,
+            "objective": "exact:2",
+            "canonical_members": [2],
+            "active_exact_classes": [0, 1, 2],
+            "deployment_version": 3,
+            "selected_signature_digest": "a" * 64,
+            "analyzed_count": 8,
+            "depth_weight": 1.0,
+            "scores": raw_scores,
+        }])
         fake_attribution_module = mock.Mock(
-            run_attribution_for_guidance=attribution_runner
+            run_hierarchical_attribution_for_guidance=attribution_runner
         )
         filtered = mock.Mock(
             entries=(
@@ -3769,6 +4326,8 @@ class TrainingStateTest(unittest.TestCase):
         manifest = mock.Mock()
         manifest.filter_generation_scores.return_value = filtered
         original_import = __import__
+        task.deployment_version = 3
+        task.attribution_store.begin_deployment(3, 3, (0, 1, 2))
 
         def import_attribution(name, globals=None, locals=None,
                                fromlist=(), level=0):
@@ -3794,14 +4353,21 @@ class TrainingStateTest(unittest.TestCase):
             mock.patch("torch.cuda.empty_cache"),
         ):
             instance._run_attribution_analysis_on_reserved_gpu(
-                task, engine, "checkpoint.pt", 3, 2
+                task, engine, "checkpoint.pt", 3, 3, (0, 1, 2)
             )
+            instance._publish_hierarchical_attribution(task, engine)
 
         self.assertEqual(len(
             manifest.filter_generation_scores.call_args.args[0]
         ), 22)
-        manifest.filter_generation_scores.assert_called_once_with(
-            raw_scores, descriptions_mode="manual"
+        passed_scores = manifest.filter_generation_scores.call_args.args[0]
+        self.assertEqual(set(passed_scores), set(raw_scores))
+        self.assertAlmostEqual(
+            passed_scores["write"] / passed_scores["read"], 4.0 / 3.0
+        )
+        self.assertEqual(
+            manifest.filter_generation_scores.call_args.kwargs,
+            {"descriptions_mode": "manual"},
         )
         load_manifest.assert_called_once_with(
             controller_module.config.syzlang_manifest_path,
@@ -3812,15 +4378,46 @@ class TrainingStateTest(unittest.TestCase):
             max_bytes=controller_module.config.syzlang_manifest_max_bytes,
         )
         self.assertEqual(
-            attribution_runner.call_args.kwargs["target_class"], 2
+            attribution_runner.call_args.kwargs["deployment_version"], 3
         )
-        self.assertIsNone(attribution_runner.call_args.kwargs["top_k"])
-        engine.update_attribution.assert_called_once_with({
-            "write": 0.8,
-            "read": 0.6,
-        })
+        published = engine.update_attribution.call_args.args[0]
+        self.assertEqual(list(published), ["write", "read"])
+        self.assertAlmostEqual(
+            published["write"] / published["read"], 4.0 / 3.0
+        )
 
-    def test_failed_attribution_quality_gate_clears_previous_snapshot(self):
+    def test_attribution_manifest_failure_clears_published_view_only(self):
+        instance = Controller()
+        engine = GuidanceEngine(GuidanceConfig())
+        engine.update_attribution({"old$call": 1.0})
+        task = FuzzerTask(
+            task_id="fuzzer@task@1", task_name="task", run_id=1,
+            fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
+            target_os="linux", target_arch="amd64",
+        )
+        task.attribution_store.begin_deployment(1, 1)
+        task.attribution_store.replace([{
+            "stage": 1,
+            "objective": "reachable",
+            "canonical_members": [1],
+            "active_exact_classes": [],
+            "deployment_version": 1,
+            "selected_signature_digest": "a" * 64,
+            "analyzed_count": 8,
+            "examined_count": 8,
+            "depth_weight": 1.0,
+            "scores": {"read": 1.0},
+        }])
+
+        with mock.patch.object(
+                controller_module.SyzlangIndex, "load_cached",
+                side_effect=ValueError("revision mismatch")):
+            instance._publish_hierarchical_attribution(task, engine)
+
+        self.assertEqual(engine.get_attribution_weights(), {})
+        self.assertEqual(len(task.attribution_store.audit_state()), 1)
+
+    def test_failed_attribution_quality_gate_publishes_empty_store(self):
         instance = Controller()
         engine = mock.Mock()
         engine.version = 1
@@ -3839,15 +4436,82 @@ class TrainingStateTest(unittest.TestCase):
         instance.global_tasks[task.task_id] = task
         labels = [[False, True, False] for _ in range(100)]
         programs = ["getpid()" for _ in labels]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            write_guidance_manifest(temp_dir)
+            with (
+                mock.patch.object(
+                    instance, "_load_training_data",
+                    return_value=(programs, labels),
+                ),
+                mock.patch.object(
+                    instance, "_model_quality_allows_attribution",
+                    return_value=False,
+                ),
+                mock.patch.object(
+                    instance, "_run_attribution_analysis"
+                ) as attribution,
+                mock.patch.object(instance, "_run_sequence_mining"),
+                mock.patch.object(
+                    instance, "_send_guidance_if_active", return_value=True
+                ),
+            ):
+                instance._run_guidance_pipeline_locked(
+                    task, stage=3, num_classes=3,
+                    save_dir=temp_dir, ckpt_path="checkpoint.pt",
+                )
+
+        attribution.assert_not_called()
+        engine.update_attribution.assert_called_once_with({})
+
+    def test_failed_quality_gate_retains_prior_hierarchical_snapshot(self):
+        instance = Controller()
+        engine = mock.Mock()
+        engine.version = 1
+        engine.get_static_weights.return_value = {}
+        engine.get_attribution_weights.return_value = {"read": 1.0}
+        engine.compute_guidance.return_value = {
+            "version": 1,
+            "syscall_weights": {"read": 1.0},
+            "mutation_templates": [],
+        }
+        task = FuzzerTask(
+            task_id="fuzzer@task@1", task_name="task", run_id=1,
+            fuzzer_id="fuzzer", mode="direct", callback_addr="localhost:1",
+            guidance_engine=engine, static_analysis_done=True,
+        )
+        task.attribution_store.begin_deployment(1, 1)
+        task.attribution_store.replace([{
+            "stage": 1,
+            "objective": "reachable",
+            "canonical_members": [1, 2],
+            "active_exact_classes": [],
+            "deployment_version": 1,
+            "selected_signature_digest": "a" * 64,
+            "analyzed_count": 8,
+            "depth_weight": 1.0,
+            "scores": {"read": 1.0},
+        }])
+        task.deployment_version = 2
+        instance.global_tasks[task.task_id] = task
+        filtered = mock.Mock(
+            entries=({"name": "read", "weight": 1.0},), rejected={}
+        )
+        manifest = mock.Mock()
+        manifest.filter_generation_scores.return_value = filtered
         with (
             mock.patch.object(
-                instance, "_load_training_data", return_value=(programs, labels)
+                instance, "_load_training_data",
+                return_value=([], []),
             ),
             mock.patch.object(
-                instance, "_model_quality_allows_attribution", return_value=False
+                instance, "_model_quality_allows_attribution",
+                return_value=False,
             ),
-            mock.patch.object(instance, "_run_attribution_analysis") as attribution,
-            mock.patch.object(instance, "_run_sequence_mining"),
+            mock.patch.object(instance, "_run_attribution_analysis") as runner,
+            mock.patch.object(
+                controller_module.SyzlangIndex, "load_cached",
+                return_value=manifest,
+            ),
             mock.patch.object(
                 instance, "_send_guidance_if_active", return_value=True
             ),
@@ -3857,8 +4521,12 @@ class TrainingStateTest(unittest.TestCase):
                 save_dir="model", ckpt_path="checkpoint.pt",
             )
 
-        attribution.assert_not_called()
-        engine.update_attribution.assert_called_once_with({})
+        runner.assert_not_called()
+        engine.update_attribution.assert_called_once_with({"read": 1.0})
+        self.assertEqual(
+            task.attribution_store.audit_state()[0]["effective_multiplier"],
+            0.5,
+        )
 
     def test_quality_gate_failure_sends_no_stale_attribution_weight(self):
         instance = Controller()
@@ -3878,24 +4546,30 @@ class TrainingStateTest(unittest.TestCase):
             sent_payloads.append(guidance)
             return True
 
-        with (
-            mock.patch.object(
-                instance, "_load_training_data", return_value=(programs, labels)
-            ),
-            mock.patch.object(
-                instance, "_model_quality_allows_attribution", return_value=False
-            ),
-            mock.patch.object(instance, "_run_attribution_analysis") as attribution,
-            mock.patch.object(instance, "_run_sequence_mining"),
-            mock.patch.object(
-                instance, "_send_guidance_if_active",
-                side_effect=capture_guidance,
-            ),
-        ):
-            instance._run_guidance_pipeline_locked(
-                task, stage=2, num_classes=3,
-                save_dir="model", ckpt_path="checkpoint.pt",
-            )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            write_guidance_manifest(temp_dir)
+            with (
+                mock.patch.object(
+                    instance, "_load_training_data",
+                    return_value=(programs, labels),
+                ),
+                mock.patch.object(
+                    instance, "_model_quality_allows_attribution",
+                    return_value=False,
+                ),
+                mock.patch.object(
+                    instance, "_run_attribution_analysis"
+                ) as attribution,
+                mock.patch.object(instance, "_run_sequence_mining"),
+                mock.patch.object(
+                    instance, "_send_guidance_if_active",
+                    side_effect=capture_guidance,
+                ),
+            ):
+                instance._run_guidance_pipeline_locked(
+                    task, stage=3, num_classes=3,
+                    save_dir=temp_dir, ckpt_path="checkpoint.pt",
+                )
 
         attribution.assert_not_called()
         self.assertEqual(engine.get_attribution_weights(), {})
