@@ -52,7 +52,7 @@ mounts for the evaluation machine.
 ```bash
 mkdir -p /HOST/SYZPILOT-BRAIN-STATE/{receiver_data,logs,model_store}
 
-docker run -d --name syzpilot-brain --network host \
+docker run -d --init --name syzpilot-brain --network host \
   --gpus 'device=0,1' \
   -v /HOST/KERNELS:/root/kernels \
   -v /HOST/SYZPILOT-RUNS:/root/syzpilot-runs \
@@ -94,8 +94,7 @@ explicitly. The inherited base image supplies the disposable guest template
 used by the default functional configuration.
 
 ```bash
-docker run -d --name syzpilot-fuzzer --network host --device /dev/kvm \
-  --cpuset-cpus=0-1 \
+docker run -d --init --name syzpilot-fuzzer --network host --device /dev/kvm \
   -v /HOST/KERNELS:/root/kernels \
   -v /HOST/SYZPILOT-RUNS:/root/syzpilot-runs \
   qgrain/syzpilot:ndss27-ae sleep infinity

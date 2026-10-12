@@ -52,7 +52,7 @@ docker pull qgrain/syzpilot:ndss27-ae
 mkdir -p /HOST/SYZPILOT-BRAIN-STATE/{receiver_data,logs,model_store}
 
 # GPU host
-docker run -d --name syzpilot-brain --network host \
+docker run -d --init --name syzpilot-brain --network host \
   --gpus 'device=0,1' \
   -v /HOST/KERNELS:/root/kernels \
   -v /HOST/SYZPILOT-RUNS:/root/syzpilot-runs \
@@ -62,8 +62,7 @@ docker run -d --name syzpilot-brain --network host \
   qgrain/syzpilot:ndss27-ae sleep infinity
 
 # CPU/KVM host
-docker run -d --name syzpilot-fuzzer --network host --device /dev/kvm \
-  --cpuset-cpus=0-1 \
+docker run -d --init --name syzpilot-fuzzer --network host --device /dev/kvm \
   -v /HOST/KERNELS:/root/kernels \
   -v /HOST/SYZPILOT-RUNS:/root/syzpilot-runs \
   qgrain/syzpilot:ndss27-ae sleep infinity
@@ -108,14 +107,27 @@ docker exec syzpilot-fuzzer bash -lc '
 
   cd /root/SyzPilot
   test ! -e /root/kernels/case_36
+  test -x "$SYZPILOT_KERNEL_CC"
   python experiments/compile_kernel.py \
     --workdir /root/kernels \
     --linux-git-master /root/kernels/linux-git-master \
-    --config mini-benchmark/compile_case_36.csv -j 8
+    --config mini-benchmark/compile_case_36.csv \
+    --compiler "$SYZPILOT_KERNEL_CC" -j 8
   test -s /root/kernels/case_36/vmlinux
   test -s /root/kernels/case_36/arch/x86/boot/bzImage
 '
 ```
+
+The recommended compiler for the supplied benchmark is GCC 11.4, exposed by
+the unified image as `SYZPILOT_KERNEL_CC` to match the retained local builds.
+`compile_kernel.py` otherwise defaults to the system `gcc`; pass `--compiler`
+to select this or another toolchain explicitly. The helper applies the
+selected compiler to both `CC` and `HOSTCC`; GCC 12 and newer can otherwise
+fail while building this Linux 5.11-rc2 tree's objtool. This does not replace
+the image-wide default compiler.
+The compiler fields in the checked-in input config are historical benchmark
+metadata; `make olddefconfig` refreshes them for the selected compiler before
+the build.
 
 The unified image inherits a disposable Trixie guest template at
 `/root/images/image-template/{disk.img,disk.id_rsa}`. The generated manager

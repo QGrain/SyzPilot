@@ -32,10 +32,12 @@ CASE=25
 cd /root/SyzPilot
 
 test ! -e "/root/kernels/case_${CASE}"
+test -x "$SYZPILOT_KERNEL_CC"
 python experiments/compile_kernel.py \
   --workdir /root/kernels \
   --linux-git-master /root/kernels/linux-git-master \
-  --config "mini-benchmark/compile_case_${CASE}.csv" -j 8
+  --config "mini-benchmark/compile_case_${CASE}.csv" \
+  --compiler "$SYZPILOT_KERNEL_CC" -j 8
 
 mkdir -p "/root/syzpilot-runs/case_${CASE}"
 python analyzer/waypoints_extractor.py \
@@ -44,6 +46,13 @@ python analyzer/waypoints_extractor.py \
   -r "mini-benchmark/configs/case_${CASE}.report" \
   | tee "/root/syzpilot-runs/case_${CASE}/waypoints.txt"
 ```
+
+The recommended compiler for the supplied benchmark is GCC 11.4, exposed by
+the unified image as `SYZPILOT_KERNEL_CC` to match the retained local builds.
+`compile_kernel.py` otherwise defaults to the system `gcc`; pass `--compiler`
+to select this or another available toolchain explicitly. This avoids building
+case 36's older objtool with GCC 12 or newer without changing the image-wide
+default compiler.
 
 Generate the manager configuration on the Fuzzer host. `BRAIN_HOST` and
 `FUZZER_HOST` must be mutually reachable private addresses. The centralized

@@ -26,6 +26,7 @@ python3 compile_kernel.py \
     --linux-git-master /path/to/linux-git-master \
     [--linux-stable-git-master /path/to/linux-stable-git-master] \
     --config config.csv \
+    [--compiler /path/to/compiler] \
     -j 8 \
     [--dry-run]
 ```
@@ -35,6 +36,8 @@ python3 compile_kernel.py \
 - `--linux-git-master`: Path to the linux-git-master repository
 - `--linux-stable-git-master`: Optional path to the linux-stable-git-master repository
 - `--config`: CSV configuration file with compilation targets
+- `--compiler`: Compiler used for both `CC` and `HOSTCC` in normal builds
+  (default: `gcc`; IR generation uses its own toolchain)
 - `-j, --jobs`: Number of parallel jobs for make (default: CPU count)
 - `--dry-run`: Skip actual compilation (useful for testing)
 - `--rebuild`: Rebuild on top of existing kernel directories
@@ -100,6 +103,7 @@ results = compile_kernels_batch(
     workdir="/home/user/kernels/test",
     linux_git_master="/home/user/kernels/linux-git-master",
     jobs=8,
+    compiler="/path/to/gcc",
     dry_run=False,
     linux_stable_git_master="/home/user/kernels/linux-stable-git-master",
 )
@@ -119,6 +123,7 @@ result = compile_single_kernel(
     workdir=Path("/home/user/kernels/test"),
     linux_git_master=Path("/home/user/kernels/linux-git-master"),
     jobs=8,
+    compiler="/path/to/gcc",
     dry_run=False,
     linux_stable_git_master=Path("/home/user/kernels/linux-stable-git-master"),
 )
@@ -136,8 +141,8 @@ For each target kernel, the script performs the following steps:
 3. **Clean & checkout**: Clean the working directory and checkout the specified commit
 4. **Remove .git**: Delete the `.git` directory to save disk space
 5. **Copy config**: Copy the `.config` file to the kernel directory
-6. **Configure**: Run `make CC=gcc olddefconfig`
-7. **Compile**: Run `make CC=gcc -jX` (where X is the number of jobs)
+6. **Configure**: Run `make CC=<compiler> HOSTCC=<compiler> olddefconfig`
+7. **Compile**: Run `make CC=<compiler> HOSTCC=<compiler> -jX`
 
 ## Error Handling
 

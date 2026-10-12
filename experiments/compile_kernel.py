@@ -108,6 +108,7 @@ def compile_single_kernel(
     dry_run: bool = False,
     rebuild: bool = False,
     linux_stable_git_master: Optional[Path] = None,
+    compiler: str = "gcc",
 ) -> KernelCompilationResult:
     """
     Compile a single kernel version.
@@ -122,6 +123,7 @@ def compile_single_kernel(
             If provided and commit_hash is not found in linux_git_master,
             the stable repository will be used as a fallback source.
         jobs: Number of parallel jobs for make
+        compiler: Compiler executable used for both CC and HOSTCC
         dry_run: If True, skip actual compilation (for testing)
         rebuild: If True, rebuild existing case directory (make clean + rebuild)
 
@@ -232,10 +234,12 @@ def compile_single_kernel(
                 f.write(f"sed command failed: {stderr}\n")
             # no need to return, continue
 
+        compiler_args = [f"CC={compiler}", f"HOSTCC={compiler}"]
+
         # Step 5: Run make olddefconfig
         print(f"[{case_name}] Running make olddefconfig...")
         returncode, stdout, stderr = run_command(
-            ["make", "CC=gcc", "olddefconfig"],
+            ["make", *compiler_args, "olddefconfig"],
             cwd=str(case_dir),
             capture_output=True,
         )
@@ -251,7 +255,10 @@ def compile_single_kernel(
 
         # Step 6: Compile the kernel
         if dry_run:
-            print(f"[{case_name}] DRY RUN: Skipping actual compilation (make CC=gcc -j{jobs})")
+            print(
+                f"[{case_name}] DRY RUN: Skipping actual compilation "
+                f"(make {' '.join(compiler_args)} -j{jobs})"
+            )
             return KernelCompilationResult(case_name, True, "Dry run completed")
 
         print(f"[{case_name}] Compiling kernel with -j{jobs}...")
@@ -262,7 +269,7 @@ def compile_single_kernel(
 
             # Run make and redirect output to log file
             result = subprocess.run(
-                ["make", "CC=gcc", f"-j{jobs}"],
+                ["make", *compiler_args, f"-j{jobs}"],
                 cwd=str(case_dir),
                 stdout=f,
                 stderr=subprocess.STDOUT,
@@ -477,6 +484,7 @@ def compile_kernels_batch(
     irgen_opt: str = "O0",
     irgen_jobs: int = 80,
     linux_stable_git_master: Optional[str] = None,
+    compiler: str = "gcc",
 ) -> List[KernelCompilationResult]:
     """
     Batch compile multiple kernels based on a CSV configuration file.
@@ -493,6 +501,7 @@ def compile_kernels_batch(
             linux-stable-git-master when a commit is not found in
             linux-git-master.
         jobs: Number of parallel jobs for make
+        compiler: Compiler executable used for both CC and HOSTCC
         dry_run: If True, skip actual compilation (for testing)
         rebuild: If True, rebuild existing case directories (make clean + rebuild)
 
@@ -538,6 +547,7 @@ def compile_kernels_batch(
     else:
         print("Linux stable git master: <not available>")
     print(f"Jobs: {jobs}")
+    print(f"Compiler: {compiler}")
     print(f"Dry run: {dry_run}")
     print(f"Rebuild: {rebuild}")
     print("=" * 80)
@@ -606,6 +616,7 @@ def compile_kernels_batch(
                 linux_git_master=linux_git_path,
                 linux_stable_git_master=linux_stable_git_path,
                 jobs=jobs,
+                compiler=compiler,
                 dry_run=dry_run,
                 rebuild=rebuild
             )
@@ -690,6 +701,15 @@ CSV Configuration File Format:
     )
 
     parser.add_argument(
+        '--compiler',
+        default='gcc',
+        help=(
+            'Compiler executable used for CC and HOSTCC in normal kernel '
+            'builds; IR generation uses its own toolchain (default: gcc)'
+        )
+    )
+
+    parser.add_argument(
         '--dry-run',
         action='store_true',
         help='Skip actual kernel compilation (for testing)'
@@ -737,6 +757,7 @@ CSV Configuration File Format:
             linux_git_master=args.linux_git_master,
             linux_stable_git_master=args.linux_stable_git_master,
             jobs=args.jobs,
+            compiler=args.compiler,
             dry_run=args.dry_run,
             rebuild=args.rebuild,
             irgen=args.irgen,

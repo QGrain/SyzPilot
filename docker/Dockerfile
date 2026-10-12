@@ -10,6 +10,8 @@ ARG SYZPILOT_REPOSITORY=https://github.com/QGrain/SyzPilot.git
 ARG SYZPILOT_REVISION
 ARG SYZENCODER_REPOSITORY=zzra1n/SyzEncoder
 ARG SYZENCODER_REVISION=6140b0b46c81bb6428458fde5fd800a0e4a0687d
+ARG KERNEL_GCC_VERSION=11.4.0
+ARG KERNEL_GCC_JOBS=8
 ARG OCI_CREATED=unknown
 ARG OCI_REVISION
 
@@ -29,6 +31,15 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     autossh libaio-dev libprotobuf-dev openjdk-17-jre-headless && \
     rm -rf /var/lib/apt/lists/*
+
+# Linux 5.11-rc2's objtool does not build with modern GCC warnings promoted
+# to errors. Keep the benchmark compiler alongside the base image's current
+# toolchain without changing its global cvm default.
+RUN --mount=type=cache,target=/root/.cvm/cache \
+    cvm install gcc "${KERNEL_GCC_VERSION}" --jobs "${KERNEL_GCC_JOBS}" && \
+    test -x "/root/.cvm/toolchains/gcc/${KERNEL_GCC_VERSION}/bin/gcc"
+
+ENV SYZPILOT_KERNEL_CC=/root/.cvm/toolchains/gcc/${KERNEL_GCC_VERSION}/bin/gcc
 
 RUN /opt/miniforge/bin/conda create -y -n syzpilot python=3.11 pip && \
     /opt/miniforge/bin/conda clean -afy && \
