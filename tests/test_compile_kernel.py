@@ -20,6 +20,8 @@ class CompileKernelTest(unittest.TestCase):
             with mock.patch.object(
                 compile_kernel, "select_source_repo", return_value=(source, "linux")
             ), mock.patch.object(
+                compile_kernel, "apply_kcov_remote_owner_fix", return_value=True
+            ), mock.patch.object(
                 compile_kernel, "run_command", return_value=(0, "", "")
             ) as run_command, mock.patch.object(
                 compile_kernel.subprocess,
@@ -60,6 +62,75 @@ class CompileKernelTest(unittest.TestCase):
                 text=True,
                 check=False,
             )
+
+    def test_remote_kcov_fix_is_applied_once(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            kernel = Path(temp_dir)
+            (kernel / "include/linux").mkdir(parents=True)
+            (kernel / "include/uapi/linux").mkdir(parents=True)
+            (kernel / "kernel").mkdir()
+            (kernel / "include/uapi/linux/kcov.h").write_text(
+                "#define KCOV_REMOTE_ENABLE _IOW('c', 102, unsigned long)\n"
+            )
+            (kernel / "include/linux/kcov.h").write_text(
+                "enum kcov_mode {\n"
+                "\tKCOV_MODE_TRACE_PC = 2,\n"
+                "\t/* Collecting comparison operands mode. */\n"
+                "\tKCOV_MODE_TRACE_CMP = 3,\n"
+                "};\n\n"
+                "#define KCOV_IN_CTXSW\t(1 << 30)\n"
+            )
+            (kernel / "kernel/kcov.c").write_text(
+                "\t\tif (kcov->mode != KCOV_MODE_INIT || !t->kcov)\n"
+                "\t\t\treturn -EINVAL;\n"
+                "\t\tkcov->mode = mode;\n"
+                "\t\tt->kcov = kcov;\n"
+                "\t\tkcov->t = t;\n"
+                "\t\tkcov->remote = true;\n"
+                "\t\tkcov->remote_size = remote_arg->area_size;\n"
+            )
+
+            self.assertTrue(compile_kernel.apply_kcov_remote_owner_fix(kernel))
+            self.assertFalse(compile_kernel.apply_kcov_remote_owner_fix(kernel))
+            self.assertIn(
+                "KCOV_MODE_REMOTE",
+                (kernel / "include/linux/kcov.h").read_text(),
+            )
+            self.assertIn(
+                "t->kcov_mode = KCOV_MODE_REMOTE",
+                (kernel / "kernel/kcov.c").read_text(),
+            )
+
+    def test_remote_kcov_fix_skips_unsupported_kernel(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            kernel = Path(temp_dir)
+            (kernel / "include/linux").mkdir(parents=True)
+            (kernel / "include/uapi/linux").mkdir(parents=True)
+            (kernel / "kernel").mkdir()
+            (kernel / "include/linux/kcov.h").write_text("enum kcov_mode {};\n")
+            (kernel / "include/uapi/linux/kcov.h").write_text("#define KCOV_INIT_TRACE 1\n")
+            (kernel / "kernel/kcov.c").write_text("static int kcov_open(void) { return 0; }\n")
+
+            with mock.patch.object(compile_kernel, "run_command") as run_command:
+                self.assertFalse(compile_kernel.apply_kcov_remote_owner_fix(kernel))
+            run_command.assert_not_called()
+
+    def test_remote_kcov_fix_rejects_partial_backport(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            kernel = Path(temp_dir)
+            (kernel / "include/linux").mkdir(parents=True)
+            (kernel / "include/uapi/linux").mkdir(parents=True)
+            (kernel / "kernel").mkdir()
+            (kernel / "include/uapi/linux/kcov.h").write_text(
+                "#define KCOV_REMOTE_ENABLE _IOW('c', 102, unsigned long)\n"
+            )
+            (kernel / "include/linux/kcov.h").write_text(
+                "enum kcov_mode { KCOV_MODE_REMOTE };\n"
+            )
+            (kernel / "kernel/kcov.c").write_text("kcov->remote = true;\n")
+
+            with self.assertRaisesRegex(RuntimeError, "inconsistent remote-KCOV"):
+                compile_kernel.apply_kcov_remote_owner_fix(kernel)
 
 
 if __name__ == "__main__":

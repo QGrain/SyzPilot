@@ -1,5 +1,5 @@
 diff --git a/.gitignore b/.gitignore
-index 5e31de7..e2f9912 100644
+index 5e31de7b159601d076e26209966ac0b2ad193846..e2f9912b137bf9f6140645cbc08e3e1f287e5201 100644
 --- a/.gitignore
 +++ b/.gitignore
 @@ -2,8 +2,12 @@
@@ -32,7 +32,7 @@ index 5e31de7..e2f9912 100644
 +DESIGN.md
 +DESIGN_CN.md
 diff --git a/Makefile b/Makefile
-index d61d27c..871c3ee 100644
+index d61d27cb8b0194beede30e1a6a6e484f08a657c1..871c3eedf9667e96145302805482e8e69b45766f 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -103,7 +103,7 @@ ifeq ("$(TARGETOS)", "trusty")
@@ -86,10 +86,10 @@ index d61d27c..871c3ee 100644
  
  # For a tupical Ubuntu/Debian distribution.
 diff --git a/README.md b/README.md
-index a8c48e3..acf3645 100644
+index a8c48e35f37bafc8c7903f881c38bab9dd4973c0..e2ab44eb69868fe607f521b1033147d4f6af69a8 100644
 --- a/README.md
 +++ b/README.md
-@@ -1,44 +1,323 @@
+@@ -1,44 +1,332 @@
 -# syzkaller - kernel fuzzer
 -
 -[![CI Status](https://github.com/google/syzkaller/workflows/ci/badge.svg)](https://github.com/google/syzkaller/actions?query=workflow/ci)
@@ -219,7 +219,9 @@ index a8c48e3..acf3645 100644
 +requires an explicit `"allow_standalone_guidance": true` in the `SyzPilot`
 +object; never set it for a feature-off baseline. An explicitly labeled
 +component ablation may combine this opt-in with `"observe_target_coverage":
-+true` so it can measure target hits without enabling the Brain or rfilter.
++true` so it can report target hits without enabling the Brain or rfilter.
++Native triage supplies raw coverage for its own executions; broader measurement
++also requires `enable_diverse_cover` with the same policy in every compared arm.
 +
 +```bash
 +# Run the unassisted Syzkaller baseline.
@@ -240,8 +242,6 @@ index a8c48e3..acf3645 100644
 +  "SyzPilot": {
 +    "task_name": "<report-derived bug title>",
 +    "network_mode": "isolated",
-+    "enable_dump": true,
-+    "dump_dir": "<absolute per-run output directory>",
 +    "target_pcs": ["<resolved PC 1>", "<resolved PC 2>"],
 +    "reach_filter": {
 +      "enable": true,
@@ -295,14 +295,18 @@ index a8c48e3..acf3645 100644
 +|-------|------|---------|-------------|
 +| `task_name` | string | "" | Bug title or patch commit |
 +| `network_mode` | string | "isolated" | "isolated" (SSH tunnel) or "direct" |
-+| `enable_dump` | bool | false | Dump programs and coverage |
-+| `observe_target_coverage` | bool | false | Collect target-PC statistics and final-hit evidence without enabling Brain, training, rfilter, or guidance by itself; measurement-matched feature-off controls leave standalone guidance disabled, while explicitly labeled component ablations may combine both opt-ins |
++| `enable_dump` | bool | false | Dump sampled program/coverage pairs; requires `enable_diverse_cover` because compact target-hit observation intentionally omits raw coverage |
++| `persist_target_evidence` | bool | false | Persist each observed final-target program and the available raw coverage for offline analysis; it does not enable raw coverage collection, so use native triage or `enable_diverse_cover` to select executions |
++| `observe_target_coverage` | bool | false | Report target-PC statistics without enabling Brain, training, rfilter, or guidance; it uses compact executor-side target hits unless raw diverse coverage is enabled |
++| `enable_diverse_cover` | bool | false | Select the raw-coverage observation route and sample configured non-triage execution sources for online labels and target-PC statistics; when disabled, tasks that require reachability evidence use compact executor-side target hits instead; native triage coverage is unchanged |
++| `diverse_cover_targets` | []string | all supported sources | Eligible non-triage execution sources; accepted names are `exec candidate`, `exec minimize`, `exec gen`, `exec fuzz`, `exec smash`, `exec hints`, `exec inject`, and `exec collide`; native triage remains full-coverage and comparison collection remains excluded |
++| `diverse_cover_ratio` | float | 1.0 | Per-request raw-coverage sampling probability for eligible queues, in [0, 1] |
 +| `allow_standalone_guidance` | bool | false | Accept HTTP guidance without reach filtering only for explicitly labeled oracle/ablation runs; never use for a feature-off baseline |
 +| `durable_training_wal` | bool | false | Persist buffered and unacknowledged training batches for manager-process crash recovery; enable only for robustness experiments because synchronous WAL writes reduce fuzzing throughput |
 +| `enable_online_guidance` | bool | true | Allow deployed model rounds to refresh sequence/attribution guidance; set false only for a predictor-only ablation that retains cold-start guidance and model/rfilter hot updates |
 +| `enable_sequence_guidance` | bool | true | Allow deployed model rounds to refresh sequence-mined mutation templates; disable only for labeled ablations |
 +| `enable_attribution_guidance` | bool | true | Allow deployed Stage-2 models to refresh IG syscall weights; disable for a sequence-only ablation |
-+| `dump_dir` | string | "SyzPilot-default-dumpdir" | Dump directory path; observation-only controls require an explicit absolute per-instance path |
++| `dump_dir` | string | "SyzPilot-default-dumpdir" | Artifact directory used by `enable_dump` and `persist_target_evidence`; target evidence persistence requires an explicit absolute per-instance path |
 +| `target_pcs` | []string | [] | Target PC addresses (32-bit hex) |
 +| `cold_start_seed_dir` | string | "" | Directory containing generic generated seed programs; must be paired with `cold_start_seed_catalog` |
 +| `cold_start_seed_catalog` | string | "" | Versioned catalog authenticating eligible generic `NoGenerate` seeds for the exact compiled target |
@@ -319,6 +323,11 @@ index a8c48e3..acf3645 100644
 +| `scheduling_strategy.alpha` | float | 0.6 | Skip probability scaling |
 +| `scheduling_strategy.beta` | float | 0.5 | Probability curve shape |
 +| `scheduling_strategy.lambda` | float | 0.03 | Time decay rate (per hour) |
++
++`persist_target_evidence` stores only executions for which raw coverage was
++requested and the final target PC was observed. Failed, unfinished, or
++coverage-overflow executions may contain only the raw KCOV returned before the
++execution stopped; a missing PC in such an artifact is not negative evidence.
 +
 +### HTTP Endpoints
 +
@@ -457,9 +466,409 @@ index a8c48e3..acf3645 100644
 +## License
 +
 +Apache 2.0 (following syzkaller's license).
+diff --git a/executor/executor.cc b/executor/executor.cc
+index a262bff8333607cc91ae62613767a99605caf611..fb86ce048e78a3db33989a0cac1579b6353246d1 100644
+--- a/executor/executor.cc
++++ b/executor/executor.cc
+@@ -4,6 +4,7 @@
+ // +build
+ 
+ #include <algorithm>
++#include <array>
+ #include <errno.h>
+ #include <limits.h>
+ #include <signal.h>
+@@ -246,6 +247,7 @@ const int kInFd = 3;
+ const int kOutFd = 4;
+ const int kMaxSignalFd = 5;
+ const int kCoverFilterFd = 6;
++const int kTargetFilterFd = 7;
+ static OutputData* output_data;
+ static std::optional<ShmemBuilder> output_builder;
+ static uint32 output_size;
+@@ -277,6 +279,7 @@ static bool flag_collect_cover;
+ static bool flag_collect_signal;
+ static bool flag_dedup_cover;
+ static bool flag_threaded;
++static bool flag_collect_target_hits;
+ 
+ // If true, then executor should write the comparisons data to fuzzer.
+ static bool flag_comparisons;
+@@ -551,6 +554,9 @@ static feature_t features[] = {};
+ #include "cover_filter.h"
+ #include "files.h"
+ #include "subprocess.h"
++#include "target_filter.h"
++
++static std::optional<TargetFilter> target_filter;
+ 
+ #include "snapshot.h"
+ 
+@@ -627,6 +633,10 @@ int main(int argc, char** argv)
+ 			cover_filter.emplace(kCoverFilterFd, reinterpret_cast<void*>(0x110f230000ull));
+ 			close(kCoverFilterFd);
+ 		}
++		if (fcntl(kTargetFilterFd, F_GETFD) != -1) {
++			target_filter.emplace(kTargetFilterFd, reinterpret_cast<void*>(0x1112230000ull));
++			close(kTargetFilterFd);
++		}
+ 
+ 		setup_control_pipes();
+ 		receive_handshake();
+@@ -814,13 +824,16 @@ void parse_execute(const execute_req& req)
+ 	flag_dedup_cover = req.exec_flags & (1 << 2);
+ 	flag_comparisons = req.exec_flags & (1 << 3);
+ 	flag_threaded = req.exec_flags & (1 << 4);
++	flag_collect_target_hits = req.exec_flags & (1 << 5);
++	if (flag_collect_target_hits && !target_filter)
++		fail("target-hit collection requested without a target filter");
+ 	all_call_signal = req.all_call_signal;
+ 	all_extra_signal = req.all_extra_signal;
+ 
+-	debug("[%llums] exec opts: reqid=%llu type=%llu procid=%llu threaded=%d cover=%d comps=%d dedup=%d signal=%d "
++	debug("[%llums] exec opts: reqid=%llu type=%llu procid=%llu threaded=%d cover=%d comps=%d dedup=%d signal=%d targets=%d "
+ 	      " sandbox=%d/%d/%d/%d timeouts=%llu/%llu/%llu kernel_64_bit=%d\n",
+ 	      current_time_ms() - start_time_ms, request_id, (uint64)request_type, procid, flag_threaded, flag_collect_cover,
+-	      flag_comparisons, flag_dedup_cover, flag_collect_signal, flag_sandbox_none, flag_sandbox_setuid,
++	      flag_comparisons, flag_dedup_cover, flag_collect_signal, flag_collect_target_hits, flag_sandbox_none, flag_sandbox_setuid,
+ 	      flag_sandbox_namespace, flag_sandbox_android, syscall_timeout_ms, program_timeout_ms, slowdown_scale,
+ 	      is_kernel_64_bit);
+ 	if (syscall_timeout_ms == 0 || program_timeout_ms <= syscall_timeout_ms || slowdown_scale == 0)
+@@ -830,7 +843,8 @@ void parse_execute(const execute_req& req)
+ 
+ bool cover_collection_required()
+ {
+-	return flag_coverage && (flag_collect_signal || flag_collect_cover || flag_comparisons);
++	return flag_coverage &&
++	       (flag_collect_signal || flag_collect_cover || flag_comparisons || flag_collect_target_hits);
+ }
+ 
+ void reply_execute(uint32 status)
+@@ -1219,6 +1233,32 @@ uint32 write_cover(flatbuffers::FlatBufferBuilder& fbb, cover_t* cov)
+ 	return fbb.EndVector(cover_size);
+ }
+ 
++template <typename cover_data_t>
++uint32 write_target_hits(flatbuffers::FlatBufferBuilder& fbb, cover_t* cov)
++{
++	if (!target_filter)
++		return 0;
++	std::array<bool, TargetFilter::kMaxTargets> hits = {};
++	cover_data_t* cover_data = (cover_data_t*)(cov->data + cov->data_offset);
++	if ((char*)(cover_data + cov->size) > cov->data_end)
++		failmsg("too much cover", "cov=%u", cov->size);
++	for (uint32 i = 0; i < cov->size; i++) {
++		const uint64 pc = cover_data[i] + cov->pc_offset;
++		const int index = target_filter->Find(pc);
++		if (index >= 0)
++			hits[index] = true;
++	}
++	size_t count = 0;
++	for (size_t i = 0; i < target_filter->Count(); i++)
++		count += hits[i];
++	fbb.StartVector(count, sizeof(uint64));
++	for (size_t i = target_filter->Count(); i > 0; i--) {
++		if (hits[i - 1])
++			fbb.PushElement(target_filter->PC(i - 1));
++	}
++	return fbb.EndVector(count);
++}
++
+ uint32 write_comparisons(flatbuffers::FlatBufferBuilder& fbb, cover_t* cov)
+ {
+ 	// Collect only the comparisons
+@@ -1327,6 +1367,7 @@ void write_output(int index, cover_t* cov, rpc::CallFlag flags, uint32 error, bo
+ 	uint32 signal_off = 0;
+ 	uint32 cover_off = 0;
+ 	uint32 comps_off = 0;
++	uint32 target_hits_off = 0;
+ 	if (flag_comparisons) {
+ 		comps_off = write_comparisons(fbb, cov);
+ 	} else {
+@@ -1342,6 +1383,12 @@ void write_output(int index, cover_t* cov, rpc::CallFlag flags, uint32 error, bo
+ 			else
+ 				cover_off = write_cover<uint32>(fbb, cov);
+ 		}
++		if (flag_collect_target_hits) {
++			if (is_kernel_64_bit)
++				target_hits_off = write_target_hits<uint64>(fbb, cov);
++			else
++				target_hits_off = write_target_hits<uint32>(fbb, cov);
++		}
+ 	}
+ 
+ 	rpc::CallInfoRawBuilder builder(*output_builder);
+@@ -1355,6 +1402,8 @@ void write_output(int index, cover_t* cov, rpc::CallFlag flags, uint32 error, bo
+ 		builder.add_cover(cover_off);
+ 	if (comps_off)
+ 		builder.add_comps(comps_off);
++	if (target_hits_off)
++		builder.add_target_hits(target_hits_off);
+ 	auto off = builder.Finish();
+ 	uint32 slot = output_data->completed.load(std::memory_order_relaxed);
+ 	if (slot >= kMaxCalls)
+diff --git a/executor/executor_runner.h b/executor/executor_runner.h
+index 88fc785dbf07f34aa72ac3f78efc8819c431d729..dd61e28781c39933d900cc86a47465eb0e88baf4 100644
+--- a/executor/executor_runner.h
++++ b/executor/executor_runner.h
+@@ -87,7 +87,7 @@ private:
+ class Proc
+ {
+ public:
+-	Proc(Connection& conn, const char* bin, ProcIDPool& proc_id_pool, int& restarting, const bool& corpus_triaged, int max_signal_fd, int cover_filter_fd,
++	Proc(Connection& conn, const char* bin, ProcIDPool& proc_id_pool, int& restarting, const bool& corpus_triaged, int max_signal_fd, int cover_filter_fd, int target_filter_fd,
+ 	     bool use_cover_edges, bool is_kernel_64_bit, uint32 slowdown, uint32 syscall_timeout_ms, uint32 program_timeout_ms)
+ 	    : conn_(conn),
+ 	      bin_(bin),
+@@ -97,6 +97,7 @@ public:
+ 	      corpus_triaged_(corpus_triaged),
+ 	      max_signal_fd_(max_signal_fd),
+ 	      cover_filter_fd_(cover_filter_fd),
++	      target_filter_fd_(target_filter_fd),
+ 	      use_cover_edges_(use_cover_edges),
+ 	      is_kernel_64_bit_(is_kernel_64_bit),
+ 	      slowdown_(slowdown),
+@@ -200,6 +201,7 @@ private:
+ 	const bool& corpus_triaged_;
+ 	const int max_signal_fd_;
+ 	const int cover_filter_fd_;
++	const int target_filter_fd_;
+ 	const bool use_cover_edges_;
+ 	const bool is_kernel_64_bit_;
+ 	const uint32 slowdown_;
+@@ -322,6 +324,7 @@ private:
+ 		    {resp_shmem_.FD(), kOutFd},
+ 		    {max_signal_fd_, kMaxSignalFd},
+ 		    {cover_filter_fd_, kCoverFilterFd},
++		    {target_filter_fd_, kTargetFilterFd},
+ 		};
+ 		const char* argv[] = {bin_, "exec", nullptr};
+ 		process_.emplace(argv, fds);
+@@ -543,9 +546,10 @@ public:
+ 		proc_id_pool_.emplace(num_procs);
+ 		int max_signal_fd = max_signal_ ? max_signal_->FD() : -1;
+ 		int cover_filter_fd = cover_filter_ ? cover_filter_->FD() : -1;
++		int target_filter_fd = target_filter_ ? target_filter_->FD() : -1;
+ 		for (int i = 0; i < num_procs; i++)
+ 			procs_.emplace_back(new Proc(conn, bin, *proc_id_pool_, restarting_, corpus_triaged_,
+-						     max_signal_fd, cover_filter_fd, use_cover_edges_, is_kernel_64_bit_, slowdown_,
++						     max_signal_fd, cover_filter_fd, target_filter_fd, use_cover_edges_, is_kernel_64_bit_, slowdown_,
+ 						     syscall_timeout_ms_, program_timeout_ms_));
+ 
+ 		for (;;)
+@@ -557,6 +561,7 @@ private:
+ 	const int vm_index_;
+ 	std::optional<CoverFilter> max_signal_;
+ 	std::optional<CoverFilter> cover_filter_;
++	std::optional<TargetFilter> target_filter_;
+ 	std::optional<ProcIDPool> proc_id_pool_;
+ 	std::vector<std::unique_ptr<Proc>> procs_;
+ 	std::deque<rpc::ExecRequestRawT> requests_;
+@@ -717,12 +722,18 @@ private:
+ 
+ 		rpc::InfoReplyRawT info_reply;
+ 		conn_.Recv(info_reply);
+-		debug("received info reply: covfilter=%zu\n", info_reply.cover_filter.size());
++		debug("received info reply: covfilter=%zu targets=%zu\n",
++		      info_reply.cover_filter.size(), info_reply.target_pcs.size());
+ 		if (!info_reply.cover_filter.empty()) {
+ 			cover_filter_.emplace();
+ 			for (auto pc : info_reply.cover_filter)
+ 				cover_filter_->Insert(pc);
+ 		}
++		if (!info_reply.target_pcs.empty()) {
++			target_filter_.emplace();
++			for (auto pc : info_reply.target_pcs)
++				target_filter_->Insert(pc);
++		}
+ 
+ 		Select::Prepare(conn_.FD());
+ 		return conn_reply.procs;
+@@ -939,8 +950,8 @@ static void runner(char** argv, int argc)
+ 	Connection conn(manager_addr, manager_port);
+ 
+ 	// This is required to make Subprocess fd remapping logic work.
+-	// kCoverFilterFd is the largest fd we set in the child processes.
+-	for (int fd = conn.FD(); fd < kCoverFilterFd;)
++	// kTargetFilterFd is the largest fd we set in the child processes.
++	for (int fd = conn.FD(); fd < kTargetFilterFd;)
+ 		fd = dup(fd);
+ 
+ 	Runner(conn, vm_index, argv[0]);
+diff --git a/executor/snapshot.h b/executor/snapshot.h
+index 71c0b3940fa4d8ddd4b07c720dd4859f6eb68b14..5b18e1f8c59040d1d9ea6101bf9b37bda65373f2 100644
+--- a/executor/snapshot.h
++++ b/executor/snapshot.h
+@@ -121,6 +121,12 @@ static void SnapshotSetup(char** argv, int argc)
+ 	while (ivs.hdr->state != rpc::SnapshotState::Handshake)
+ 		sleep_ms(10);
+ 	auto msg = flatbuffers::GetRoot<rpc::SnapshotHandshake>(ivs.input);
++	if (auto targets = msg->target_pcs(); targets && targets->size() != 0) {
++		target_filter.emplace();
++		for (auto pc : *targets)
++			target_filter->Insert(pc);
++		target_filter->Seal();
++	}
+ 	handshake_req req = {
+ 	    .magic = kInMagic,
+ 	    .use_cover_edges = msg->cover_edges(),
+diff --git a/executor/target_filter.h b/executor/target_filter.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..f536c144a4cdb533d6794b44b918b8766eeef569
+--- /dev/null
++++ b/executor/target_filter.h
+@@ -0,0 +1,101 @@
++// Copyright 2026 SyzPilot authors. All rights reserved.
++// Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
++
++// TargetFilter is a small exact PC-to-index hash table shared by syz-executor's
++// runner and worker processes. It deliberately avoids CoverFilter's lossy
++// low-bit compression because a false positive would corrupt reachability labels.
++class TargetFilter
++{
++public:
++	static constexpr size_t kMaxTargets = 256;
++
++	TargetFilter()
++	    : shmem_(kMemSize),
++	      table_(static_cast<Table*>(shmem_.Mem()))
++	{
++	}
++
++	TargetFilter(int fd, void* preferred = nullptr)
++	    : shmem_(fd, preferred, kMemSize, false),
++	      table_(static_cast<Table*>(shmem_.Mem()))
++	{
++	}
++
++	void Insert(uint64 pc)
++	{
++		if (pc == 0)
++			fail("zero target PC");
++		if (Find(pc) >= 0)
++			return;
++		if (table_->count >= kMaxTargets)
++			failmsg("too many target PCs", "count=%u max=%zu", table_->count, kMaxTargets);
++		const uint16 index = table_->count++;
++		table_->pcs[index] = pc;
++		size_t slot = Hash(pc);
++		while (table_->slots[slot] != 0)
++			slot = (slot + 1) & (kNumSlots - 1);
++		table_->slots[slot] = index + 1;
++	}
++
++	int Find(uint64 pc) const
++	{
++		size_t slot = Hash(pc);
++		for (size_t probe = 0; probe < kNumSlots; probe++) {
++			const uint16 entry = table_->slots[slot];
++			if (entry == 0)
++				return -1;
++			const size_t index = entry - 1;
++			if (table_->pcs[index] == pc)
++				return index;
++			slot = (slot + 1) & (kNumSlots - 1);
++		}
++		return -1;
++	}
++
++	size_t Count() const
++	{
++		return table_->count;
++	}
++
++	uint64 PC(size_t index) const
++	{
++		return table_->pcs[index];
++	}
++
++	void Seal()
++	{
++		shmem_.Seal();
++	}
++
++	int FD() const
++	{
++		return shmem_.FD();
++	}
++
++private:
++	static constexpr size_t kNumSlots = 512;
++	static constexpr size_t kMemSize = 4096;
++
++	struct Table {
++		uint32 count;
++		uint32 reserved;
++		uint64 pcs[kMaxTargets];
++		uint16 slots[kNumSlots];
++	};
++	static_assert(sizeof(Table) <= kMemSize);
++
++	static size_t Hash(uint64 pc)
++	{
++		pc >>= 3;
++		pc ^= pc >> 33;
++		pc *= 0xff51afd7ed558ccdULL;
++		pc ^= pc >> 33;
++		return pc & (kNumSlots - 1);
++	}
++
++	ShmemFile shmem_;
++	Table* table_;
++
++	TargetFilter(const TargetFilter&) = delete;
++	TargetFilter& operator=(const TargetFilter&) = delete;
++};
+diff --git a/executor/test.h b/executor/test.h
+index 8997ef52f420f3d319b780b8dcb04e15b922840f..a84d51f219e7dcc2d6b78795727780d1b2ca5f2b 100644
+--- a/executor/test.h
++++ b/executor/test.h
+@@ -275,6 +275,34 @@ static int test_cover_filter()
+ 	return ret;
+ }
+ 
++static int test_target_filter()
++{
++	TargetFilter filter;
++	std::vector<uint64> pcs = {
++	    0xffffffff81000100ull,
++	    0xffffffff81000103ull,
++	    0xffffffff82000000ull,
++	};
++	for (auto pc : pcs)
++		filter.Insert(pc);
++	TargetFilter child(filter.FD());
++	for (size_t i = 0; i < pcs.size(); i++) {
++		if (filter.Find(pcs[i]) != static_cast<int>(i) ||
++		    child.Find(pcs[i]) != static_cast<int>(i) ||
++		    child.PC(i) != pcs[i]) {
++			printf("target filter mismatch for %llu (0x%llx)\n", pcs[i], pcs[i]);
++			return 1;
++		}
++	}
++	for (auto pc : {0xffffffff810000ffull, 0xffffffff81000101ull, 0xffffffff83000000ull}) {
++		if (filter.Find(pc) >= 0 || child.Find(pc) >= 0) {
++			printf("target filter false positive for %llu (0x%llx)\n", pc, pc);
++			return 1;
++		}
++	}
++	return 0;
++}
++
+ static bool test_one_glob(const char* pattern, std::vector<std::string> want)
+ {
+ 	std::vector<std::string> got = Glob(pattern);
+@@ -379,6 +407,7 @@ static struct {
+     {"test_syzos", test_syzos},
+ #endif
+     {"test_cover_filter", test_cover_filter},
++    {"test_target_filter", test_target_filter},
+     {"test_glob", test_glob},
+ };
+ 
 diff --git a/pkg/debuglogger/logger.go b/pkg/debuglogger/logger.go
 new file mode 100644
-index 0000000..e75cbb6
+index 0000000000000000000000000000000000000000..e75cbb65e4ce0daae847e8b69e9f9f0f16af3fd5
 --- /dev/null
 +++ b/pkg/debuglogger/logger.go
 @@ -0,0 +1,133 @@
@@ -596,11 +1005,822 @@ index 0000000..e75cbb6
 +		dl.LogWriter = nil
 +	}
 +}
+diff --git a/pkg/flatrpc/conn.go b/pkg/flatrpc/conn.go
+index 47b2654937fcd166defc8a5ca3497a982939b10a..574fa9235cb9c27c37e5da9387ff31c775c8cf69 100644
+--- a/pkg/flatrpc/conn.go
++++ b/pkg/flatrpc/conn.go
+@@ -248,7 +248,7 @@ func verifyExecResult(res *ExecResultRaw, rawSize int) error {
+ 		return nil
+ 	}
+ 	var tmp ComparisonRaw
+-	// It's hard to impose good limit on each individual signal/cover/comps array,
++	// It's hard to impose a good limit on each individual array,
+ 	// so instead we count total memory size for all calls and check that it's not
+ 	// larger than the total message size.
+ 	callSize := func(call *CallInfoRaw) int {
+@@ -264,6 +264,9 @@ func verifyExecResult(res *ExecResultRaw, rawSize int) error {
+ 		if call.CompsLength() != 0 {
+ 			size += min(maxSize, call.CompsLength()) * int(unsafe.Sizeof(call.Comps(&tmp, 0)))
+ 		}
++		if call.TargetHitsLength() != 0 {
++			size += min(maxSize, call.TargetHitsLength()) * int(unsafe.Sizeof(call.TargetHits(0)))
++		}
+ 		return size
+ 	}
+ 	size := 0
+diff --git a/pkg/flatrpc/conn_test.go b/pkg/flatrpc/conn_test.go
+index 87d5e9a8a35359fe497e25b2c87ab110eddd43bb..2486641f7808421a5668bfe5b34e0392cf08cddc 100644
+--- a/pkg/flatrpc/conn_test.go
++++ b/pkg/flatrpc/conn_test.go
+@@ -204,7 +204,8 @@ func FuzzRecv(f *testing.F) {
+ 				Info: &ProgInfo{
+ 					ExtraRaw: []*CallInfo{
+ 						{
+-							Signal: []uint64{1, 2},
++							Signal:     []uint64{1, 2},
++							TargetHits: []uint64{3, 4},
+ 						},
+ 					},
+ 				},
+diff --git a/pkg/flatrpc/flatrpc.fbs b/pkg/flatrpc/flatrpc.fbs
+index 58dc7b292347b6fdd4890cf33fda1d2006e7ba69..1aa40004e9d53b51b65658003d19688b67c56be0 100644
+--- a/pkg/flatrpc/flatrpc.fbs
++++ b/pkg/flatrpc/flatrpc.fbs
+@@ -72,6 +72,7 @@ table InfoRequestRaw {
+ 
+ table InfoReplyRaw {
+ 	cover_filter		:[uint64];
++	target_pcs		:[uint64];
+ }
+ 
+ table FileInfoRaw {
+@@ -159,6 +160,7 @@ enum ExecFlag : uint64 (bit_flags) {
+ 	DedupCover,		// deduplicate coverage in executor
+ 	CollectComps,		// collect KCOV comparisons
+ 	Threaded,		// use multiple threads to mitigate blocked syscalls
++	CollectTargetHits,	// collect only configured target-PC hits
+ }
+ 
+ struct ExecOptsRaw {
+@@ -226,6 +228,9 @@ table CallInfoRaw {
+ 	cover			:[uint64];
+ 	// Comparison operands.
+ 	comps			:[ComparisonRaw];
++	// Configured target PCs observed in this call. Unlike cover, this remains
++	// compact and is filled only if ExecFlag.CollectTargetHits is set.
++	target_hits		:[uint64];
+ }
+ 
+ struct ComparisonRaw {
+@@ -300,6 +305,7 @@ table SnapshotHandshake {
+ 	features		:Feature;
+ 	env_flags		:ExecEnv;
+ 	sandbox_arg		:int64;
++	target_pcs		:[uint64];
+ }
+ 
+ table SnapshotRequest {
+diff --git a/pkg/flatrpc/flatrpc.go b/pkg/flatrpc/flatrpc.go
+index d04d5c53130fae518e3631a026d11065a6830084..dd5b384cf8287e86fbccd6080186263bde301fb3 100644
+--- a/pkg/flatrpc/flatrpc.go
++++ b/pkg/flatrpc/flatrpc.go
+@@ -383,27 +383,30 @@ func (v ExecEnv) String() string {
+ type ExecFlag uint64
+ 
+ const (
+-	ExecFlagCollectSignal ExecFlag = 1
+-	ExecFlagCollectCover  ExecFlag = 2
+-	ExecFlagDedupCover    ExecFlag = 4
+-	ExecFlagCollectComps  ExecFlag = 8
+-	ExecFlagThreaded      ExecFlag = 16
++	ExecFlagCollectSignal     ExecFlag = 1
++	ExecFlagCollectCover      ExecFlag = 2
++	ExecFlagDedupCover        ExecFlag = 4
++	ExecFlagCollectComps      ExecFlag = 8
++	ExecFlagThreaded          ExecFlag = 16
++	ExecFlagCollectTargetHits ExecFlag = 32
+ )
+ 
+ var EnumNamesExecFlag = map[ExecFlag]string{
+-	ExecFlagCollectSignal: "CollectSignal",
+-	ExecFlagCollectCover:  "CollectCover",
+-	ExecFlagDedupCover:    "DedupCover",
+-	ExecFlagCollectComps:  "CollectComps",
+-	ExecFlagThreaded:      "Threaded",
++	ExecFlagCollectSignal:     "CollectSignal",
++	ExecFlagCollectCover:      "CollectCover",
++	ExecFlagDedupCover:        "DedupCover",
++	ExecFlagCollectComps:      "CollectComps",
++	ExecFlagThreaded:          "Threaded",
++	ExecFlagCollectTargetHits: "CollectTargetHits",
+ }
+ 
+ var EnumValuesExecFlag = map[string]ExecFlag{
+-	"CollectSignal": ExecFlagCollectSignal,
+-	"CollectCover":  ExecFlagCollectCover,
+-	"DedupCover":    ExecFlagDedupCover,
+-	"CollectComps":  ExecFlagCollectComps,
+-	"Threaded":      ExecFlagThreaded,
++	"CollectSignal":     ExecFlagCollectSignal,
++	"CollectCover":      ExecFlagCollectCover,
++	"DedupCover":        ExecFlagDedupCover,
++	"CollectComps":      ExecFlagCollectComps,
++	"Threaded":          ExecFlagThreaded,
++	"CollectTargetHits": ExecFlagCollectTargetHits,
+ }
+ 
+ func (v ExecFlag) String() string {
+@@ -1216,6 +1219,7 @@ func InfoRequestRawEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
+ 
+ type InfoReplyRawT struct {
+ 	CoverFilter []uint64 `json:"cover_filter"`
++	TargetPcs   []uint64 `json:"target_pcs"`
+ }
+ 
+ func (t *InfoReplyRawT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
+@@ -1231,8 +1235,18 @@ func (t *InfoReplyRawT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT
+ 		}
+ 		coverFilterOffset = builder.EndVector(coverFilterLength)
+ 	}
++	targetPcsOffset := flatbuffers.UOffsetT(0)
++	if t.TargetPcs != nil {
++		targetPcsLength := len(t.TargetPcs)
++		InfoReplyRawStartTargetPcsVector(builder, targetPcsLength)
++		for j := targetPcsLength - 1; j >= 0; j-- {
++			builder.PrependUint64(t.TargetPcs[j])
++		}
++		targetPcsOffset = builder.EndVector(targetPcsLength)
++	}
+ 	InfoReplyRawStart(builder)
+ 	InfoReplyRawAddCoverFilter(builder, coverFilterOffset)
++	InfoReplyRawAddTargetPcs(builder, targetPcsOffset)
+ 	return InfoReplyRawEnd(builder)
+ }
+ 
+@@ -1242,6 +1256,11 @@ func (rcv *InfoReplyRaw) UnPackTo(t *InfoReplyRawT) {
+ 	for j := 0; j < coverFilterLength; j++ {
+ 		t.CoverFilter[j] = rcv.CoverFilter(j)
+ 	}
++	targetPcsLength := rcv.TargetPcsLength()
++	t.TargetPcs = make([]uint64, targetPcsLength)
++	for j := 0; j < targetPcsLength; j++ {
++		t.TargetPcs[j] = rcv.TargetPcs(j)
++	}
+ }
+ 
+ func (rcv *InfoReplyRaw) UnPack() *InfoReplyRawT {
+@@ -1306,8 +1325,34 @@ func (rcv *InfoReplyRaw) MutateCoverFilter(j int, n uint64) bool {
+ 	return false
+ }
+ 
++func (rcv *InfoReplyRaw) TargetPcs(j int) uint64 {
++	o := flatbuffers.UOffsetT(rcv._tab.Offset(6))
++	if o != 0 {
++		a := rcv._tab.Vector(o)
++		return rcv._tab.GetUint64(a + flatbuffers.UOffsetT(j*8))
++	}
++	return 0
++}
++
++func (rcv *InfoReplyRaw) TargetPcsLength() int {
++	o := flatbuffers.UOffsetT(rcv._tab.Offset(6))
++	if o != 0 {
++		return rcv._tab.VectorLen(o)
++	}
++	return 0
++}
++
++func (rcv *InfoReplyRaw) MutateTargetPcs(j int, n uint64) bool {
++	o := flatbuffers.UOffsetT(rcv._tab.Offset(6))
++	if o != 0 {
++		a := rcv._tab.Vector(o)
++		return rcv._tab.MutateUint64(a+flatbuffers.UOffsetT(j*8), n)
++	}
++	return false
++}
++
+ func InfoReplyRawStart(builder *flatbuffers.Builder) {
+-	builder.StartObject(1)
++	builder.StartObject(2)
+ }
+ func InfoReplyRawAddCoverFilter(builder *flatbuffers.Builder, coverFilter flatbuffers.UOffsetT) {
+ 	builder.PrependUOffsetTSlot(0, flatbuffers.UOffsetT(coverFilter), 0)
+@@ -1315,6 +1360,12 @@ func InfoReplyRawAddCoverFilter(builder *flatbuffers.Builder, coverFilter flatbu
+ func InfoReplyRawStartCoverFilterVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
+ 	return builder.StartVector(8, numElems, 8)
+ }
++func InfoReplyRawAddTargetPcs(builder *flatbuffers.Builder, targetPcs flatbuffers.UOffsetT) {
++	builder.PrependUOffsetTSlot(1, flatbuffers.UOffsetT(targetPcs), 0)
++}
++func InfoReplyRawStartTargetPcsVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
++	return builder.StartVector(8, numElems, 8)
++}
+ func InfoReplyRawEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
+ 	return builder.EndObject()
+ }
+@@ -2546,11 +2597,12 @@ func ExecutingMessageRawEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
+ }
+ 
+ type CallInfoRawT struct {
+-	Flags  CallFlag          `json:"flags"`
+-	Error  int32             `json:"error"`
+-	Signal []uint64          `json:"signal"`
+-	Cover  []uint64          `json:"cover"`
+-	Comps  []*ComparisonRawT `json:"comps"`
++	Flags      CallFlag          `json:"flags"`
++	Error      int32             `json:"error"`
++	Signal     []uint64          `json:"signal"`
++	Cover      []uint64          `json:"cover"`
++	Comps      []*ComparisonRawT `json:"comps"`
++	TargetHits []uint64          `json:"target_hits"`
+ }
+ 
+ func (t *CallInfoRawT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
+@@ -2584,12 +2636,22 @@ func (t *CallInfoRawT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
+ 		}
+ 		compsOffset = builder.EndVector(compsLength)
+ 	}
++	targetHitsOffset := flatbuffers.UOffsetT(0)
++	if t.TargetHits != nil {
++		targetHitsLength := len(t.TargetHits)
++		CallInfoRawStartTargetHitsVector(builder, targetHitsLength)
++		for j := targetHitsLength - 1; j >= 0; j-- {
++			builder.PrependUint64(t.TargetHits[j])
++		}
++		targetHitsOffset = builder.EndVector(targetHitsLength)
++	}
+ 	CallInfoRawStart(builder)
+ 	CallInfoRawAddFlags(builder, t.Flags)
+ 	CallInfoRawAddError(builder, t.Error)
+ 	CallInfoRawAddSignal(builder, signalOffset)
+ 	CallInfoRawAddCover(builder, coverOffset)
+ 	CallInfoRawAddComps(builder, compsOffset)
++	CallInfoRawAddTargetHits(builder, targetHitsOffset)
+ 	return CallInfoRawEnd(builder)
+ }
+ 
+@@ -2613,6 +2675,11 @@ func (rcv *CallInfoRaw) UnPackTo(t *CallInfoRawT) {
+ 		rcv.Comps(&x, j)
+ 		t.Comps[j] = x.UnPack()
+ 	}
++	targetHitsLength := rcv.TargetHitsLength()
++	t.TargetHits = make([]uint64, targetHitsLength)
++	for j := 0; j < targetHitsLength; j++ {
++		t.TargetHits[j] = rcv.TargetHits(j)
++	}
+ }
+ 
+ func (rcv *CallInfoRaw) UnPack() *CallInfoRawT {
+@@ -2746,8 +2813,34 @@ func (rcv *CallInfoRaw) CompsLength() int {
+ 	return 0
+ }
+ 
++func (rcv *CallInfoRaw) TargetHits(j int) uint64 {
++	o := flatbuffers.UOffsetT(rcv._tab.Offset(14))
++	if o != 0 {
++		a := rcv._tab.Vector(o)
++		return rcv._tab.GetUint64(a + flatbuffers.UOffsetT(j*8))
++	}
++	return 0
++}
++
++func (rcv *CallInfoRaw) TargetHitsLength() int {
++	o := flatbuffers.UOffsetT(rcv._tab.Offset(14))
++	if o != 0 {
++		return rcv._tab.VectorLen(o)
++	}
++	return 0
++}
++
++func (rcv *CallInfoRaw) MutateTargetHits(j int, n uint64) bool {
++	o := flatbuffers.UOffsetT(rcv._tab.Offset(14))
++	if o != 0 {
++		a := rcv._tab.Vector(o)
++		return rcv._tab.MutateUint64(a+flatbuffers.UOffsetT(j*8), n)
++	}
++	return false
++}
++
+ func CallInfoRawStart(builder *flatbuffers.Builder) {
+-	builder.StartObject(5)
++	builder.StartObject(6)
+ }
+ func CallInfoRawAddFlags(builder *flatbuffers.Builder, flags CallFlag) {
+ 	builder.PrependByteSlot(0, byte(flags), 0)
+@@ -2773,6 +2866,12 @@ func CallInfoRawAddComps(builder *flatbuffers.Builder, comps flatbuffers.UOffset
+ func CallInfoRawStartCompsVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
+ 	return builder.StartVector(32, numElems, 8)
+ }
++func CallInfoRawAddTargetHits(builder *flatbuffers.Builder, targetHits flatbuffers.UOffsetT) {
++	builder.PrependUOffsetTSlot(5, flatbuffers.UOffsetT(targetHits), 0)
++}
++func CallInfoRawStartTargetHitsVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
++	return builder.StartVector(8, numElems, 8)
++}
+ func CallInfoRawEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
+ 	return builder.EndObject()
+ }
+@@ -3475,20 +3574,30 @@ func SnapshotHeaderEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
+ }
+ 
+ type SnapshotHandshakeT struct {
+-	CoverEdges       bool    `json:"cover_edges"`
+-	Kernel64Bit      bool    `json:"kernel_64_bit"`
+-	Slowdown         int32   `json:"slowdown"`
+-	SyscallTimeoutMs int32   `json:"syscall_timeout_ms"`
+-	ProgramTimeoutMs int32   `json:"program_timeout_ms"`
+-	Features         Feature `json:"features"`
+-	EnvFlags         ExecEnv `json:"env_flags"`
+-	SandboxArg       int64   `json:"sandbox_arg"`
++	CoverEdges       bool     `json:"cover_edges"`
++	Kernel64Bit      bool     `json:"kernel_64_bit"`
++	Slowdown         int32    `json:"slowdown"`
++	SyscallTimeoutMs int32    `json:"syscall_timeout_ms"`
++	ProgramTimeoutMs int32    `json:"program_timeout_ms"`
++	Features         Feature  `json:"features"`
++	EnvFlags         ExecEnv  `json:"env_flags"`
++	SandboxArg       int64    `json:"sandbox_arg"`
++	TargetPcs        []uint64 `json:"target_pcs"`
+ }
+ 
+ func (t *SnapshotHandshakeT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
+ 	if t == nil {
+ 		return 0
+ 	}
++	targetPcsOffset := flatbuffers.UOffsetT(0)
++	if t.TargetPcs != nil {
++		targetPcsLength := len(t.TargetPcs)
++		SnapshotHandshakeStartTargetPcsVector(builder, targetPcsLength)
++		for j := targetPcsLength - 1; j >= 0; j-- {
++			builder.PrependUint64(t.TargetPcs[j])
++		}
++		targetPcsOffset = builder.EndVector(targetPcsLength)
++	}
+ 	SnapshotHandshakeStart(builder)
+ 	SnapshotHandshakeAddCoverEdges(builder, t.CoverEdges)
+ 	SnapshotHandshakeAddKernel64Bit(builder, t.Kernel64Bit)
+@@ -3498,6 +3607,7 @@ func (t *SnapshotHandshakeT) Pack(builder *flatbuffers.Builder) flatbuffers.UOff
+ 	SnapshotHandshakeAddFeatures(builder, t.Features)
+ 	SnapshotHandshakeAddEnvFlags(builder, t.EnvFlags)
+ 	SnapshotHandshakeAddSandboxArg(builder, t.SandboxArg)
++	SnapshotHandshakeAddTargetPcs(builder, targetPcsOffset)
+ 	return SnapshotHandshakeEnd(builder)
+ }
+ 
+@@ -3510,6 +3620,11 @@ func (rcv *SnapshotHandshake) UnPackTo(t *SnapshotHandshakeT) {
+ 	t.Features = rcv.Features()
+ 	t.EnvFlags = rcv.EnvFlags()
+ 	t.SandboxArg = rcv.SandboxArg()
++	targetPcsLength := rcv.TargetPcsLength()
++	t.TargetPcs = make([]uint64, targetPcsLength)
++	for j := 0; j < targetPcsLength; j++ {
++		t.TargetPcs[j] = rcv.TargetPcs(j)
++	}
+ }
+ 
+ func (rcv *SnapshotHandshake) UnPack() *SnapshotHandshakeT {
+@@ -3644,8 +3759,34 @@ func (rcv *SnapshotHandshake) MutateSandboxArg(n int64) bool {
+ 	return rcv._tab.MutateInt64Slot(18, n)
+ }
+ 
++func (rcv *SnapshotHandshake) TargetPcs(j int) uint64 {
++	o := flatbuffers.UOffsetT(rcv._tab.Offset(20))
++	if o != 0 {
++		a := rcv._tab.Vector(o)
++		return rcv._tab.GetUint64(a + flatbuffers.UOffsetT(j*8))
++	}
++	return 0
++}
++
++func (rcv *SnapshotHandshake) TargetPcsLength() int {
++	o := flatbuffers.UOffsetT(rcv._tab.Offset(20))
++	if o != 0 {
++		return rcv._tab.VectorLen(o)
++	}
++	return 0
++}
++
++func (rcv *SnapshotHandshake) MutateTargetPcs(j int, n uint64) bool {
++	o := flatbuffers.UOffsetT(rcv._tab.Offset(20))
++	if o != 0 {
++		a := rcv._tab.Vector(o)
++		return rcv._tab.MutateUint64(a+flatbuffers.UOffsetT(j*8), n)
++	}
++	return false
++}
++
+ func SnapshotHandshakeStart(builder *flatbuffers.Builder) {
+-	builder.StartObject(8)
++	builder.StartObject(9)
+ }
+ func SnapshotHandshakeAddCoverEdges(builder *flatbuffers.Builder, coverEdges bool) {
+ 	builder.PrependBoolSlot(0, coverEdges, false)
+@@ -3671,6 +3812,12 @@ func SnapshotHandshakeAddEnvFlags(builder *flatbuffers.Builder, envFlags ExecEnv
+ func SnapshotHandshakeAddSandboxArg(builder *flatbuffers.Builder, sandboxArg int64) {
+ 	builder.PrependInt64Slot(7, sandboxArg, 0)
+ }
++func SnapshotHandshakeAddTargetPcs(builder *flatbuffers.Builder, targetPcs flatbuffers.UOffsetT) {
++	builder.PrependUOffsetTSlot(8, flatbuffers.UOffsetT(targetPcs), 0)
++}
++func SnapshotHandshakeStartTargetPcsVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
++	return builder.StartVector(8, numElems, 8)
++}
+ func SnapshotHandshakeEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
+ 	return builder.EndObject()
+ }
+diff --git a/pkg/flatrpc/flatrpc.h b/pkg/flatrpc/flatrpc.h
+index def2648ad8feb734970baa8646eac775e675426a..e2ce9131d9d102e2f654eca8db3d9fcb8ff20e34 100644
+--- a/pkg/flatrpc/flatrpc.h
++++ b/pkg/flatrpc/flatrpc.h
+@@ -632,49 +632,34 @@ enum class ExecFlag : uint64_t {
+   DedupCover = 4ULL,
+   CollectComps = 8ULL,
+   Threaded = 16ULL,
++  CollectTargetHits = 32ULL,
+   NONE = 0,
+-  ANY = 31ULL
++  ANY = 63ULL
+ };
+ FLATBUFFERS_DEFINE_BITMASK_OPERATORS(ExecFlag, uint64_t)
+ 
+-inline const ExecFlag (&EnumValuesExecFlag())[5] {
++inline const ExecFlag (&EnumValuesExecFlag())[6] {
+   static const ExecFlag values[] = {
+     ExecFlag::CollectSignal,
+     ExecFlag::CollectCover,
+     ExecFlag::DedupCover,
+     ExecFlag::CollectComps,
+-    ExecFlag::Threaded
++    ExecFlag::Threaded,
++    ExecFlag::CollectTargetHits
+   };
+   return values;
+ }
+ 
+-inline const char * const *EnumNamesExecFlag() {
+-  static const char * const names[17] = {
+-    "CollectSignal",
+-    "CollectCover",
+-    "",
+-    "DedupCover",
+-    "",
+-    "",
+-    "",
+-    "CollectComps",
+-    "",
+-    "",
+-    "",
+-    "",
+-    "",
+-    "",
+-    "",
+-    "Threaded",
+-    nullptr
+-  };
+-  return names;
+-}
+-
+ inline const char *EnumNameExecFlag(ExecFlag e) {
+-  if (flatbuffers::IsOutRange(e, ExecFlag::CollectSignal, ExecFlag::Threaded)) return "";
+-  const size_t index = static_cast<size_t>(e) - static_cast<size_t>(ExecFlag::CollectSignal);
+-  return EnumNamesExecFlag()[index];
++  switch (e) {
++    case ExecFlag::CollectSignal: return "CollectSignal";
++    case ExecFlag::CollectCover: return "CollectCover";
++    case ExecFlag::DedupCover: return "DedupCover";
++    case ExecFlag::CollectComps: return "CollectComps";
++    case ExecFlag::Threaded: return "Threaded";
++    case ExecFlag::CollectTargetHits: return "CollectTargetHits";
++    default: return "";
++  }
+ }
+ 
+ enum class CallFlag : uint8_t {
+@@ -1333,21 +1318,28 @@ flatbuffers::Offset<InfoRequestRaw> CreateInfoRequestRaw(flatbuffers::FlatBuffer
+ struct InfoReplyRawT : public flatbuffers::NativeTable {
+   typedef InfoReplyRaw TableType;
+   std::vector<uint64_t> cover_filter{};
++  std::vector<uint64_t> target_pcs{};
+ };
+ 
+ struct InfoReplyRaw FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
+   typedef InfoReplyRawT NativeTableType;
+   typedef InfoReplyRawBuilder Builder;
+   enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+-    VT_COVER_FILTER = 4
++    VT_COVER_FILTER = 4,
++    VT_TARGET_PCS = 6
+   };
+   const flatbuffers::Vector<uint64_t> *cover_filter() const {
+     return GetPointer<const flatbuffers::Vector<uint64_t> *>(VT_COVER_FILTER);
+   }
++  const flatbuffers::Vector<uint64_t> *target_pcs() const {
++    return GetPointer<const flatbuffers::Vector<uint64_t> *>(VT_TARGET_PCS);
++  }
+   bool Verify(flatbuffers::Verifier &verifier) const {
+     return VerifyTableStart(verifier) &&
+            VerifyOffset(verifier, VT_COVER_FILTER) &&
+            verifier.VerifyVector(cover_filter()) &&
++           VerifyOffset(verifier, VT_TARGET_PCS) &&
++           verifier.VerifyVector(target_pcs()) &&
+            verifier.EndTable();
+   }
+   InfoReplyRawT *UnPack(const flatbuffers::resolver_function_t *_resolver = nullptr) const;
+@@ -1362,6 +1354,9 @@ struct InfoReplyRawBuilder {
+   void add_cover_filter(flatbuffers::Offset<flatbuffers::Vector<uint64_t>> cover_filter) {
+     fbb_.AddOffset(InfoReplyRaw::VT_COVER_FILTER, cover_filter);
+   }
++  void add_target_pcs(flatbuffers::Offset<flatbuffers::Vector<uint64_t>> target_pcs) {
++    fbb_.AddOffset(InfoReplyRaw::VT_TARGET_PCS, target_pcs);
++  }
+   explicit InfoReplyRawBuilder(flatbuffers::FlatBufferBuilder &_fbb)
+         : fbb_(_fbb) {
+     start_ = fbb_.StartTable();
+@@ -1375,19 +1370,24 @@ struct InfoReplyRawBuilder {
+ 
+ inline flatbuffers::Offset<InfoReplyRaw> CreateInfoReplyRaw(
+     flatbuffers::FlatBufferBuilder &_fbb,
+-    flatbuffers::Offset<flatbuffers::Vector<uint64_t>> cover_filter = 0) {
++    flatbuffers::Offset<flatbuffers::Vector<uint64_t>> cover_filter = 0,
++    flatbuffers::Offset<flatbuffers::Vector<uint64_t>> target_pcs = 0) {
+   InfoReplyRawBuilder builder_(_fbb);
++  builder_.add_target_pcs(target_pcs);
+   builder_.add_cover_filter(cover_filter);
+   return builder_.Finish();
+ }
+ 
+ inline flatbuffers::Offset<InfoReplyRaw> CreateInfoReplyRawDirect(
+     flatbuffers::FlatBufferBuilder &_fbb,
+-    const std::vector<uint64_t> *cover_filter = nullptr) {
++    const std::vector<uint64_t> *cover_filter = nullptr,
++    const std::vector<uint64_t> *target_pcs = nullptr) {
+   auto cover_filter__ = cover_filter ? _fbb.CreateVector<uint64_t>(*cover_filter) : 0;
++  auto target_pcs__ = target_pcs ? _fbb.CreateVector<uint64_t>(*target_pcs) : 0;
+   return rpc::CreateInfoReplyRaw(
+       _fbb,
+-      cover_filter__);
++      cover_filter__,
++      target_pcs__);
+ }
+ 
+ flatbuffers::Offset<InfoReplyRaw> CreateInfoReplyRaw(flatbuffers::FlatBufferBuilder &_fbb, const InfoReplyRawT *_o, const flatbuffers::rehasher_function_t *_rehasher = nullptr);
+@@ -2218,6 +2218,7 @@ struct CallInfoRawT : public flatbuffers::NativeTable {
+   std::vector<uint64_t> signal{};
+   std::vector<uint64_t> cover{};
+   std::vector<rpc::ComparisonRaw> comps{};
++  std::vector<uint64_t> target_hits{};
+ };
+ 
+ struct CallInfoRaw FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
+@@ -2228,7 +2229,8 @@ struct CallInfoRaw FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
+     VT_ERROR = 6,
+     VT_SIGNAL = 8,
+     VT_COVER = 10,
+-    VT_COMPS = 12
++    VT_COMPS = 12,
++    VT_TARGET_HITS = 14
+   };
+   rpc::CallFlag flags() const {
+     return static_cast<rpc::CallFlag>(GetField<uint8_t>(VT_FLAGS, 0));
+@@ -2245,6 +2247,9 @@ struct CallInfoRaw FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
+   const flatbuffers::Vector<const rpc::ComparisonRaw *> *comps() const {
+     return GetPointer<const flatbuffers::Vector<const rpc::ComparisonRaw *> *>(VT_COMPS);
+   }
++  const flatbuffers::Vector<uint64_t> *target_hits() const {
++    return GetPointer<const flatbuffers::Vector<uint64_t> *>(VT_TARGET_HITS);
++  }
+   bool Verify(flatbuffers::Verifier &verifier) const {
+     return VerifyTableStart(verifier) &&
+            VerifyField<uint8_t>(verifier, VT_FLAGS, 1) &&
+@@ -2255,6 +2260,8 @@ struct CallInfoRaw FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
+            verifier.VerifyVector(cover()) &&
+            VerifyOffset(verifier, VT_COMPS) &&
+            verifier.VerifyVector(comps()) &&
++           VerifyOffset(verifier, VT_TARGET_HITS) &&
++           verifier.VerifyVector(target_hits()) &&
+            verifier.EndTable();
+   }
+   CallInfoRawT *UnPack(const flatbuffers::resolver_function_t *_resolver = nullptr) const;
+@@ -2281,6 +2288,9 @@ struct CallInfoRawBuilder {
+   void add_comps(flatbuffers::Offset<flatbuffers::Vector<const rpc::ComparisonRaw *>> comps) {
+     fbb_.AddOffset(CallInfoRaw::VT_COMPS, comps);
+   }
++  void add_target_hits(flatbuffers::Offset<flatbuffers::Vector<uint64_t>> target_hits) {
++    fbb_.AddOffset(CallInfoRaw::VT_TARGET_HITS, target_hits);
++  }
+   explicit CallInfoRawBuilder(flatbuffers::FlatBufferBuilder &_fbb)
+         : fbb_(_fbb) {
+     start_ = fbb_.StartTable();
+@@ -2298,8 +2308,10 @@ inline flatbuffers::Offset<CallInfoRaw> CreateCallInfoRaw(
+     int32_t error = 0,
+     flatbuffers::Offset<flatbuffers::Vector<uint64_t>> signal = 0,
+     flatbuffers::Offset<flatbuffers::Vector<uint64_t>> cover = 0,
+-    flatbuffers::Offset<flatbuffers::Vector<const rpc::ComparisonRaw *>> comps = 0) {
++    flatbuffers::Offset<flatbuffers::Vector<const rpc::ComparisonRaw *>> comps = 0,
++    flatbuffers::Offset<flatbuffers::Vector<uint64_t>> target_hits = 0) {
+   CallInfoRawBuilder builder_(_fbb);
++  builder_.add_target_hits(target_hits);
+   builder_.add_comps(comps);
+   builder_.add_cover(cover);
+   builder_.add_signal(signal);
+@@ -2314,17 +2326,20 @@ inline flatbuffers::Offset<CallInfoRaw> CreateCallInfoRawDirect(
+     int32_t error = 0,
+     const std::vector<uint64_t> *signal = nullptr,
+     const std::vector<uint64_t> *cover = nullptr,
+-    const std::vector<rpc::ComparisonRaw> *comps = nullptr) {
++    const std::vector<rpc::ComparisonRaw> *comps = nullptr,
++    const std::vector<uint64_t> *target_hits = nullptr) {
+   auto signal__ = signal ? _fbb.CreateVector<uint64_t>(*signal) : 0;
+   auto cover__ = cover ? _fbb.CreateVector<uint64_t>(*cover) : 0;
+   auto comps__ = comps ? _fbb.CreateVectorOfStructs<rpc::ComparisonRaw>(*comps) : 0;
++  auto target_hits__ = target_hits ? _fbb.CreateVector<uint64_t>(*target_hits) : 0;
+   return rpc::CreateCallInfoRaw(
+       _fbb,
+       flags,
+       error,
+       signal__,
+       cover__,
+-      comps__);
++      comps__,
++      target_hits__);
+ }
+ 
+ flatbuffers::Offset<CallInfoRaw> CreateCallInfoRaw(flatbuffers::FlatBufferBuilder &_fbb, const CallInfoRawT *_o, const flatbuffers::rehasher_function_t *_rehasher = nullptr);
+@@ -2732,6 +2747,7 @@ struct SnapshotHandshakeT : public flatbuffers::NativeTable {
+   rpc::Feature features = static_cast<rpc::Feature>(0);
+   rpc::ExecEnv env_flags = static_cast<rpc::ExecEnv>(0);
+   int64_t sandbox_arg = 0;
++  std::vector<uint64_t> target_pcs{};
+ };
+ 
+ struct SnapshotHandshake FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
+@@ -2745,7 +2761,8 @@ struct SnapshotHandshake FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
+     VT_PROGRAM_TIMEOUT_MS = 12,
+     VT_FEATURES = 14,
+     VT_ENV_FLAGS = 16,
+-    VT_SANDBOX_ARG = 18
++    VT_SANDBOX_ARG = 18,
++    VT_TARGET_PCS = 20
+   };
+   bool cover_edges() const {
+     return GetField<uint8_t>(VT_COVER_EDGES, 0) != 0;
+@@ -2771,6 +2788,9 @@ struct SnapshotHandshake FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
+   int64_t sandbox_arg() const {
+     return GetField<int64_t>(VT_SANDBOX_ARG, 0);
+   }
++  const flatbuffers::Vector<uint64_t> *target_pcs() const {
++    return GetPointer<const flatbuffers::Vector<uint64_t> *>(VT_TARGET_PCS);
++  }
+   bool Verify(flatbuffers::Verifier &verifier) const {
+     return VerifyTableStart(verifier) &&
+            VerifyField<uint8_t>(verifier, VT_COVER_EDGES, 1) &&
+@@ -2781,6 +2801,8 @@ struct SnapshotHandshake FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
+            VerifyField<uint64_t>(verifier, VT_FEATURES, 8) &&
+            VerifyField<uint64_t>(verifier, VT_ENV_FLAGS, 8) &&
+            VerifyField<int64_t>(verifier, VT_SANDBOX_ARG, 8) &&
++           VerifyOffset(verifier, VT_TARGET_PCS) &&
++           verifier.VerifyVector(target_pcs()) &&
+            verifier.EndTable();
+   }
+   SnapshotHandshakeT *UnPack(const flatbuffers::resolver_function_t *_resolver = nullptr) const;
+@@ -2816,6 +2838,9 @@ struct SnapshotHandshakeBuilder {
+   void add_sandbox_arg(int64_t sandbox_arg) {
+     fbb_.AddElement<int64_t>(SnapshotHandshake::VT_SANDBOX_ARG, sandbox_arg, 0);
+   }
++  void add_target_pcs(flatbuffers::Offset<flatbuffers::Vector<uint64_t>> target_pcs) {
++    fbb_.AddOffset(SnapshotHandshake::VT_TARGET_PCS, target_pcs);
++  }
+   explicit SnapshotHandshakeBuilder(flatbuffers::FlatBufferBuilder &_fbb)
+         : fbb_(_fbb) {
+     start_ = fbb_.StartTable();
+@@ -2836,11 +2861,13 @@ inline flatbuffers::Offset<SnapshotHandshake> CreateSnapshotHandshake(
+     int32_t program_timeout_ms = 0,
+     rpc::Feature features = static_cast<rpc::Feature>(0),
+     rpc::ExecEnv env_flags = static_cast<rpc::ExecEnv>(0),
+-    int64_t sandbox_arg = 0) {
++    int64_t sandbox_arg = 0,
++    flatbuffers::Offset<flatbuffers::Vector<uint64_t>> target_pcs = 0) {
+   SnapshotHandshakeBuilder builder_(_fbb);
+   builder_.add_sandbox_arg(sandbox_arg);
+   builder_.add_env_flags(env_flags);
+   builder_.add_features(features);
++  builder_.add_target_pcs(target_pcs);
+   builder_.add_program_timeout_ms(program_timeout_ms);
+   builder_.add_syscall_timeout_ms(syscall_timeout_ms);
+   builder_.add_slowdown(slowdown);
+@@ -2849,6 +2876,31 @@ inline flatbuffers::Offset<SnapshotHandshake> CreateSnapshotHandshake(
+   return builder_.Finish();
+ }
+ 
++inline flatbuffers::Offset<SnapshotHandshake> CreateSnapshotHandshakeDirect(
++    flatbuffers::FlatBufferBuilder &_fbb,
++    bool cover_edges = false,
++    bool kernel_64_bit = false,
++    int32_t slowdown = 0,
++    int32_t syscall_timeout_ms = 0,
++    int32_t program_timeout_ms = 0,
++    rpc::Feature features = static_cast<rpc::Feature>(0),
++    rpc::ExecEnv env_flags = static_cast<rpc::ExecEnv>(0),
++    int64_t sandbox_arg = 0,
++    const std::vector<uint64_t> *target_pcs = nullptr) {
++  auto target_pcs__ = target_pcs ? _fbb.CreateVector<uint64_t>(*target_pcs) : 0;
++  return rpc::CreateSnapshotHandshake(
++      _fbb,
++      cover_edges,
++      kernel_64_bit,
++      slowdown,
++      syscall_timeout_ms,
++      program_timeout_ms,
++      features,
++      env_flags,
++      sandbox_arg,
++      target_pcs__);
++}
++
+ flatbuffers::Offset<SnapshotHandshake> CreateSnapshotHandshake(flatbuffers::FlatBufferBuilder &_fbb, const SnapshotHandshakeT *_o, const flatbuffers::rehasher_function_t *_rehasher = nullptr);
+ 
+ struct SnapshotRequestT : public flatbuffers::NativeTable {
+@@ -3145,6 +3197,7 @@ inline void InfoReplyRaw::UnPackTo(InfoReplyRawT *_o, const flatbuffers::resolve
+   (void)_o;
+   (void)_resolver;
+   { auto _e = cover_filter(); if (_e) { _o->cover_filter.resize(_e->size()); for (flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->cover_filter[_i] = _e->Get(_i); } } }
++  { auto _e = target_pcs(); if (_e) { _o->target_pcs.resize(_e->size()); for (flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->target_pcs[_i] = _e->Get(_i); } } }
+ }
+ 
+ inline flatbuffers::Offset<InfoReplyRaw> InfoReplyRaw::Pack(flatbuffers::FlatBufferBuilder &_fbb, const InfoReplyRawT* _o, const flatbuffers::rehasher_function_t *_rehasher) {
+@@ -3156,9 +3209,11 @@ inline flatbuffers::Offset<InfoReplyRaw> CreateInfoReplyRaw(flatbuffers::FlatBuf
+   (void)_o;
+   struct _VectorArgs { flatbuffers::FlatBufferBuilder *__fbb; const InfoReplyRawT* __o; const flatbuffers::rehasher_function_t *__rehasher; } _va = { &_fbb, _o, _rehasher}; (void)_va;
+   auto _cover_filter = _o->cover_filter.size() ? _fbb.CreateVector(_o->cover_filter) : 0;
++  auto _target_pcs = _o->target_pcs.size() ? _fbb.CreateVector(_o->target_pcs) : 0;
+   return rpc::CreateInfoReplyRaw(
+       _fbb,
+-      _cover_filter);
++      _cover_filter,
++      _target_pcs);
+ }
+ 
+ inline FileInfoRawT *FileInfoRaw::UnPack(const flatbuffers::resolver_function_t *_resolver) const {
+@@ -3501,6 +3556,7 @@ inline void CallInfoRaw::UnPackTo(CallInfoRawT *_o, const flatbuffers::resolver_
+   { auto _e = signal(); if (_e) { _o->signal.resize(_e->size()); for (flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->signal[_i] = _e->Get(_i); } } }
+   { auto _e = cover(); if (_e) { _o->cover.resize(_e->size()); for (flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->cover[_i] = _e->Get(_i); } } }
+   { auto _e = comps(); if (_e) { _o->comps.resize(_e->size()); for (flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->comps[_i] = *_e->Get(_i); } } }
++  { auto _e = target_hits(); if (_e) { _o->target_hits.resize(_e->size()); for (flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->target_hits[_i] = _e->Get(_i); } } }
+ }
+ 
+ inline flatbuffers::Offset<CallInfoRaw> CallInfoRaw::Pack(flatbuffers::FlatBufferBuilder &_fbb, const CallInfoRawT* _o, const flatbuffers::rehasher_function_t *_rehasher) {
+@@ -3516,13 +3572,15 @@ inline flatbuffers::Offset<CallInfoRaw> CreateCallInfoRaw(flatbuffers::FlatBuffe
+   auto _signal = _o->signal.size() ? _fbb.CreateVector(_o->signal) : 0;
+   auto _cover = _o->cover.size() ? _fbb.CreateVector(_o->cover) : 0;
+   auto _comps = _o->comps.size() ? _fbb.CreateVectorOfStructs(_o->comps) : 0;
++  auto _target_hits = _o->target_hits.size() ? _fbb.CreateVector(_o->target_hits) : 0;
+   return rpc::CreateCallInfoRaw(
+       _fbb,
+       _flags,
+       _error,
+       _signal,
+       _cover,
+-      _comps);
++      _comps,
++      _target_hits);
+ }
+ 
+ inline ProgInfoRawT::ProgInfoRawT(const ProgInfoRawT &o)
+@@ -3717,6 +3775,7 @@ inline void SnapshotHandshake::UnPackTo(SnapshotHandshakeT *_o, const flatbuffer
+   { auto _e = features(); _o->features = _e; }
+   { auto _e = env_flags(); _o->env_flags = _e; }
+   { auto _e = sandbox_arg(); _o->sandbox_arg = _e; }
++  { auto _e = target_pcs(); if (_e) { _o->target_pcs.resize(_e->size()); for (flatbuffers::uoffset_t _i = 0; _i < _e->size(); _i++) { _o->target_pcs[_i] = _e->Get(_i); } } }
+ }
+ 
+ inline flatbuffers::Offset<SnapshotHandshake> SnapshotHandshake::Pack(flatbuffers::FlatBufferBuilder &_fbb, const SnapshotHandshakeT* _o, const flatbuffers::rehasher_function_t *_rehasher) {
+@@ -3735,6 +3794,7 @@ inline flatbuffers::Offset<SnapshotHandshake> CreateSnapshotHandshake(flatbuffer
+   auto _features = _o->features;
+   auto _env_flags = _o->env_flags;
+   auto _sandbox_arg = _o->sandbox_arg;
++  auto _target_pcs = _o->target_pcs.size() ? _fbb.CreateVector(_o->target_pcs) : 0;
+   return rpc::CreateSnapshotHandshake(
+       _fbb,
+       _cover_edges,
+@@ -3744,7 +3804,8 @@ inline flatbuffers::Offset<SnapshotHandshake> CreateSnapshotHandshake(flatbuffer
+       _program_timeout_ms,
+       _features,
+       _env_flags,
+-      _sandbox_arg);
++      _sandbox_arg,
++      _target_pcs);
+ }
+ 
+ inline SnapshotRequestT *SnapshotRequest::UnPack(const flatbuffers::resolver_function_t *_resolver) const {
 diff --git a/pkg/flatrpc/helpers.go b/pkg/flatrpc/helpers.go
-index 5aa5cfe..6e6495e 100644
+index 5aa5cfe74cf62a5a426f48fb005c2e1d11347eb3..a5590b7250bed72d5f5e2c377d030235706fcc5e 100644
 --- a/pkg/flatrpc/helpers.go
 +++ b/pkg/flatrpc/helpers.go
-@@ -73,6 +73,22 @@ func (ci *CallInfo) clone() *CallInfo {
+@@ -70,9 +70,27 @@ func (ci *CallInfo) clone() *CallInfo {
+ 	ret.Signal = slices.Clone(ret.Signal)
+ 	ret.Cover = slices.Clone(ret.Cover)
+ 	ret.Comps = slices.Clone(ret.Comps)
++	ret.TargetHits = slices.Clone(ret.TargetHits)
  	return &ret
  }
  
@@ -616,6 +1836,7 @@ index 5aa5cfe..6e6495e 100644
 +		info.Extra.Flags |= extra.Flags
 +		info.Extra.Cover = append(info.Extra.Cover, extra.Cover...)
 +		info.Extra.Signal = append(info.Extra.Signal, extra.Signal...)
++		info.Extra.TargetHits = append(info.Extra.TargetHits, extra.TargetHits...)
 +	}
 +	info.ExtraRaw = nil
 +}
@@ -625,10 +1846,10 @@ index 5aa5cfe..6e6495e 100644
  	for i := 0; i < calls; i++ {
 diff --git a/pkg/flatrpc/helpers_test.go b/pkg/flatrpc/helpers_test.go
 new file mode 100644
-index 0000000..58b1fc3
+index 0000000000000000000000000000000000000000..41b862939efc5d170ab27f72952ac73e328cc939
 --- /dev/null
 +++ b/pkg/flatrpc/helpers_test.go
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,62 @@
 +// Copyright 2026 syzkaller project authors. All rights reserved.
 +// Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
 +
@@ -642,11 +1863,17 @@ index 0000000..58b1fc3
 +func TestMergeExtraRawPreservesOverflow(t *testing.T) {
 +	info := &ProgInfo{
 +		ExtraRaw: []*CallInfo{
-+			{Flags: CallFlagExecuted, Cover: []uint64{1}, Signal: []uint64{2}},
 +			{
-+				Flags:  CallFlagFinished | CallFlagCoverageOverflow,
-+				Cover:  []uint64{3},
-+				Signal: []uint64{4},
++				Flags:      CallFlagExecuted,
++				Cover:      []uint64{1},
++				Signal:     []uint64{2},
++				TargetHits: []uint64{5},
++			},
++			{
++				Flags:      CallFlagFinished | CallFlagCoverageOverflow,
++				Cover:      []uint64{3},
++				Signal:     []uint64{4},
++				TargetHits: []uint64{6},
 +			},
 +		},
 +	}
@@ -665,13 +1892,29 @@ index 0000000..58b1fc3
 +	if !slices.Equal(info.Extra.Signal, []uint64{2, 4}) {
 +		t.Fatalf("signal = %v, want [2 4]", info.Extra.Signal)
 +	}
++	if !slices.Equal(info.Extra.TargetHits, []uint64{5, 6}) {
++		t.Fatalf("target hits = %v, want [5 6]", info.Extra.TargetHits)
++	}
 +	if info.ExtraRaw != nil {
 +		t.Fatalf("ExtraRaw was not cleared: %v", info.ExtraRaw)
 +	}
 +}
++
++func TestProgInfoCloneTargetHits(t *testing.T) {
++	original := &ProgInfo{
++		Calls: []*CallInfo{{TargetHits: []uint64{1}}},
++		Extra: &CallInfo{TargetHits: []uint64{2}},
++	}
++	cloned := original.Clone()
++	cloned.Calls[0].TargetHits[0] = 3
++	cloned.Extra.TargetHits[0] = 4
++	if original.Calls[0].TargetHits[0] != 1 || original.Extra.TargetHits[0] != 2 {
++		t.Fatalf("Clone shares target-hit storage with the original: %+v", original)
++	}
++}
 diff --git a/pkg/fuzzer/directed_corpus.go b/pkg/fuzzer/directed_corpus.go
 new file mode 100644
-index 0000000..8435e31
+index 0000000000000000000000000000000000000000..8435e312738f4596e3ca369687a2661f491245f5
 --- /dev/null
 +++ b/pkg/fuzzer/directed_corpus.go
 @@ -0,0 +1,173 @@
@@ -850,7 +2093,7 @@ index 0000000..8435e31
 +}
 diff --git a/pkg/fuzzer/directed_corpus_test.go b/pkg/fuzzer/directed_corpus_test.go
 new file mode 100644
-index 0000000..133fe58
+index 0000000000000000000000000000000000000000..133fe585d4299084167adfb559b7bbe2209d9d38
 --- /dev/null
 +++ b/pkg/fuzzer/directed_corpus_test.go
 @@ -0,0 +1,279 @@
@@ -1134,7 +2377,7 @@ index 0000000..133fe58
 +	return programs
 +}
 diff --git a/pkg/fuzzer/fuzzer.go b/pkg/fuzzer/fuzzer.go
-index 17c5af4..5f4efb2 100644
+index 17c5af47be8fbbf94ac0c4ba56c3e4e806b5a48e..5c65675a3c58ec5b35e5418d37d6f1945dfb0564 100644
 --- a/pkg/fuzzer/fuzzer.go
 +++ b/pkg/fuzzer/fuzzer.go
 @@ -4,21 +4,35 @@
@@ -1226,7 +2469,7 @@ index 17c5af4..5f4efb2 100644
  	f.execQueues = newExecQueues(f)
  	f.updateChoiceTable(nil)
  	go f.choiceTableUpdater()
-@@ -72,12 +112,442 @@ func NewFuzzer(ctx context.Context, cfg *Config, rnd *rand.Rand,
+@@ -72,12 +112,474 @@ func NewFuzzer(ctx context.Context, cfg *Config, rnd *rand.Rand,
  	return f
  }
  
@@ -1246,10 +2489,13 @@ index 17c5af4..5f4efb2 100644
 +		}
 +		fuzzer.TargetAddrStrs = targetAddrStrs
 +		fuzzer.TargetAddrVals = targetAddrVals
-+		lastTargetAddrStr := fuzzer.TargetAddrStrs[len(fuzzer.TargetAddrStrs)-1]
-+		osutil.MkdirAll(filepath.Join(fuzzer.Config.SyzPilotCfg.DumpDir, lastTargetAddrStr, "programs"))
-+		osutil.MkdirAll(filepath.Join(fuzzer.Config.SyzPilotCfg.DumpDir,
-+			lastTargetAddrStr, "coverage"))
++		if fuzzer.Config.SyzPilotCfg.PersistTargetEvidence {
++			lastTargetAddrStr := fuzzer.TargetAddrStrs[len(fuzzer.TargetAddrStrs)-1]
++			osutil.MkdirAll(filepath.Join(fuzzer.Config.SyzPilotCfg.DumpDir,
++				lastTargetAddrStr, "programs"))
++			osutil.MkdirAll(filepath.Join(fuzzer.Config.SyzPilotCfg.DumpDir,
++				lastTargetAddrStr, "coverage"))
++		}
 +	}
 +	if fuzzer.Config.SyzPilotCfg.EnableDiverseCover {
 +		fuzzer.DiverseCoverEnabled.Store(true)
@@ -1259,14 +2505,18 @@ index 17c5af4..5f4efb2 100644
 +				fuzzer.DiverseCoverTargets[target] = true
 +			}
 +		} else {
-+			// Set smashQueue and genFuzzQueue to true by default
++			// Sample every program-execution source that does not already collect
++			// raw coverage unconditionally. Native triage remains outside this
++			// policy, and comparison collection is mutually exclusive with cover.
 +			fuzzer.DiverseCoverTargets = map[string]bool{
-+				"exec smash":   true,
-+				"exec hints":   true,
-+				"exec inject":  true,
-+				"exec gen":     true,
-+				"exec fuzz":    true,
-+				"exec collide": true,
++				"exec candidate": true,
++				"exec minimize":  true,
++				"exec smash":     true,
++				"exec hints":     true,
++				"exec inject":    true,
++				"exec gen":       true,
++				"exec fuzz":      true,
++				"exec collide":   true,
 +			}
 +		}
 +		fuzzer.DiverseCoverRatio.Store(&fuzzer.Config.SyzPilotCfg.DiverseCoverRatio)
@@ -1357,7 +2607,25 @@ index 17c5af4..5f4efb2 100644
 +		"Number of sampled argument mutations focused on a preferred syscall", stat.Simple, stat.NoGraph)
 +	fuzzer.statPrefMutationFallback = stat.New("preferred syscall mutation fallback",
 +		"Number of sampled preferred mutations that fell back to native call selection", stat.Simple, stat.NoGraph)
++	fuzzer.statDiverseCoverSelected = stat.New("diverse cover selected",
++		"Number of requests selected for extra raw coverage by the diverse-cover policy",
++		stat.Simple, stat.NoGraph)
 +	if len(fuzzer.TargetAddrStrs) != 0 {
++		fuzzer.statRawCoverExecutions = stat.New("raw cover executions",
++			"Number of executions that returned at least one raw KCOV PC",
++			stat.Simple, stat.NoGraph)
++		fuzzer.statRawCoverEntries = stat.New("raw cover entries",
++			"Number of raw KCOV PC entries returned across all executions",
++			stat.Simple, stat.NoGraph)
++		fuzzer.statReachabilityValid = stat.New("reachability valid labels",
++			"Number of complete reachability observations that produced a valid training label",
++			stat.Simple, stat.NoGraph)
++		fuzzer.statTargetHitObservations = stat.New("executor target observations",
++			"Number of executions observed through compact executor-side target hits",
++			stat.Simple, stat.NoGraph)
++		fuzzer.statTargetHitEntries = stat.New("executor target hits",
++			"Number of configured target-PC hits returned by the executor",
++			stat.Simple, stat.NoGraph)
 +		fuzzer.statReachabilityIncomplete = stat.New("reachability incomplete execution",
 +			"Number of non-successful or unfinished executions excluded from reachability labels",
 +			stat.Simple, stat.NoGraph)
@@ -1370,14 +2638,21 @@ index 17c5af4..5f4efb2 100644
 +			"Number of excluded truncated programs in which no configured target was observed",
 +			stat.Simple, stat.NoGraph)
 +		fuzzer.statReachability = make([]*stat.Val, len(fuzzer.TargetAddrStrs)+1)
++		fuzzer.statReachabilityDeepest = make([]*stat.Val, len(fuzzer.TargetAddrStrs)+1)
 +		fuzzer.statReachability[0] = stat.New("reachability unreachable", "Number of programs reachable to no target",
 +			stat.Simple, stat.NoGraph)
++		fuzzer.statReachabilityDeepest[0] = stat.New("reachability deepest unreachable",
++			"Number of valid labels normalized to the Unreachable class", stat.Simple, stat.NoGraph)
 +		for i := 0; i < len(fuzzer.TargetAddrStrs); i++ {
 +			fuzzer.statReachability[i+1] = stat.New(fmt.Sprintf("reachability %s", fuzzer.TargetAddrStrs[i]), fmt.Sprintf("Number of programs reachable to %s", fuzzer.TargetAddrStrs[i]),
 +				stat.Simple, stat.NoGraph)
 +			fuzzer.statReachabilityTruncatedDeepest[i+1] = stat.New(
 +				fmt.Sprintf("reachability truncated deepest %s", fuzzer.TargetAddrStrs[i]),
 +				fmt.Sprintf("Number of excluded truncated programs whose deepest observed target was %s", fuzzer.TargetAddrStrs[i]),
++				stat.Simple, stat.NoGraph)
++			fuzzer.statReachabilityDeepest[i+1] = stat.New(
++				fmt.Sprintf("reachability deepest %s", fuzzer.TargetAddrStrs[i]),
++				fmt.Sprintf("Number of valid labels normalized to deepest target %s", fuzzer.TargetAddrStrs[i]),
 +				stat.Simple, stat.NoGraph)
 +		}
 +	}
@@ -1669,7 +2944,7 @@ index 17c5af4..5f4efb2 100644
  }
  
  func newExecQueues(fuzzer *Fuzzer) execQueues {
-@@ -96,16 +566,107 @@ func newExecQueues(fuzzer *Fuzzer) execQueues {
+@@ -96,16 +598,70 @@ func newExecQueues(fuzzer *Fuzzer) execQueues {
  		skipQueue = 2
  	}
  	// Sources are listed in the order, in which they will be polled.
@@ -1702,37 +2977,6 @@ index 17c5af4..5f4efb2 100644
  	return ret
  }
  
-+// Designed for: enable diverse coverage collection at the beggining of fuzzing
-+// And turn of it later. So we need runtime control methods.
-+// func (fuzzer *Fuzzer) setDiverseCover(enabled bool) {
-+// 	fuzzer.DiverseCoverEnabled.Store(enabled)
-+// 	debuglogger.Log(false, "Diverse dump %s",
-+// 		map[bool]string{
-+// 			true:  "enabled",
-+// 			false: "disabled",
-+// 		}[enabled])
-+// }
-+
-+// func (fuzzer *Fuzzer) setDiverseCoverRatio(ratio float64) {
-+// 	if ratio < 0 || ratio > 1 {
-+// 		ratio = 0.5
-+// 	}
-+// 	fuzzer.DiverseCoverRatio.Store(&ratio)
-+// 	debuglogger.Log(false, "Diverse dump ratio set to %f", ratio)
-+// }
-+
-+// func (fuzzer *Fuzzer) setDiverseCoverTargets(targets []string) {
-+// 	fuzzer.DiverseCoverMu.Lock()
-+// 	defer fuzzer.DiverseCoverMu.Unlock()
-+// 	for origTarget := range fuzzer.DiverseCoverTargets {
-+// 		fuzzer.DiverseCoverTargets[origTarget] = false
-+// 	}
-+// 	for _, target := range targets {
-+// 		fuzzer.DiverseCoverTargets[target] = true
-+// 	}
-+// 	debuglogger.Log(false, "Diverse dump targets set to %v", targets)
-+// }
-+
 +func (fuzzer *Fuzzer) shouldCollectCoverage(queueType string) bool {
 +	if !fuzzer.DiverseCoverEnabled.Load() {
 +		return false
@@ -1756,18 +3000,12 @@ index 17c5af4..5f4efb2 100644
 +
 +func (fuzzer *Fuzzer) setFlagsForDiverseCover(queueType string, baseFlags flatrpc.ExecFlag) flatrpc.ExecOpts {
 +	flags := baseFlags
-+
-+	// Training and observation-only controls require raw KCOV reachability
-+	// evidence on every eligible execution.
-+	reachabilityCoverage := (fuzzer.Config.SyzPilotCfg.ReachFilter.Enable ||
-+		fuzzer.Config.SyzPilotCfg.ObserveTargetCoverage ||
-+		fuzzer.Config.SyzPilotCfg.DirectedCorpus.Enable) &&
-+		len(fuzzer.TargetAddrVals) > 0
-+	diverseCoverage := fuzzer.shouldCollectCoverage(queueType)
-+	if flags&flatrpc.ExecFlagCollectComps == 0 &&
-+		(reachabilityCoverage || diverseCoverage) {
++	if flags&flatrpc.ExecFlagCollectComps == 0 && fuzzer.shouldCollectCoverage(queueType) {
 +		flags |= flatrpc.ExecFlagCollectCover
-+		debuglogger.Log(false, "SyzPilot collecting reachability evidence for queue: %s", queueType)
++		if fuzzer.statDiverseCoverSelected != nil {
++			fuzzer.statDiverseCoverSelected.Add(1)
++		}
++		debuglogger.Log(false, "SyzPilot collecting diverse coverage for queue: %s", queueType)
 +	}
 +
 +	return flatrpc.ExecOpts{
@@ -1778,25 +3016,19 @@ index 17c5af4..5f4efb2 100644
  func (fuzzer *Fuzzer) CandidatesToTriage() int {
  	return fuzzer.statCandidates.Val() + fuzzer.statJobsTriageCandidate.Val()
  }
-@@ -124,6 +685,17 @@ func (fuzzer *Fuzzer) executeWithFlags(executor queue.Executor, req *queue.Reque
+@@ -124,6 +680,11 @@ func (fuzzer *Fuzzer) executeWithFlags(executor queue.Executor, req *queue.Reque
  }
  
  func (fuzzer *Fuzzer) prepare(req *queue.Request, flags ProgFlags, attempt int) {
-+	// Every normal execution used for training or observation-only control
-+	// metrics needs reachability evidence, including startup candidates and
-+	// minimization retries. Comparison collection remains mutually exclusive
-+	// with coverage.
-+	if (fuzzer.Config.SyzPilotCfg.ReachFilter.Enable ||
-+		fuzzer.Config.SyzPilotCfg.ObserveTargetCoverage ||
-+		fuzzer.Config.SyzPilotCfg.DirectedCorpus.Enable) &&
-+		len(fuzzer.TargetAddrVals) > 0 &&
-+		req.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectComps == 0 {
-+		req.ExecOpts.ExecFlags |= flatrpc.ExecFlagCollectCover
++	if fuzzer.Config.SyzPilotCfg.UseExecutorTargetHits() &&
++		req.ExecOpts.ExecFlags&
++			(flatrpc.ExecFlagCollectComps|flatrpc.ExecFlagCollectCover) == 0 {
++		req.ExecOpts.ExecFlags |= flatrpc.ExecFlagCollectTargetHits
 +	}
  	req.OnDone(func(req *queue.Request, res *queue.Result) bool {
  		return fuzzer.processResult(req, res, flags, attempt)
  	})
-@@ -135,6 +707,15 @@ func (fuzzer *Fuzzer) enqueue(executor queue.Executor, req *queue.Request, flags
+@@ -135,6 +696,15 @@ func (fuzzer *Fuzzer) enqueue(executor queue.Executor, req *queue.Request, flags
  }
  
  func (fuzzer *Fuzzer) processResult(req *queue.Request, res *queue.Result, flags ProgFlags, attempt int) bool {
@@ -1812,7 +3044,7 @@ index 17c5af4..5f4efb2 100644
  	// If we are already triaging this exact prog, this is flaky coverage.
  	// Hanged programs are harmful as they consume executor procs.
  	dontTriage := flags&progInTriage > 0 || res.Status == queue.Hanged
-@@ -172,6 +753,79 @@ func (fuzzer *Fuzzer) processResult(req *queue.Request, res *queue.Result, flags
+@@ -172,6 +742,94 @@ func (fuzzer *Fuzzer) processResult(req *queue.Request, res *queue.Result, flags
  		}
  	}
  
@@ -1822,10 +3054,25 @@ index 17c5af4..5f4efb2 100644
 +	var reachability []bool
 +	var observation []bool
 +	var cov cover.Cover
-+	collectsReachability := req.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectCover != 0
++	collectsTargetHits := req.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectTargetHits != 0
++	collectsReachability := req.ExecOpts.ExecFlags&
++		(flatrpc.ExecFlagCollectCover|flatrpc.ExecFlagCollectTargetHits) != 0
++	if collectsTargetHits && res != nil && res.Info != nil {
++		targetHits := targetHitEntries(res.Info)
++		if fuzzer.statTargetHitObservations != nil && fuzzer.statTargetHitEntries != nil {
++			fuzzer.statTargetHitObservations.Add(1)
++			fuzzer.statTargetHitEntries.Add(targetHits)
++		}
++	}
++	if returned, rawEntries := returnedRawCoverage(req.ExecOpts.ExecFlags, res); returned {
++		if fuzzer.statRawCoverExecutions != nil && fuzzer.statRawCoverEntries != nil {
++			fuzzer.statRawCoverExecutions.Add(1)
++			fuzzer.statRawCoverEntries.Add(rawEntries)
++		}
++	}
 +	completeObservation := collectsReachability && reachabilityObservationComplete(req, res)
 +	if completeObservation {
-+		reachability, cov = fuzzer.checkReachability(res.Info)
++		reachability, cov = fuzzer.checkReachability(res.Info, collectsTargetHits)
 +		observation = reachability
 +	} else if len(fuzzer.TargetAddrVals) != 0 &&
 +		collectsReachability {
@@ -1892,10 +3139,50 @@ index 17c5af4..5f4efb2 100644
  	if res.Info != nil {
  		fuzzer.statExecTime.Add(int(res.Info.Elapsed / 1e6))
  		for call, info := range res.Info.Calls {
-@@ -200,20 +854,338 @@ func (fuzzer *Fuzzer) processResult(req *queue.Request, res *queue.Result, flags
+@@ -200,20 +858,409 @@ func (fuzzer *Fuzzer) processResult(req *queue.Request, res *queue.Result, flags
  	return true
  }
  
++func rawCoverageEntries(info *flatrpc.ProgInfo) int {
++	if info == nil {
++		return 0
++	}
++	entries := 0
++	for _, call := range info.Calls {
++		if call != nil {
++			entries += len(call.Cover)
++		}
++	}
++	if info.Extra != nil {
++		entries += len(info.Extra.Cover)
++	}
++	return entries
++}
++
++func targetHitEntries(info *flatrpc.ProgInfo) int {
++	if info == nil {
++		return 0
++	}
++	entries := 0
++	for _, call := range info.Calls {
++		if call != nil {
++			entries += len(call.TargetHits)
++		}
++	}
++	if info.Extra != nil {
++		entries += len(info.Extra.TargetHits)
++	}
++	return entries
++}
++
++func returnedRawCoverage(flags flatrpc.ExecFlag, res *queue.Result) (bool, int) {
++	if flags&flatrpc.ExecFlagCollectCover == 0 || res == nil || res.Info == nil {
++		return false, 0
++	}
++	entries := rawCoverageEntries(res.Info)
++	return entries > 0, entries
++}
++
 +func reachabilityObservationComplete(req *queue.Request, res *queue.Result) bool {
 +	if req == nil || req.Prog == nil || res == nil || res.Status != queue.Success ||
 +		res.Info == nil || len(res.Info.Calls) != len(req.Prog.Calls) {
@@ -1910,7 +3197,9 @@ index 17c5af4..5f4efb2 100644
 +	return true
 +}
 +
-+func (fuzzer *Fuzzer) checkReachability(progInfo *flatrpc.ProgInfo) (reachability []bool, cov cover.Cover) {
++func (fuzzer *Fuzzer) checkReachability(
++	progInfo *flatrpc.ProgInfo, targetHitEvidence bool,
++) (reachability []bool, cov cover.Cover) {
 +	// +1 for Unreachable label at index 0; target PCs start at index 1
 +	reachability = make([]bool, len(fuzzer.TargetAddrVals)+1)
 +	if len(fuzzer.TargetAddrVals) == 0 || progInfo == nil {
@@ -1918,7 +3207,7 @@ index 17c5af4..5f4efb2 100644
 +	}
 +	start := time.Now()
 +
-+	hasCoverage := false
++	hasEvidence := targetHitEvidence
 +	truncated := false
 +	targetIndexes := make(map[uint64]int, len(fuzzer.TargetAddrVals))
 +	for i, target := range fuzzer.TargetAddrVals {
@@ -1926,10 +3215,15 @@ index 17c5af4..5f4efb2 100644
 +	}
 +	scan := func(callInfo *flatrpc.CallInfo) {
 +		if callInfo != nil {
-+			hasCoverage = hasCoverage || len(callInfo.Cover) != 0
++			hasEvidence = hasEvidence || len(callInfo.Cover) != 0
 +			truncated = truncated ||
 +				callInfo.Flags&flatrpc.CallFlagCoverageOverflow != 0
 +			for _, pc := range callInfo.Cover {
++				if targetIndex, ok := targetIndexes[pc]; ok {
++					reachability[targetIndex] = true
++				}
++			}
++			for _, pc := range callInfo.TargetHits {
 +				if targetIndex, ok := targetIndexes[pc]; ok {
 +					reachability[targetIndex] = true
 +				}
@@ -1943,7 +3237,7 @@ index 17c5af4..5f4efb2 100644
 +	// rpcserver). It is part of the same program execution and can contain the
 +	// only hit for a target PC, so it must participate in label construction.
 +	scan(progInfo.Extra)
-+	if !hasCoverage {
++	if !hasEvidence {
 +		// No raw PC coverage means the reachability class is unknown. Do not
 +		// encode it as an all-zero label, because argmax would silently train it
 +		// as class 0 (Unreachable).
@@ -1976,10 +3270,10 @@ index 17c5af4..5f4efb2 100644
 +		return nil, cov
 +	}
 +	// Constructing a map for every raw trace is expensive and unnecessary for
-+	// label-only collection. Preserve full coverage only when dumping is enabled
-+	// or the deepest target requires an unconditional retained artifact.
-+	if reachability[len(reachability)-1] ||
-+		(fuzzer.Config != nil && fuzzer.Config.SyzPilotCfg.EnableDump) {
++	// label-only collection. Preserve it only for an explicitly enabled artifact.
++	if fuzzer.Config != nil && (fuzzer.Config.SyzPilotCfg.EnableDump ||
++		(reachability[len(reachability)-1] &&
++			fuzzer.Config.SyzPilotCfg.PersistTargetEvidence)) {
 +		for _, callInfo := range progInfo.Calls {
 +			if callInfo != nil {
 +				cov.Merge(callInfo.Cover)
@@ -1998,6 +3292,14 @@ index 17c5af4..5f4efb2 100644
 +				fuzzer.statReachability[i].Add(1)
 +			}
 +		}
++	}
++	if fuzzer.statReachabilityValid != nil {
++		fuzzer.statReachabilityValid.Add(1)
++	}
++	deepest := deepestReachedClass(reachability)
++	if deepest < len(fuzzer.statReachabilityDeepest) &&
++		fuzzer.statReachabilityDeepest[deepest] != nil {
++		fuzzer.statReachabilityDeepest[deepest].Add(1)
 +	}
 +	duration := time.Since(start)
 +	debuglogger.Log(false, "checkReachability() took %vms", duration.Milliseconds())
@@ -2031,6 +3333,11 @@ index 17c5af4..5f4efb2 100644
 +				deepest = index
 +			}
 +		}
++		for _, pc := range callInfo.TargetHits {
++			if index := targetIndexes[pc]; index > deepest {
++				deepest = index
++			}
++		}
 +	}
 +	for _, callInfo := range progInfo.Calls {
 +		scan(callInfo)
@@ -2057,6 +3364,12 @@ index 17c5af4..5f4efb2 100644
 +				return
 +			}
 +		}
++		for _, pc := range callInfo.TargetHits {
++			if pc == finalTarget {
++				finalReached = true
++				return
++			}
++		}
 +	}
 +	for _, callInfo := range progInfo.Calls {
 +		check(callInfo)
@@ -2072,13 +3385,16 @@ index 17c5af4..5f4efb2 100644
 +		fuzzer.statReachability[len(reachability)-1] != nil {
 +		fuzzer.statReachability[len(reachability)-1].Add(1)
 +	}
-+	for _, callInfo := range progInfo.Calls {
-+		if callInfo != nil {
-+			cov.Merge(callInfo.Cover)
++	if fuzzer.Config != nil && (fuzzer.Config.SyzPilotCfg.EnableDump ||
++		fuzzer.Config.SyzPilotCfg.PersistTargetEvidence) {
++		for _, callInfo := range progInfo.Calls {
++			if callInfo != nil {
++				cov.Merge(callInfo.Cover)
++			}
 +		}
-+	}
-+	if progInfo.Extra != nil {
-+		cov.Merge(progInfo.Extra.Cover)
++		if progInfo.Extra != nil {
++			cov.Merge(progInfo.Extra.Cover)
++		}
 +	}
 +	return reachability, cov
 +}
@@ -2162,14 +3478,16 @@ index 17c5af4..5f4efb2 100644
 +		return nil
 +	}
 +	targetReach := reachability[len(reachability)-1]
-+	if !targetReach && !fuzzer.Config.SyzPilotCfg.EnableDump {
++	persistTarget := targetReach && fuzzer.Config.SyzPilotCfg.PersistTargetEvidence &&
++		req.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectCover != 0
++	if !persistTarget && !fuzzer.Config.SyzPilotCfg.EnableDump {
 +		return nil
 +	}
 +	fuzzer.DumpMu.Lock()
 +	defer fuzzer.DumpMu.Unlock()
 +	start := time.Now()
 +
-+	if targetReach {
++	if persistTarget {
 +		progBytes := prog.Serialize()
 +		sig := hash.String(progBytes)
 +		dir := filepath.Join(fuzzer.Config.SyzPilotCfg.DumpDir, fuzzer.TargetAddrStrs[len(fuzzer.TargetAddrStrs)-1])
@@ -2244,7 +3562,7 @@ index 17c5af4..5f4efb2 100644
  }
  
  func (fuzzer *Fuzzer) triageProgCall(p *prog.Prog, info *flatrpc.CallInfo, call int, triage *map[int]*triageCall) {
-@@ -286,8 +1258,9 @@ func (fuzzer *Fuzzer) genFuzz() *queue.Request {
+@@ -286,8 +1333,9 @@ func (fuzzer *Fuzzer) genFuzz() *queue.Request {
  	}
  	if fuzzer.Config.Collide && rnd.Intn(3) == 0 {
  		req = &queue.Request{
@@ -2256,7 +3574,7 @@ index 17c5af4..5f4efb2 100644
  		}
  	}
  	fuzzer.prepare(req, 0, 0)
-@@ -320,7 +1293,13 @@ func (fuzzer *Fuzzer) startJob(stat *stat.Val, newJob job) {
+@@ -320,7 +1368,13 @@ func (fuzzer *Fuzzer) startJob(stat *stat.Val, newJob job) {
  }
  
  func (fuzzer *Fuzzer) Next() *queue.Request {
@@ -2271,7 +3589,7 @@ index 17c5af4..5f4efb2 100644
  	if req == nil {
  		// The fuzzer is not supposed to issue nil requests.
  		panic("nil request from the fuzzer")
-@@ -342,7 +1321,6 @@ const (
+@@ -342,7 +1396,6 @@ const (
  	ProgFromCorpus ProgFlags = 1 << iota
  	ProgMinimized
  	ProgSmashed
@@ -2279,7 +3597,19 @@ index 17c5af4..5f4efb2 100644
  	progCandidate
  	progInTriage
  )
-@@ -365,6 +1343,20 @@ func (fuzzer *Fuzzer) AddCandidates(candidates []Candidate) {
+@@ -356,8 +1409,9 @@ func (fuzzer *Fuzzer) AddCandidates(candidates []Candidate) {
+ 	fuzzer.statCandidates.Add(len(candidates))
+ 	for _, candidate := range candidates {
+ 		req := &queue.Request{
+-			Prog:      candidate.Prog,
+-			ExecOpts:  setFlags(flatrpc.ExecFlagCollectSignal),
++			Prog: candidate.Prog,
++			ExecOpts: fuzzer.setFlagsForDiverseCover(
++				fuzzer.statExecCandidate.Name(), flatrpc.ExecFlagCollectSignal),
+ 			Stat:      fuzzer.statExecCandidate,
+ 			Important: true,
+ 		}
+@@ -365,6 +1419,20 @@ func (fuzzer *Fuzzer) AddCandidates(candidates []Candidate) {
  	}
  }
  
@@ -2300,7 +3630,7 @@ index 17c5af4..5f4efb2 100644
  func (fuzzer *Fuzzer) rand() *rand.Rand {
  	fuzzer.mu.Lock()
  	defer fuzzer.mu.Unlock()
-@@ -374,12 +1366,15 @@ func (fuzzer *Fuzzer) rand() *rand.Rand {
+@@ -374,12 +1442,15 @@ func (fuzzer *Fuzzer) rand() *rand.Rand {
  func (fuzzer *Fuzzer) updateChoiceTable(programs []*prog.Prog) {
  	newCt := fuzzer.target.BuildChoiceTable(programs, fuzzer.Config.EnabledCalls)
  
@@ -2318,7 +3648,7 @@ index 17c5af4..5f4efb2 100644
  
  func (fuzzer *Fuzzer) choiceTableUpdater() {
 diff --git a/pkg/fuzzer/fuzzer_test.go b/pkg/fuzzer/fuzzer_test.go
-index b7d8fbe..f58d26c 100644
+index b7d8fbeeb672f61da7fe78e39c0e47b52f1a11cc..57c2f8ac81201ce962dec24cb0309b598021868c 100644
 --- a/pkg/fuzzer/fuzzer_test.go
 +++ b/pkg/fuzzer/fuzzer_test.go
 @@ -8,9 +8,13 @@ import (
@@ -2350,7 +3680,7 @@ index b7d8fbe..f58d26c 100644
  	"github.com/google/syzkaller/pkg/testutil"
  	"github.com/google/syzkaller/pkg/vminfo"
  	"github.com/google/syzkaller/prog"
-@@ -29,6 +37,555 @@ import (
+@@ -29,6 +37,953 @@ import (
  	"github.com/stretchr/testify/assert"
  )
  
@@ -2511,43 +3841,182 @@ index b7d8fbe..f58d26c 100644
 +	}
 +}
 +
-+func TestTrainingCoverageIsAppliedAtUnifiedPrepareBoundary(t *testing.T) {
-+	fuzzer := &Fuzzer{
-+		Config: &Config{SyzPilotCfg: mgrconfig.SyzPilotCfg{
++func TestPrepareSelectsCompactTargetObservation(t *testing.T) {
++	for _, test := range []struct {
++		name string
++		cfg  mgrconfig.SyzPilotCfg
++	}{
++		{name: "reach filter", cfg: mgrconfig.SyzPilotCfg{
 +			ReachFilter: mgrconfig.ReachFilterCfg{Enable: true},
 +		}},
-+		TargetAddrVals: []uint64{0x1234},
-+	}
-+	req := &queue.Request{ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal)}
-+	fuzzer.prepare(req, 0, 0)
-+	if req.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectCover == 0 {
-+		t.Fatal("training request did not collect raw coverage")
++		{name: "observation", cfg: mgrconfig.SyzPilotCfg{
++			ObserveTargetCoverage: true,
++		}},
++		{name: "directed corpus", cfg: mgrconfig.SyzPilotCfg{
++			DirectedCorpus: mgrconfig.DirectedCorpusCfg{Enable: true},
++		}},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			test.cfg.TargetPCs = []string{"0x1234"}
++			fuzzer := &Fuzzer{
++				Config:         &Config{SyzPilotCfg: test.cfg},
++				TargetAddrVals: []uint64{0x1234},
++			}
++			req := &queue.Request{ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal)}
++			fuzzer.prepare(req, 0, 0)
++			if req.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectCover != 0 {
++				t.Fatal("prepare enabled raw coverage")
++			}
++			if req.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectTargetHits == 0 {
++				t.Fatal("prepare did not enable compact target hits")
++			}
++		})
 +	}
 +
-+	comparisonReq := &queue.Request{ExecOpts: setFlags(flatrpc.ExecFlagCollectComps)}
-+	fuzzer.prepare(comparisonReq, 0, 0)
-+	if comparisonReq.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectCover != 0 {
-+		t.Fatal("comparison request was given mutually exclusive coverage flag")
++	fuzzer := &Fuzzer{Config: &Config{SyzPilotCfg: mgrconfig.SyzPilotCfg{
++		ObserveTargetCoverage: true,
++		TargetPCs:             []string{"0x1234"},
++	}}}
++	comparison := &queue.Request{ExecOpts: setFlags(flatrpc.ExecFlagCollectComps)}
++	fuzzer.prepare(comparison, 0, 0)
++	if comparison.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectTargetHits != 0 {
++		t.Fatal("comparison collection enabled target-hit observation")
++	}
++	rawTriage := &queue.Request{ExecOpts: setFlags(flatrpc.ExecFlagCollectCover)}
++	fuzzer.prepare(rawTriage, 0, 0)
++	if rawTriage.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectTargetHits != 0 {
++		t.Fatal("raw coverage collection also enabled compact target hits")
++	}
++
++	fuzzer.Config.SyzPilotCfg.EnableDiverseCover = true
++	raw := &queue.Request{ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal)}
++	fuzzer.prepare(raw, 0, 0)
++	if raw.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectTargetHits != 0 {
++		t.Fatal("raw-coverage mode also enabled executor target hits")
 +	}
 +}
 +
-+func TestObservationOnlyCoverageIsAppliedWithoutReachFilter(t *testing.T) {
-+	fuzzer := &Fuzzer{
-+		Config: &Config{SyzPilotCfg: mgrconfig.SyzPilotCfg{
-+			ObserveTargetCoverage: true,
-+		}},
-+		TargetAddrVals: []uint64{0x1234},
-+	}
-+	req := &queue.Request{ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal)}
-+	fuzzer.prepare(req, 0, 0)
-+	if req.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectCover == 0 {
-+		t.Fatal("observation-only request did not collect raw coverage")
++func TestDiverseCoverControlsQueueAndRatio(t *testing.T) {
++	newFuzzer := func(ratio float64, targets ...string) *Fuzzer {
++		fuzzer := &Fuzzer{
++			Config:              &Config{},
++			rnd:                 rand.New(rand.NewSource(1)),
++			DiverseCoverTargets: make(map[string]bool),
++			Stats: Stats{statDiverseCoverSelected: stat.New(
++				"test diverse cover selected", "", stat.Simple, stat.NoGraph)},
++		}
++		fuzzer.DiverseCoverEnabled.Store(true)
++		fuzzer.DiverseCoverRatio.Store(&ratio)
++		for _, target := range targets {
++			fuzzer.DiverseCoverTargets[target] = true
++		}
++		return fuzzer
 +	}
 +
-+	comparisonReq := &queue.Request{ExecOpts: setFlags(flatrpc.ExecFlagCollectComps)}
-+	fuzzer.prepare(comparisonReq, 0, 0)
-+	if comparisonReq.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectCover != 0 {
-+		t.Fatal("observation-only comparison request was given coverage flag")
++	tests := []struct {
++		name      string
++		fuzzer    *Fuzzer
++		queueType string
++		baseFlags flatrpc.ExecFlag
++		wantCover bool
++	}{
++		{
++			name: "candidate queue", fuzzer: newFuzzer(1, "exec candidate"),
++			queueType: "exec candidate", baseFlags: flatrpc.ExecFlagCollectSignal, wantCover: true,
++		},
++		{
++			name: "minimization queue", fuzzer: newFuzzer(1, "exec minimize"),
++			queueType: "exec minimize", baseFlags: flatrpc.ExecFlagCollectSignal, wantCover: true,
++		},
++		{
++			name: "fuzz queue", fuzzer: newFuzzer(1, "exec fuzz"),
++			queueType: "exec fuzz", baseFlags: flatrpc.ExecFlagCollectSignal, wantCover: true,
++		},
++		{
++			name: "generate queue", fuzzer: newFuzzer(1, "exec gen"),
++			queueType: "exec gen", baseFlags: flatrpc.ExecFlagCollectSignal, wantCover: true,
++		},
++		{
++			name: "smash queue", fuzzer: newFuzzer(1, "exec smash"),
++			queueType: "exec smash", baseFlags: flatrpc.ExecFlagCollectSignal, wantCover: true,
++		},
++		{
++			name: "hints mutant queue", fuzzer: newFuzzer(1, "exec hints"),
++			queueType: "exec hints", baseFlags: flatrpc.ExecFlagCollectSignal, wantCover: true,
++		},
++		{
++			name: "fault injection queue", fuzzer: newFuzzer(1, "exec inject"),
++			queueType: "exec inject", wantCover: true,
++		},
++		{
++			name: "collide queue", fuzzer: newFuzzer(1, "exec collide"),
++			queueType: "exec collide", wantCover: true,
++		},
++		{
++			name: "unselected queue", fuzzer: newFuzzer(1, "exec fuzz"),
++			queueType: "exec gen", baseFlags: flatrpc.ExecFlagCollectSignal,
++		},
++		{
++			name: "zero ratio", fuzzer: newFuzzer(0, "exec fuzz"),
++			queueType: "exec fuzz", baseFlags: flatrpc.ExecFlagCollectSignal,
++		},
++		{
++			name: "comparison collection", fuzzer: newFuzzer(1, "exec hints"),
++			queueType: "exec hints", baseFlags: flatrpc.ExecFlagCollectComps,
++		},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			opts := test.fuzzer.setFlagsForDiverseCover(test.queueType, test.baseFlags)
++			gotCover := opts.ExecFlags&flatrpc.ExecFlagCollectCover != 0
++			if gotCover != test.wantCover {
++				t.Fatalf("CollectCover = %v, want %v", gotCover, test.wantCover)
++			}
++			if opts.ExecFlags&test.baseFlags != test.baseFlags {
++				t.Fatalf("base flags %#x were not preserved: %#x", test.baseFlags, opts.ExecFlags)
++			}
++			wantSelected := 0
++			if test.wantCover {
++				wantSelected = 1
++			}
++			if got := test.fuzzer.statDiverseCoverSelected.Val(); got != wantSelected {
++				t.Fatalf("diverse cover selected = %d, want %d", got, wantSelected)
++			}
++		})
++	}
++}
++
++func TestGeneratedProgramsUseGenerateCoveragePolicy(t *testing.T) {
++	target, err := prog.GetTarget(targets.TestOS, targets.TestArch64Fuzz)
++	if err != nil {
++		t.Fatal(err)
++	}
++	call := target.SyscallMap["syz_test_fuzzer1"]
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	fuzzer := NewFuzzer(ctx, &Config{
++		Corpus:       corpus.NewCorpus(ctx),
++		EnabledCalls: map[*prog.Syscall]bool{call: true},
++		SyzPilotCfg: mgrconfig.SyzPilotCfg{
++			EnableDiverseCover: true,
++			DiverseCoverRatio:  1,
++		},
++	}, rand.New(rand.NewSource(1)), target)
++	req := genProgRequest(fuzzer, rand.New(rand.NewSource(2)))
++	if req.Stat != fuzzer.statExecGenerate {
++		t.Fatalf("generated request stat = %q, want %q", req.Stat.Name(), fuzzer.statExecGenerate.Name())
++	}
++	if req.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectCover == 0 {
++		t.Fatal("generated request did not use the exec gen coverage policy")
++	}
++	fuzzer.AddCandidates([]Candidate{{Prog: req.Prog}})
++	candidate := fuzzer.candidateQueue.Next()
++	if candidate == nil {
++		t.Fatal("candidate request was not queued")
++	}
++	if candidate.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectSignal == 0 ||
++		candidate.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectCover == 0 {
++		t.Fatalf("candidate flags = %#x, want signal and coverage", candidate.ExecOpts.ExecFlags)
 +	}
 +}
 +
@@ -2623,9 +4092,44 @@ index b7d8fbe..f58d26c 100644
 +	}
 +}
 +
++func TestReturnedRawCoverage(t *testing.T) {
++	result := &queue.Result{Info: &flatrpc.ProgInfo{
++		Calls: []*flatrpc.CallInfo{
++			{Cover: []uint64{1, 2}},
++			nil,
++			{Cover: []uint64{3}},
++		},
++		Extra: &flatrpc.CallInfo{Cover: []uint64{4, 5}},
++	}}
++	if returned, entries := returnedRawCoverage(flatrpc.ExecFlagCollectCover, result); !returned || entries != 5 {
++		t.Fatalf("returnedRawCoverage() = (%v, %d), want (true, 5)", returned, entries)
++	}
++	if returned, entries := returnedRawCoverage(
++		flatrpc.ExecFlagCollectCover, &queue.Result{Info: &flatrpc.ProgInfo{}},
++	); returned || entries != 0 {
++		t.Fatalf("empty returnedRawCoverage() = (%v, %d), want (false, 0)", returned, entries)
++	}
++	if returned, entries := returnedRawCoverage(0, result); returned || entries != 0 {
++		t.Fatalf("unrequested returnedRawCoverage() = (%v, %d), want (false, 0)", returned, entries)
++	}
++}
++
++func TestTargetHitEntries(t *testing.T) {
++	info := &flatrpc.ProgInfo{
++		Calls: []*flatrpc.CallInfo{{TargetHits: []uint64{1, 2}}, nil},
++		Extra: &flatrpc.CallInfo{TargetHits: []uint64{3}},
++	}
++	if got := targetHitEntries(info); got != 3 {
++		t.Fatalf("targetHitEntries() = %d, want 3", got)
++	}
++}
++
 +func TestCheckReachabilityIncludesExtraCoverage(t *testing.T) {
 +	targetPC := uint64(0x1234)
 +	fuzzer := &Fuzzer{
++		Config: &Config{SyzPilotCfg: mgrconfig.SyzPilotCfg{
++			PersistTargetEvidence: true,
++		}},
 +		TargetAddrVals: []uint64{targetPC},
 +		Stats: Stats{
 +			statReachability: []*stat.Val{
@@ -2657,7 +4161,7 @@ index b7d8fbe..f58d26c 100644
 +	}
 +	for _, test := range tests {
 +		t.Run(test.name, func(t *testing.T) {
-+			reachability, gotCover := fuzzer.checkReachability(test.info)
++			reachability, gotCover := fuzzer.checkReachability(test.info, false)
 +			if !slices.Equal(reachability, []bool{false, true}) {
 +				t.Fatalf("reachability = %v, want [false true]", reachability)
 +			}
@@ -2670,17 +4174,102 @@ index b7d8fbe..f58d26c 100644
 +	}
 +}
 +
++func TestCheckReachabilityFromExecutorTargetHits(t *testing.T) {
++	targets := []uint64{0x1000, 0x2000, 0x3000}
++	newFuzzer := func() *Fuzzer {
++		return &Fuzzer{
++			Config:         &Config{},
++			TargetAddrVals: targets,
++			Stats: Stats{
++				statReachability: []*stat.Val{
++					stat.New("test executor unreachable", "", stat.Simple, stat.NoGraph),
++					stat.New("test executor target 1", "", stat.Simple, stat.NoGraph),
++					stat.New("test executor target 2", "", stat.Simple, stat.NoGraph),
++					stat.New("test executor target 3", "", stat.Simple, stat.NoGraph),
++				},
++				statReachabilityTruncated: stat.New(
++					"test executor truncated", "", stat.Simple, stat.NoGraph),
++				statReachabilityTruncatedDeepest: []*stat.Val{
++					stat.New("test executor truncated 0", "", stat.Simple, stat.NoGraph),
++					stat.New("test executor truncated 1", "", stat.Simple, stat.NoGraph),
++					stat.New("test executor truncated 2", "", stat.Simple, stat.NoGraph),
++					stat.New("test executor truncated 3", "", stat.Simple, stat.NoGraph),
++				},
++			},
++		}
++	}
++
++	tests := []struct {
++		name string
++		info *flatrpc.ProgInfo
++		want []bool
++	}{
++		{
++			name: "empty hit set proves unreachable",
++			info: &flatrpc.ProgInfo{Calls: []*flatrpc.CallInfo{{}}},
++			want: []bool{true, false, false, false},
++		},
++		{
++			name: "call and extra hits are merged",
++			info: &flatrpc.ProgInfo{
++				Calls: []*flatrpc.CallInfo{{TargetHits: []uint64{targets[0]}}},
++				Extra: &flatrpc.CallInfo{TargetHits: []uint64{targets[1]}},
++			},
++			want: []bool{false, true, true, false},
++		},
++		{
++			name: "overflow with shallow hit remains unknown",
++			info: &flatrpc.ProgInfo{Calls: []*flatrpc.CallInfo{{
++				Flags:      flatrpc.CallFlagCoverageOverflow,
++				TargetHits: []uint64{targets[0]},
++			}}},
++		},
++		{
++			name: "overflow with final hit remains definitive",
++			info: &flatrpc.ProgInfo{Calls: []*flatrpc.CallInfo{{
++				Flags:      flatrpc.CallFlagCoverageOverflow,
++				TargetHits: []uint64{targets[2]},
++			}}},
++			want: []bool{false, false, false, true},
++		},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			got, _ := newFuzzer().checkReachability(test.info, true)
++			if !slices.Equal(got, test.want) {
++				t.Fatalf("reachability = %v, want %v", got, test.want)
++			}
++		})
++	}
++
++	fuzzer := newFuzzer()
++	observation, _ := fuzzer.observeFinalTarget(&flatrpc.ProgInfo{
++		Calls: []*flatrpc.CallInfo{{TargetHits: []uint64{targets[2]}}},
++	})
++	if !slices.Equal(observation, []bool{false, false, false, true}) {
++		t.Fatalf("final observation = %v", observation)
++	}
++}
++
 +func TestCheckReachabilityRejectsTruncatedIncompleteLabels(t *testing.T) {
 +	targets := []uint64{0x1000, 0x2000, 0x3000}
 +	newFuzzer := func() *Fuzzer {
 +		return &Fuzzer{
 +			TargetAddrVals: targets,
 +			Stats: Stats{
++				statReachabilityValid: stat.New(
++					"test reachability valid", "", stat.Simple, stat.NoGraph),
 +				statReachability: []*stat.Val{
 +					stat.New("test truncated unreachable", "", stat.Simple, stat.NoGraph),
 +					stat.New("test truncated target 1", "", stat.Simple, stat.NoGraph),
 +					stat.New("test truncated target 2", "", stat.Simple, stat.NoGraph),
 +					stat.New("test truncated target 3", "", stat.Simple, stat.NoGraph),
++				},
++				statReachabilityDeepest: []*stat.Val{
++					stat.New("test valid deepest none", "", stat.Simple, stat.NoGraph),
++					stat.New("test valid deepest target 1", "", stat.Simple, stat.NoGraph),
++					stat.New("test valid deepest target 2", "", stat.Simple, stat.NoGraph),
++					stat.New("test valid deepest target 3", "", stat.Simple, stat.NoGraph),
 +				},
 +				statReachabilityTruncated: stat.New(
 +					"test reachability truncated", "", stat.Simple, stat.NoGraph),
@@ -2695,12 +4284,36 @@ index b7d8fbe..f58d26c 100644
 +	}
 +
 +	tests := []struct {
-+		name          string
-+		info          *flatrpc.ProgInfo
-+		wantLabel     []bool
-+		wantTruncated int
-+		wantDeepest   int
++		name             string
++		info             *flatrpc.ProgInfo
++		wantLabel        []bool
++		wantTruncated    int
++		wantDeepest      int
++		wantValidDeepest int
 +	}{
++		{
++			name: "complete unreachable",
++			info: &flatrpc.ProgInfo{Calls: []*flatrpc.CallInfo{{
++				Cover: []uint64{0x9999},
++			}}},
++			wantLabel: []bool{true, false, false, false},
++		},
++		{
++			name: "complete intermediate target",
++			info: &flatrpc.ProgInfo{Calls: []*flatrpc.CallInfo{{
++				Cover: []uint64{targets[1]},
++			}}},
++			wantLabel:        []bool{false, false, true, false},
++			wantValidDeepest: 2,
++		},
++		{
++			name: "complete multiple targets",
++			info: &flatrpc.ProgInfo{Calls: []*flatrpc.CallInfo{{
++				Cover: []uint64{targets[0], targets[1]},
++			}}},
++			wantLabel:        []bool{false, true, true, false},
++			wantValidDeepest: 2,
++		},
 +		{
 +			name: "call overflow with no target",
 +			info: &flatrpc.ProgInfo{Calls: []*flatrpc.CallInfo{{
@@ -2737,14 +4350,15 @@ index b7d8fbe..f58d26c 100644
 +				Flags: flatrpc.CallFlagCoverageOverflow,
 +				Cover: []uint64{targets[0], targets[2]},
 +			}}},
-+			wantLabel: []bool{false, true, false, true},
++			wantLabel:        []bool{false, true, false, true},
++			wantValidDeepest: 3,
 +		},
 +	}
 +
 +	for _, test := range tests {
 +		t.Run(test.name, func(t *testing.T) {
 +			fuzzer := newFuzzer()
-+			got, _ := fuzzer.checkReachability(test.info)
++			got, _ := fuzzer.checkReachability(test.info, false)
 +			if !slices.Equal(got, test.wantLabel) {
 +				t.Fatalf("reachability = %v, want %v", got, test.wantLabel)
 +			}
@@ -2760,15 +4374,34 @@ index b7d8fbe..f58d26c 100644
 +					t.Fatalf("truncated deepest[%d] count = %d, want %d", i, got, want)
 +				}
 +			}
++			wantValid := 0
++			if test.wantLabel != nil {
++				wantValid = 1
++			}
++			if got := fuzzer.statReachabilityValid.Val(); got != wantValid {
++				t.Fatalf("valid label count = %d, want %d", got, wantValid)
++			}
++			for i, counter := range fuzzer.statReachabilityDeepest {
++				want := 0
++				if wantValid != 0 && i == test.wantValidDeepest {
++					want = 1
++				}
++				if got := counter.Val(); got != want {
++					t.Fatalf("valid deepest[%d] count = %d, want %d", i, got, want)
++				}
++			}
 +		})
 +	}
 +}
 +
-+func TestCheckReachabilityBuildsFullCoverOnlyForArtifacts(t *testing.T) {
++func TestCheckReachabilityBuildsFullCoverOnlyForEnabledArtifacts(t *testing.T) {
 +	targets := []uint64{0x1000, 0x2000}
-+	newFuzzer := func(enableDump bool) *Fuzzer {
++	newFuzzer := func(enableDump, persistTarget bool) *Fuzzer {
 +		return &Fuzzer{
-+			Config:         &Config{SyzPilotCfg: mgrconfig.SyzPilotCfg{EnableDump: enableDump}},
++			Config: &Config{SyzPilotCfg: mgrconfig.SyzPilotCfg{
++				EnableDump:            enableDump,
++				PersistTargetEvidence: persistTarget,
++			}},
 +			TargetAddrVals: targets,
 +			Stats: Stats{statReachability: []*stat.Val{
 +				stat.New("test artifact unreachable", "", stat.Simple, stat.NoGraph),
@@ -2782,7 +4415,7 @@ index b7d8fbe..f58d26c 100644
 +		Extra: &flatrpc.CallInfo{Cover: []uint64{0x8888}},
 +	}
 +
-+	label, gotCover := newFuzzer(false).checkReachability(info)
++	label, gotCover := newFuzzer(false, false).checkReachability(info, false)
 +	if !slices.Equal(label, []bool{false, true, false}) {
 +		t.Fatalf("reachability = %v, want [false true false]", label)
 +	}
@@ -2790,7 +4423,7 @@ index b7d8fbe..f58d26c 100644
 +		t.Fatalf("label-only collection built full cover: %v", gotCover)
 +	}
 +
-+	_, gotCover = newFuzzer(true).checkReachability(info)
++	_, gotCover = newFuzzer(true, false).checkReachability(info, false)
 +	for _, pc := range []uint64{0x9999, targets[0], 0x8888} {
 +		if _, ok := gotCover[pc]; !ok {
 +			t.Fatalf("dump coverage does not contain %#x", pc)
@@ -2800,15 +4433,20 @@ index b7d8fbe..f58d26c 100644
 +	deepInfo := &flatrpc.ProgInfo{
 +		Calls: []*flatrpc.CallInfo{{Cover: []uint64{targets[1]}}},
 +	}
-+	_, gotCover = newFuzzer(false).checkReachability(deepInfo)
++	_, gotCover = newFuzzer(false, false).checkReachability(deepInfo, false)
++	if gotCover != nil {
++		t.Fatalf("default final-target observation built full cover: %v", gotCover)
++	}
++	_, gotCover = newFuzzer(false, true).checkReachability(deepInfo, false)
 +	if _, ok := gotCover[targets[1]]; !ok {
-+		t.Fatal("deepest-target artifact did not retain full coverage")
++		t.Fatal("enabled final-target evidence did not retain full coverage")
 +	}
 +}
 +
 +func TestObserveFinalTargetPreservesIncompletePositiveEvidence(t *testing.T) {
 +	targets := []uint64{0x1000, 0x2000}
 +	fuzzer := &Fuzzer{
++		Config:         &Config{},
 +		TargetAddrVals: targets,
 +		Stats: Stats{statReachability: []*stat.Val{
 +			stat.New("test incomplete unreachable", "", stat.Simple, stat.NoGraph),
@@ -2828,6 +4466,11 @@ index b7d8fbe..f58d26c 100644
 +	if got := fuzzer.statReachability[2].Val(); got != 1 {
 +		t.Fatalf("final target count = %d, want 1", got)
 +	}
++	if gotCover != nil {
++		t.Fatalf("default incomplete final observation built full cover: %v", gotCover)
++	}
++	fuzzer.Config.SyzPilotCfg.PersistTargetEvidence = true
++	_, gotCover = fuzzer.observeFinalTarget(info)
 +	for _, pc := range []uint64{0x9999, targets[1], 0x8888} {
 +		if _, ok := gotCover[pc]; !ok {
 +			t.Fatalf("final observation coverage does not contain %#x", pc)
@@ -2903,11 +4546,96 @@ index b7d8fbe..f58d26c 100644
 +	}
 +}
 +
++func TestFinalTargetEvidencePersistenceIsOptIn(t *testing.T) {
++	target, err := prog.GetTarget(targets.TestOS, targets.TestArch64Fuzz)
++	if err != nil {
++		t.Fatal(err)
++	}
++	p, err := target.Deserialize([]byte(
++		`syz_compare(&AUTO="00000000", 0x4, &AUTO=@conditional={0x0, @void, @void, @void}, AUTO)`,
++	), prog.NonStrict)
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	for _, test := range []struct {
++		name               string
++		enableDump         bool
++		persistTarget      bool
++		collectCover       bool
++		wantGenericDump    bool
++		wantTargetEvidence bool
++	}{
++		{name: "disabled by default"},
++		{name: "target evidence with raw cover", persistTarget: true,
++			collectCover: true, wantTargetEvidence: true},
++		{name: "target evidence with compact hits", persistTarget: true},
++		{name: "generic dump only", enableDump: true, wantGenericDump: true},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			root := t.TempDir()
++			finalDir := filepath.Join(root, "0x2000")
++			if test.persistTarget {
++				for _, name := range []string{"programs", "coverage"} {
++					if err := os.MkdirAll(filepath.Join(finalDir, name), 0o700); err != nil {
++						t.Fatal(err)
++					}
++				}
++			}
++			if test.enableDump {
++				for _, name := range []string{"programs", "coverage"} {
++					if err := os.MkdirAll(filepath.Join(root, name), 0o700); err != nil {
++						t.Fatal(err)
++					}
++				}
++			}
++			fuzzer := &Fuzzer{
++				Config: &Config{SyzPilotCfg: mgrconfig.SyzPilotCfg{
++					DumpDir:               root,
++					EnableDump:            test.enableDump,
++					PersistTargetEvidence: test.persistTarget,
++				}},
++				TargetAddrStrs: []string{"0x1000", "0x2000"},
++				DumpMapCnt:     make(map[string]int),
++				Stats: Stats{statDumpTotal: stat.New(
++					"test target evidence persistence", "", stat.Simple, stat.NoGraph,
++				)},
++			}
++			req := &queue.Request{Prog: p}
++			if test.collectCover {
++				req.ExecOpts.ExecFlags |= flatrpc.ExecFlagCollectCover
++			} else if test.persistTarget {
++				req.ExecOpts.ExecFlags |= flatrpc.ExecFlagCollectTargetHits
++			}
++			if err := fuzzer.dumpProgAndCover(
++				req, cover.Cover{0x2000: {}}, []bool{false, false, true},
++			); err != nil {
++				t.Fatal(err)
++			}
++			hasDumpPair := func(dir string) bool {
++				programs, progErr := os.ReadDir(filepath.Join(dir, "programs"))
++				coverage, coverErr := os.ReadDir(filepath.Join(dir, "coverage"))
++				return progErr == nil && coverErr == nil &&
++					len(programs) == 1 && len(coverage) == 1
++			}
++			if got := hasDumpPair(finalDir); got != test.wantTargetEvidence {
++				t.Fatalf("target evidence written = %v, want %v",
++					got, test.wantTargetEvidence)
++			}
++			genericDumped := hasDumpPair(root)
++			if genericDumped != test.wantGenericDump {
++				t.Fatalf("generic program dumped = %v, want %v",
++					genericDumped, test.wantGenericDump)
++			}
++		})
++	}
++}
++
  func TestFuzz(t *testing.T) {
  	defer checkGoroutineLeaks()
  
 diff --git a/pkg/fuzzer/job.go b/pkg/fuzzer/job.go
-index 7f1e47b..e522f67 100644
+index 7f1e47bf61419206ffc37ce7792759b2556145fb..1e624318169728dfdd7842cb4760cb8add0e28ab 100644
 --- a/pkg/fuzzer/job.go
 +++ b/pkg/fuzzer/job.go
 @@ -33,6 +33,9 @@ type JobInfo struct {
@@ -2928,7 +4656,7 @@ index 7f1e47b..e522f67 100644
 -		ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal),
 +		Prog: p,
 +		// ExecOpts: setFlags(flatrpc.ExecFlagCollectSignal),
-+		ExecOpts: fuzzer.setFlagsForDiverseCover(fuzzer.statExecFuzz.Name(), flatrpc.ExecFlagCollectSignal),
++		ExecOpts: fuzzer.setFlagsForDiverseCover(fuzzer.statExecGenerate.Name(), flatrpc.ExecFlagCollectSignal),
  		Stat:     fuzzer.statExecGenerate,
  	}
  }
@@ -3022,7 +4750,19 @@ index 7f1e47b..e522f67 100644
  // triageJob are programs for which we noticed potential new coverage during
  // first execution. But we are not sure yet if the coverage is real or not.
  // During triage we understand if these programs in fact give new coverage,
-@@ -452,15 +512,20 @@ func (job *smashJob) run(fuzzer *Fuzzer) {
+@@ -358,8 +418,9 @@ func (job *triageJob) minimize(call int, info *triageCall) (*prog.Prog, int) {
+ 		var mergedSignal signal.Signal
+ 		for i := 0; i < minimizeAttempts; i++ {
+ 			result := job.execute(&queue.Request{
+-				Prog:            p1,
+-				ExecOpts:        setFlags(flatrpc.ExecFlagCollectSignal),
++				Prog: p1,
++				ExecOpts: job.fuzzer.setFlagsForDiverseCover(
++					job.fuzzer.statExecMinimize.Name(), flatrpc.ExecFlagCollectSignal),
+ 				ReturnAllSignal: []int{call1},
+ 				Stat:            job.fuzzer.statExecMinimize,
+ 			}, 0)
+@@ -452,15 +513,20 @@ func (job *smashJob) run(fuzzer *Fuzzer) {
  	rnd := fuzzer.rand()
  	for i := 0; i < iters; i++ {
  		p := job.p.Clone()
@@ -3047,7 +4787,7 @@ index 7f1e47b..e522f67 100644
  		if result.Stop() {
  			return
  		}
-@@ -507,9 +572,13 @@ func (job *faultInjectionJob) run(fuzzer *Fuzzer) {
+@@ -507,9 +573,13 @@ func (job *faultInjectionJob) run(fuzzer *Fuzzer) {
  		newProg := job.p.Clone()
  		newProg.Calls[job.call].Props.FailNth = nth
  		result := fuzzer.execute(job.exec, &queue.Request{
@@ -3063,7 +4803,7 @@ index 7f1e47b..e522f67 100644
  		if result.Stop() {
  			return
  		}
-@@ -541,6 +610,9 @@ func (job *hintsJob) run(fuzzer *Fuzzer) {
+@@ -541,6 +611,9 @@ func (job *hintsJob) run(fuzzer *Fuzzer) {
  			ExecOpts: setFlags(flatrpc.ExecFlagCollectComps),
  			Stat:     fuzzer.statExecSeed,
  		})
@@ -3073,7 +4813,7 @@ index 7f1e47b..e522f67 100644
  		if result.Stop() {
  			return
  		}
-@@ -568,12 +640,16 @@ func (job *hintsJob) run(fuzzer *Fuzzer) {
+@@ -568,12 +641,16 @@ func (job *hintsJob) run(fuzzer *Fuzzer) {
  	// Execute each of such mutants to check if it gives new coverage.
  	p.MutateWithHints(job.call, comps,
  		func(p *prog.Prog) bool {
@@ -3093,8 +4833,25 @@ index 7f1e47b..e522f67 100644
  			return !result.Stop()
  		})
  }
+diff --git a/pkg/fuzzer/job_test.go b/pkg/fuzzer/job_test.go
+index edb68fdc9ff1d197de6dd026e7f0dfdd9e4bb005..6c1e9cbf4727b4ff249e817047868b19360bf411 100644
+--- a/pkg/fuzzer/job_test.go
++++ b/pkg/fuzzer/job_test.go
+@@ -99,7 +99,11 @@ func TestDeflake(t *testing.T) {
+ 			}
+ 
+ 			var run uint64
+-			stop := testJob.deflake(func(_ *queue.Request, _ ProgFlags) *queue.Result {
++			stop := testJob.deflake(func(req *queue.Request, _ ProgFlags) *queue.Result {
++				want := flatrpc.ExecFlagCollectCover | flatrpc.ExecFlagCollectSignal
++				if req.ExecOpts.ExecFlags&want != want {
++					t.Fatalf("triage flags = %#x, want coverage and signal", req.ExecOpts.ExecFlags)
++				}
+ 				run++
+ 				errno, signal, cover := test.Exec(run)
+ 				return &queue.Result{
 diff --git a/pkg/fuzzer/queue/queue.go b/pkg/fuzzer/queue/queue.go
-index ca2d760..816b278 100644
+index ca2d760928625f0f83a52d121188f5e47fdb2f70..c672a3dc8e776b5c4d619b28c7a5f006ab084e40 100644
 --- a/pkg/fuzzer/queue/queue.go
 +++ b/pkg/fuzzer/queue/queue.go
 @@ -94,6 +94,17 @@ func (r *Request) Done(res *Result) {
@@ -3115,7 +4872,19 @@ index ca2d760..816b278 100644
  var ErrRequestAborted = errors.New("context closed while waiting the result")
  
  // Wait() blocks until we have the result.
-@@ -182,7 +193,7 @@ type Result struct {
+@@ -119,8 +130,9 @@ func (r *Request) Validate() error {
+ 	}
+ 	collectComps := r.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectComps > 0
+ 	collectCover := r.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectCover > 0
+-	if (collectComps) && (collectSignal || collectCover) {
+-		return fmt.Errorf("hint collection is mutually exclusive with signal/coverage")
++	collectTargetHits := r.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectTargetHits > 0
++	if collectComps && (collectSignal || collectCover || collectTargetHits) {
++		return fmt.Errorf("hint collection is mutually exclusive with signal/coverage/target hits")
+ 	}
+ 	switch r.Type {
+ 	case flatrpc.RequestTypeProgram:
+@@ -182,7 +194,7 @@ type Result struct {
  	Executor ExecutorID
  	Output   []byte
  	Status   Status
@@ -3124,7 +4893,7 @@ index ca2d760..816b278 100644
  }
  
  func (r *Result) clone() *Result {
-@@ -193,7 +204,7 @@ func (r *Result) clone() *Result {
+@@ -193,7 +205,7 @@ func (r *Result) clone() *Result {
  
  func (r *Result) Stop() bool {
  	switch r.Status {
@@ -3133,7 +4902,7 @@ index ca2d760..816b278 100644
  		return false
  	case ExecFailure, Crashed, Hanged:
  		return true
-@@ -220,6 +231,7 @@ const (
+@@ -220,6 +232,7 @@ const (
  	Crashed            // The VM crashed holding the request.
  	Restarted          // The VM was restarted holding the request.
  	Hanged             // The program has hanged (can't be killed/waited).
@@ -3142,7 +4911,7 @@ index ca2d760..816b278 100644
  
  // Executor describes the interface wanted by the producers of requests.
 diff --git a/pkg/fuzzer/queue/retry.go b/pkg/fuzzer/queue/retry.go
-index 186850b..218f214 100644
+index 186850b5ba807cb235478f5652902fb8c53eb243..218f21447c5a7179f0419800cb257d2e91f860ab 100644
 --- a/pkg/fuzzer/queue/retry.go
 +++ b/pkg/fuzzer/queue/retry.go
 @@ -33,7 +33,7 @@ func (r *retryer) Next() *Request {
@@ -3155,7 +4924,7 @@ index 186850b..218f214 100644
  	case Restarted:
  		// The input was on a restarted VM.
 diff --git a/pkg/fuzzer/queue/status_string.go b/pkg/fuzzer/queue/status_string.go
-index 91ecb49..38973d2 100644
+index 91ecb497e1412e5139a67b5cac7cfc6edb1d0a4f..38973d27894ddd65273640882ea334b5b144d57c 100644
 --- a/pkg/fuzzer/queue/status_string.go
 +++ b/pkg/fuzzer/queue/status_string.go
 @@ -13,11 +13,12 @@ func _() {
@@ -3175,7 +4944,7 @@ index 91ecb49..38973d2 100644
  	if i < 0 || i >= Status(len(_Status_index)-1) {
 diff --git a/pkg/fuzzer/rfilter/rfilter.go b/pkg/fuzzer/rfilter/rfilter.go
 new file mode 100644
-index 0000000..890efb5
+index 0000000000000000000000000000000000000000..890efb5228f276dfa5f97f73c1c81864c2a4c99d
 --- /dev/null
 +++ b/pkg/fuzzer/rfilter/rfilter.go
 @@ -0,0 +1,492 @@
@@ -3673,7 +5442,7 @@ index 0000000..890efb5
 +}
 diff --git a/pkg/fuzzer/rfilter/rfilter_test.go b/pkg/fuzzer/rfilter/rfilter_test.go
 new file mode 100644
-index 0000000..76b24f7
+index 0000000000000000000000000000000000000000..76b24f7013a815731dc7e28b6a48baa732146157
 --- /dev/null
 +++ b/pkg/fuzzer/rfilter/rfilter_test.go
 @@ -0,0 +1,485 @@
@@ -4163,10 +5932,10 @@ index 0000000..76b24f7
 +	}
 +}
 diff --git a/pkg/fuzzer/stats.go b/pkg/fuzzer/stats.go
-index 40c71d3..be79de0 100644
+index 40c71d30953998af0ccac30bb73e7a2de12461f9..763632957a1e57a33d042b2759bae2e55ba85bdd 100644
 --- a/pkg/fuzzer/stats.go
 +++ b/pkg/fuzzer/stats.go
-@@ -14,25 +14,89 @@ type Stats struct {
+@@ -14,25 +14,96 @@ type Stats struct {
  	// Indexed by prog.Syscall.ID + the last element for extra/remote.
  	Syscalls []SyscallStats
  
@@ -4224,8 +5993,15 @@ index 40c71d3..be79de0 100644
 +	statDirectedAnchorFallbacks *stat.Val // Mutations that fell back to the anchored source.
 +	statPrefMutationSelected    *stat.Val // Guided argument mutations that selected a preferred syscall.
 +	statPrefMutationFallback    *stat.Val // Guided argument mutations that used native fallback selection.
++	statDiverseCoverSelected    *stat.Val // Requests selected for extra raw coverage by the diverse-cover policy.
++	statRawCoverExecutions      *stat.Val // Executions that returned raw KCOV data.
++	statRawCoverEntries         *stat.Val // Raw KCOV PC entries returned by those executions.
++	statTargetHitObservations   *stat.Val // Executions observed by the compact executor target-hit path.
++	statTargetHitEntries        *stat.Val // Target PCs returned by the compact executor path.
 +
 +	statReachability           []*stat.Val // Number of programs for unreachable and each target address.
++	statReachabilityValid      *stat.Val   // Labels admitted after completeness and overflow checks.
++	statReachabilityDeepest    []*stat.Val // Valid labels grouped by normalized deepest class.
 +	statReachabilityTruncated  *stat.Val   // Number of incomplete coverage observations excluded from training.
 +	statReachabilityIncomplete *stat.Val   // Number of non-successful or unfinished executions excluded from training.
 +	// Indexed by deepest observed target, with index 0 meaning that no target was observed.
@@ -4276,7 +6052,7 @@ index 40c71d3..be79de0 100644
  
  type SyscallStats struct {
 diff --git a/pkg/manager/diff.go b/pkg/manager/diff.go
-index 3e5a8bf..e9ecf17 100644
+index 3e5a8bf35d79003f5d8e4fbf3d13602a69ac3fb0..e9ecf177bf367b1ce860975d63970b8ccc6a6884 100644
 --- a/pkg/manager/diff.go
 +++ b/pkg/manager/diff.go
 @@ -437,6 +437,7 @@ func (kc *kernelContext) setupFuzzer(features flatrpc.Feature, syscalls map[*pro
@@ -4288,7 +6064,7 @@ index 3e5a8bf..e9ecf17 100644
  
  	if kc.http != nil {
 diff --git a/pkg/manager/http.go b/pkg/manager/http.go
-index 50f6722..d0f0682 100644
+index 50f67220754b7455ad7c393b74d67db598ebc0d9..d0f0682538d34a1d438e294290dfc1cd874ad80d 100644
 --- a/pkg/manager/http.go
 +++ b/pkg/manager/http.go
 @@ -25,11 +25,14 @@ import (
@@ -4538,7 +6314,7 @@ index 50f6722..d0f0682 100644
 +	}
 +}
 diff --git a/pkg/manager/http_test.go b/pkg/manager/http_test.go
-index 0deee9e..145cee0 100644
+index 0deee9eceaf94a1f4ccf64c33acbe658cab89edc..145cee03a7ecf5f7d1982f3511dbbfbe5c84ff71 100644
 --- a/pkg/manager/http_test.go
 +++ b/pkg/manager/http_test.go
 @@ -4,10 +4,15 @@
@@ -4637,10 +6413,10 @@ index 0deee9e..145cee0 100644
 +	}
 +}
 diff --git a/pkg/mgrconfig/config.go b/pkg/mgrconfig/config.go
-index 6bf88c5..e887ca2 100644
+index 6bf88c5742b9a4ce06b8743d737f449e6b4dc128..713c354c8b512ba904d4045364db6ba437648e7e 100644
 --- a/pkg/mgrconfig/config.go
 +++ b/pkg/mgrconfig/config.go
-@@ -228,10 +228,142 @@ type Config struct {
+@@ -228,10 +228,155 @@ type Config struct {
  	// Experimental options.
  	Experimental Experimental
  
@@ -4659,12 +6435,14 @@ index 6bf88c5..e887ca2 100644
 +	// Enable dump of programs and their coverage (default: false).
 +	// Notice, dumping is only used for dataset collection and would induce significant overhead.
 +	EnableDump bool `json:"enable_dump"`
++	// PersistTargetEvidence saves each final-target program and its available raw
++	// coverage for offline analysis. It does not enable raw coverage collection.
++	PersistTargetEvidence bool `json:"persist_target_evidence,omitempty"`
 +
-+	// ObserveTargetCoverage collects raw coverage for target-PC statistics and
-+	// final-target evidence without enabling Brain registration, training-data
-+	// collection, model inference, rfilter, or guidance by itself. It is used by
-+	// measurement-matched feature-off controls and may be combined with the
-+	// explicit standalone-guidance opt-in for component ablations.
++	// ObserveTargetCoverage reports target-PC statistics without enabling Brain
++	// registration, training, model inference, rfilter, or guidance. With diverse
++	// cover disabled it uses compact executor-side target hits; with diverse cover
++	// enabled it consumes the sampled raw coverage instead.
 +	ObserveTargetCoverage bool `json:"observe_target_coverage"`
 +	// AllowStandaloneGuidance permits guidance without Brain registration only
 +	// for explicitly configured oracle/ablation runs. The ordinary feature-off
@@ -4687,8 +6465,11 @@ index 6bf88c5..e887ca2 100644
 +	// Enable diverse cover collection, which add CollectCover to the ExecOpts of the target queues (default: false).
 +	EnableDiverseCover bool `json:"enable_diverse_cover"`
 +
-+	// Diverse cover collection target queues (default: all the queues belonging to smashQueue and genFuzzQueue).
-+	// A valid example: ["exec smash", "exec gen", "exec fuzz"]
++	// Diverse cover collection target execution sources. By default it includes
++	// candidates, minimization, smash, hints mutants, fault injection, generation,
++	// mutation, and collide. Native triage already collects coverage unconditionally,
++	// while comparison collection cannot collect raw coverage at the same time.
++	// A valid example: ["exec candidate", "exec minimize", "exec fuzz"]
 +	// Only useful when DiverseCover is true.
 +	DiverseCoverTargets []string `json:"diverse_cover_targets"`
 +
@@ -4696,7 +6477,7 @@ index 6bf88c5..e887ca2 100644
 +	// Only useful when DiverseCover is true.
 +	DiverseCoverRatio float64 `json:"diverse_cover_ratio"`
 +
-+	// Directory under Workdir to dump programs and their coverage (default: dumps, i.e., <workdir>/dumps/<programs|coverage>).
++	// Directory used by enable_dump and persist_target_evidence.
 +	DumpDir string `json:"dump_dir"`
 +
 +	// Specify the task name, which shoule be the bug title or patch commit. (default empty)
@@ -4739,6 +6520,14 @@ index 6bf88c5..e887ca2 100644
 +	ReachFilter ReachFilterCfg `json:"reach_filter"`
 +
 +	SchedulingStrategy SchedulingStrategy `json:"scheduling_strategy"`
++}
++
++// UseExecutorTargetHits selects compact executor-side target observation when
++// reachability evidence is needed and raw coverage sampling is not enabled.
++func (cfg SyzPilotCfg) UseExecutorTargetHits() bool {
++	needsReachability := cfg.ObserveTargetCoverage || cfg.ReachFilter.Enable ||
++		cfg.DirectedCorpus.Enable
++	return needsReachability && len(cfg.TargetPCs) != 0 && !cfg.EnableDiverseCover
 +}
 +
 +type DirectedCorpusCfg struct {
@@ -4784,7 +6573,7 @@ index 6bf88c5..e887ca2 100644
  // can be dropped at any moment.
  type Experimental struct {
 diff --git a/pkg/mgrconfig/load.go b/pkg/mgrconfig/load.go
-index b92d6a4..db95558 100644
+index b92d6a4211e1f2cbbe971e76195dc24b3559070f..f89d21babd71414975a64f237cebfe3285d2910b 100644
 --- a/pkg/mgrconfig/load.go
 +++ b/pkg/mgrconfig/load.go
 @@ -106,6 +106,29 @@ func defaultValues() *Config {
@@ -4817,11 +6606,14 @@ index b92d6a4..db95558 100644
  	}
  }
  
-@@ -176,6 +199,29 @@ func Complete(cfg *Config) error {
+@@ -176,6 +199,32 @@ func Complete(cfg *Config) error {
  	if cfg.Procs < 1 || cfg.Procs > prog.MaxPids {
  		return fmt.Errorf("bad config param procs: '%v', want [1, %v]", cfg.Procs, prog.MaxPids)
  	}
 +	if err := validateSyzPilotTuning(cfg.SyzPilot); err != nil {
++		return err
++	}
++	if err := validateSyzPilotCoverage(cfg); err != nil {
 +		return err
 +	}
 +	if cfg.SyzPilot.ColdStartSeedDir != "" {
@@ -4847,14 +6639,38 @@ index b92d6a4..db95558 100644
  	switch cfg.Sandbox {
  	case "none", "setuid", "namespace", "android":
  	default:
-@@ -212,6 +258,32 @@ func Complete(cfg *Config) error {
+@@ -212,6 +261,56 @@ func Complete(cfg *Config) error {
  	return nil
  }
  
++func validateSyzPilotCoverage(cfg *Config) error {
++	if cfg.SyzPilot.EnableDump && !cfg.SyzPilot.EnableDiverseCover {
++		return fmt.Errorf("SyzPilot.enable_dump requires SyzPilot.enable_diverse_cover")
++	}
++	if (cfg.SyzPilot.EnableDiverseCover || cfg.SyzPilot.UseExecutorTargetHits()) && !cfg.Cover {
++		return fmt.Errorf("SyzPilot coverage collection requires cover=true")
++	}
++	return nil
++}
++
 +func validateSyzPilotTuning(cfg SyzPilotCfg) error {
 +	if cfg.TemplateInsertWeight < 0 || cfg.TemplateInsertWeight > 1000 {
 +		return fmt.Errorf("bad config param SyzPilot.template_insert_weight: '%v', want [0, 1000]",
 +			cfg.TemplateInsertWeight)
++	}
++	if cfg.EnableDiverseCover && (cfg.DiverseCoverRatio < 0 || cfg.DiverseCoverRatio > 1) {
++		return fmt.Errorf("bad config param SyzPilot.diverse_cover_ratio: '%v', want [0, 1]",
++			cfg.DiverseCoverRatio)
++	}
++	if cfg.EnableDiverseCover {
++		for _, target := range cfg.DiverseCoverTargets {
++			switch target {
++			case "exec candidate", "exec minimize", "exec gen", "exec fuzz",
++				"exec smash", "exec hints", "exec inject", "exec collide":
++			default:
++				return fmt.Errorf("bad config param SyzPilot.diverse_cover_targets: unknown queue %q", target)
++			}
++		}
 +	}
 +	if !cfg.DirectedCorpus.Enable {
 +		return nil
@@ -4882,10 +6698,10 @@ index b92d6a4..db95558 100644
  		if err := checkNonEmpty(
 diff --git a/pkg/mgrconfig/syzpilot_config_test.go b/pkg/mgrconfig/syzpilot_config_test.go
 new file mode 100644
-index 0000000..9cae32b
+index 0000000000000000000000000000000000000000..f730b72a4080838532a0ffbd4c371a3ef4425992
 --- /dev/null
 +++ b/pkg/mgrconfig/syzpilot_config_test.go
-@@ -0,0 +1,143 @@
+@@ -0,0 +1,243 @@
 +// Copyright 2026 SyzPilot authors. All rights reserved.
 +// Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
 +
@@ -4942,6 +6758,23 @@ index 0000000..9cae32b
 +	}
 +	if !cfg.SyzPilot.DurableTrainingWAL {
 +		t.Fatal("durable training WAL opt-in was not parsed")
++	}
++}
++
++func TestSyzPilotTargetEvidencePersistenceIsOptIn(t *testing.T) {
++	if defaultValues().SyzPilot.PersistTargetEvidence {
++		t.Fatal("target evidence persistence must remain opt-in")
++	}
++	var cfg struct {
++		SyzPilot SyzPilotCfg `json:"SyzPilot"`
++	}
++	if err := json.Unmarshal([]byte(
++		`{"SyzPilot":{"persist_target_evidence":true}}`,
++	), &cfg); err != nil {
++		t.Fatal(err)
++	}
++	if !cfg.SyzPilot.PersistTargetEvidence {
++		t.Fatal("target evidence persistence opt-in was not parsed")
 +	}
 +}
 +
@@ -5029,11 +6862,204 @@ index 0000000..9cae32b
 +		}
 +	}
 +}
++
++func TestValidateSyzPilotDiverseCoverRatio(t *testing.T) {
++	valid := defaultValues().SyzPilot
++	valid.EnableDiverseCover = true
++	for _, ratio := range []float64{0, 0.25, 1} {
++		valid.DiverseCoverRatio = ratio
++		if err := validateSyzPilotTuning(valid); err != nil {
++			t.Fatalf("valid diverse cover ratio %v rejected: %v", ratio, err)
++		}
++	}
++	for _, ratio := range []float64{-0.1, 1.1} {
++		valid.DiverseCoverRatio = ratio
++		if err := validateSyzPilotTuning(valid); err == nil {
++			t.Fatalf("invalid diverse cover ratio %v accepted", ratio)
++		}
++	}
++}
++
++func TestValidateSyzPilotDiverseCoverTargets(t *testing.T) {
++	valid := defaultValues().SyzPilot
++	valid.EnableDiverseCover = true
++	valid.DiverseCoverTargets = []string{
++		"exec candidate", "exec minimize", "exec gen", "exec fuzz",
++		"exec smash", "exec hints", "exec inject", "exec collide",
++	}
++	if err := validateSyzPilotTuning(valid); err != nil {
++		t.Fatalf("valid diverse cover targets rejected: %v", err)
++	}
++	valid.DiverseCoverTargets = []string{"gen"}
++	if err := validateSyzPilotTuning(valid); err == nil {
++		t.Fatal("unknown diverse cover target was accepted")
++	}
++}
++
++func TestUseExecutorTargetHits(t *testing.T) {
++	base := SyzPilotCfg{
++		ObserveTargetCoverage: true,
++		TargetPCs:             []string{"0x81234567"},
++	}
++	if !base.UseExecutorTargetHits() {
++		t.Fatal("observation-only config did not select executor target hits")
++	}
++	base.EnableDiverseCover = true
++	if base.UseExecutorTargetHits() {
++		t.Fatal("raw-coverage mode also selected executor target hits")
++	}
++	base.EnableDiverseCover = false
++	base.TargetPCs = nil
++	if base.UseExecutorTargetHits() {
++		t.Fatal("target-hit mode was selected without target PCs")
++	}
++}
++
++func TestSyzPilotCoverageModesRequireKCOV(t *testing.T) {
++	for _, cfg := range []*Config{
++		{SyzPilot: SyzPilotCfg{EnableDiverseCover: true}},
++		{SyzPilot: SyzPilotCfg{
++			ObserveTargetCoverage: true,
++			TargetPCs:             []string{"0x81234567"},
++		}},
++	} {
++		if err := validateSyzPilotCoverage(cfg); err == nil {
++			t.Fatalf("coverage mode without cover=true was accepted: %+v", cfg.SyzPilot)
++		}
++	}
++	if err := validateSyzPilotCoverage(&Config{
++		Cover: true,
++		SyzPilot: SyzPilotCfg{
++			EnableDump: true,
++		},
++	}); err == nil {
++		t.Fatal("enable_dump without diverse coverage was accepted")
++	}
++	if err := validateSyzPilotCoverage(&Config{
++		Cover: true,
++		SyzPilot: SyzPilotCfg{
++			EnableDump:         true,
++			EnableDiverseCover: true,
++		},
++	}); err != nil {
++		t.Fatalf("valid raw-coverage dump mode was rejected: %v", err)
++	}
++}
+diff --git a/pkg/rpcserver/rpcserver.go b/pkg/rpcserver/rpcserver.go
+index 57b851001b315bd5f63b8792c65fe4b4cf785215..73155d3ce60b5ab73dcfc7135beeb65a90ffd8d8 100644
+--- a/pkg/rpcserver/rpcserver.go
++++ b/pkg/rpcserver/rpcserver.go
+@@ -25,6 +25,7 @@ import (
+ 	"github.com/google/syzkaller/pkg/report"
+ 	"github.com/google/syzkaller/pkg/signal"
+ 	"github.com/google/syzkaller/pkg/stat"
++	"github.com/google/syzkaller/pkg/syzpilotlib"
+ 	"github.com/google/syzkaller/pkg/vminfo"
+ 	"github.com/google/syzkaller/prog"
+ 	"github.com/google/syzkaller/sys/targets"
+@@ -52,6 +53,7 @@ type Config struct {
+ 	Slowdown      int
+ 	pcBase        uint64
+ 	localModules  []*vminfo.KernelModule
++	targetPCs     []uint64
+ 
+ 	// RPCServer closes the channel once the machine check has begun. Used for fault injection during testing.
+ 	machineCheckStarted chan struct{}
+@@ -159,6 +161,13 @@ func New(cfg *RemoteConfig) (Server, error) {
+ 	if !cfg.Experimental.RemoteCover {
+ 		features &= ^flatrpc.FeatureExtraCoverage
+ 	}
++	var targetPCs []uint64
++	if cfg.SyzPilot.UseExecutorTargetHits() {
++		targetPCs, err = syzpilotlib.ValidateExecutorTargetAddrs(cfg.SyzPilot.TargetPCs)
++		if err != nil {
++			return nil, fmt.Errorf("invalid executor target PCs: %w", err)
++		}
++	}
+ 	return newImpl(&Config{
+ 		Config: vminfo.Config{
+ 			Target:     cfg.Target,
+@@ -183,6 +192,7 @@ func New(cfg *RemoteConfig) (Server, error) {
+ 		Slowdown:          cfg.Timeouts.Slowdown,
+ 		pcBase:            pcBase,
+ 		localModules:      cfg.LocalModules,
++		targetPCs:         targetPCs,
+ 	}, cfg.Manager), nil
+ }
+ 
+@@ -397,8 +407,13 @@ func (serv *server) handleMachineInfo(infoReq *flatrpc.InfoRequestRawT) (handsha
+ 		file.Data = slices.Clone(file.Data)
+ 	}
+ 	canonicalizer := serv.canonicalModules.NewInstance(modules)
++	targetPCs := canonicalizer.Decanonicalize(serv.cfg.targetPCs)
++	if len(targetPCs) != len(serv.cfg.targetPCs) {
++		return handshakeResult{}, fmt.Errorf("%w: failed to map all executor target PCs to this VM", errFatal)
++	}
+ 	return handshakeResult{
+ 		CovFilter:     canonicalizer.Decanonicalize(serv.coverFilter),
++		TargetPCs:     targetPCs,
+ 		MachineInfo:   machineInfo,
+ 		Canonicalizer: canonicalizer,
+ 		Files:         infoReq.Files,
+diff --git a/pkg/rpcserver/rpcserver_test.go b/pkg/rpcserver/rpcserver_test.go
+index 429b275ace94a530999961f4a3776f912986abfb..59dc1452971de90335f9f162391c4594c4660d23 100644
+--- a/pkg/rpcserver/rpcserver_test.go
++++ b/pkg/rpcserver/rpcserver_test.go
+@@ -11,6 +11,7 @@ import (
+ 
+ 	"github.com/stretchr/testify/assert"
+ 
++	"github.com/google/syzkaller/pkg/cover"
+ 	"github.com/google/syzkaller/pkg/csource"
+ 	"github.com/google/syzkaller/pkg/flatrpc"
+ 	"github.com/google/syzkaller/pkg/fuzzer/queue"
+@@ -103,6 +104,25 @@ func TestNew(t *testing.T) {
+ 	}
+ }
+ 
++func TestConvertCallInfoDropsTargetHitsWithBogusSignal(t *testing.T) {
++	sysTarget := targets.Get(targets.TestOS, targets.TestArch64)
++	textStart := sysTarget.KernelAddresses.TextStart
++	runner := &Runner{
++		filterSignal:  true,
++		sysTarget:     sysTarget,
++		canonicalizer: cover.NewCanonicalizer(nil, true).NewInstance(nil),
++	}
++	call := &flatrpc.CallInfo{
++		Signal:     []uint64{textStart - 1},
++		Cover:      []uint64{textStart},
++		TargetHits: []uint64{textStart},
++	}
++	runner.convertCallInfo(call)
++	assert.Empty(t, call.Signal)
++	assert.Empty(t, call.Cover)
++	assert.Empty(t, call.TargetHits)
++}
++
+ func TestCheckRevisions(t *testing.T) {
+ 	tests := []struct {
+ 		name    string
 diff --git a/pkg/rpcserver/runner.go b/pkg/rpcserver/runner.go
-index 007363c..fa59865 100644
+index 007363c82663327fa98824672e3599aef633f3bd..2ce6cfcc4bfdfe18a0eaca444b2936b128ac7b35 100644
 --- a/pkg/rpcserver/runner.go
 +++ b/pkg/rpcserver/runner.go
-@@ -419,14 +419,9 @@ func (runner *Runner) handleExecResult(msg *flatrpc.ExecResult) error {
+@@ -80,6 +80,7 @@ type handshakeResult struct {
+ 	Files         []*flatrpc.FileInfo
+ 	Features      []*flatrpc.FeatureInfo
+ 	CovFilter     []uint64
++	TargetPCs     []uint64
+ 	MachineInfo   []byte
+ 	Canonicalizer *cover.CanonicalizerInstance
+ }
+@@ -118,6 +119,7 @@ func (runner *Runner) Handshake(conn *flatrpc.Conn, cfg *handshakeConfig) (hands
+ 	}
+ 	infoReply := &flatrpc.InfoReply{
+ 		CoverFilter: ret.CovFilter,
++		TargetPcs:   ret.TargetPCs,
+ 	}
+ 	if err := flatrpc.Send(conn, infoReply); err != nil {
+ 		return handshakeResult{}, err
+@@ -419,14 +421,9 @@ func (runner *Runner) handleExecResult(msg *flatrpc.ExecResult) error {
  			runner.convertCallInfo(call)
  		}
  		if len(msg.Info.ExtraRaw) != 0 {
@@ -5051,8 +7077,24 @@ index 007363c..fa59865 100644
  			runner.convertCallInfo(msg.Info.Extra)
  		}
  		if !runner.cover && req.ExecOpts.ExecFlags&flatrpc.ExecFlagCollectSignal != 0 {
+@@ -465,6 +462,7 @@ func (runner *Runner) handleExecResult(msg *flatrpc.ExecResult) error {
+ func (runner *Runner) convertCallInfo(call *flatrpc.CallInfo) {
+ 	call.Cover = runner.canonicalizer.Canonicalize(call.Cover)
+ 	call.Signal = runner.canonicalizer.Canonicalize(call.Signal)
++	call.TargetHits = runner.canonicalizer.Canonicalize(call.TargetHits)
+ 
+ 	call.Comps = slices.DeleteFunc(call.Comps, func(cmp *flatrpc.Comparison) bool {
+ 		converted := runner.canonicalizer.Canonicalize([]uint64{cmp.Pc})
+@@ -489,6 +487,7 @@ func (runner *Runner) convertCallInfo(call *flatrpc.CallInfo) {
+ 			if sig < textStart || sig > textEnd {
+ 				call.Signal = []uint64{}
+ 				call.Cover = []uint64{}
++				call.TargetHits = []uint64{}
+ 				break
+ 			}
+ 		}
 diff --git a/pkg/stat/set.go b/pkg/stat/set.go
-index f6e327d..6295c58 100644
+index f6e327d92720b6fbd7a422ecb84de8a89e0dc6e0..6295c58da1b89cdedbda93c3e254ce824b816777 100644
 --- a/pkg/stat/set.go
 +++ b/pkg/stat/set.go
 @@ -45,6 +45,10 @@ func Collect(level Level) []UI {
@@ -5100,7 +7142,7 @@ index f6e327d..6295c58 100644
  	if x := v / secs; x >= 10 {
 diff --git a/pkg/syzpilotlib/Makefile b/pkg/syzpilotlib/Makefile
 new file mode 100644
-index 0000000..22890ae
+index 0000000000000000000000000000000000000000..22890ae815bd6b00efc6d3077479eb85a23f2950
 --- /dev/null
 +++ b/pkg/syzpilotlib/Makefile
 @@ -0,0 +1,139 @@
@@ -5245,7 +7287,7 @@ index 0000000..22890ae
 +	@echo "  help          - Show this help message"
 diff --git a/pkg/syzpilotlib/collector/balancequeue.go b/pkg/syzpilotlib/collector/balancequeue.go
 new file mode 100644
-index 0000000..0144936
+index 0000000000000000000000000000000000000000..014493690595068f9c0068ff0b68209456aaa481
 --- /dev/null
 +++ b/pkg/syzpilotlib/collector/balancequeue.go
 @@ -0,0 +1,86 @@
@@ -5337,7 +7379,7 @@ index 0000000..0144936
 +}
 diff --git a/pkg/syzpilotlib/collector/balancequeue_test.go b/pkg/syzpilotlib/collector/balancequeue_test.go
 new file mode 100644
-index 0000000..7e2457c
+index 0000000000000000000000000000000000000000..7e2457cbd955ba6e2b202de2479db477dd81845f
 --- /dev/null
 +++ b/pkg/syzpilotlib/collector/balancequeue_test.go
 @@ -0,0 +1,30 @@
@@ -5373,7 +7415,7 @@ index 0000000..7e2457c
 +}
 diff --git a/pkg/syzpilotlib/collector/collector.go b/pkg/syzpilotlib/collector/collector.go
 new file mode 100644
-index 0000000..3e4246b
+index 0000000000000000000000000000000000000000..3e4246b8b04d5d9e47c2169d3189549f69113e5e
 --- /dev/null
 +++ b/pkg/syzpilotlib/collector/collector.go
 @@ -0,0 +1,1383 @@
@@ -6762,7 +8804,7 @@ index 0000000..3e4246b
 +}
 diff --git a/pkg/syzpilotlib/collector/collector_test.go b/pkg/syzpilotlib/collector/collector_test.go
 new file mode 100644
-index 0000000..25620ba
+index 0000000000000000000000000000000000000000..25620baa47a173ba01215370d54d39312346c84d
 --- /dev/null
 +++ b/pkg/syzpilotlib/collector/collector_test.go
 @@ -0,0 +1,1372 @@
@@ -8140,7 +10182,7 @@ index 0000000..25620ba
 +}
 diff --git a/pkg/syzpilotlib/collector/telemetry.go b/pkg/syzpilotlib/collector/telemetry.go
 new file mode 100644
-index 0000000..9c80f95
+index 0000000000000000000000000000000000000000..9c80f95ef41cb9ab1a3f42e6cf0a9a16b8041092
 --- /dev/null
 +++ b/pkg/syzpilotlib/collector/telemetry.go
 @@ -0,0 +1,116 @@
@@ -8262,7 +10304,7 @@ index 0000000..9c80f95
 +}
 diff --git a/pkg/syzpilotlib/collector/telemetry_test.go b/pkg/syzpilotlib/collector/telemetry_test.go
 new file mode 100644
-index 0000000..e5c6b74
+index 0000000000000000000000000000000000000000..e5c6b74cf0f6e8c8a1c2ad0f4d40d66435ede781
 --- /dev/null
 +++ b/pkg/syzpilotlib/collector/telemetry_test.go
 @@ -0,0 +1,46 @@
@@ -8314,7 +10356,7 @@ index 0000000..e5c6b74
 +}
 diff --git a/pkg/syzpilotlib/collector/utils.go b/pkg/syzpilotlib/collector/utils.go
 new file mode 100644
-index 0000000..6101e25
+index 0000000000000000000000000000000000000000..6101e25166e6514a2ab73e4cb852ef9cbaec7823
 --- /dev/null
 +++ b/pkg/syzpilotlib/collector/utils.go
 @@ -0,0 +1,41 @@
@@ -8361,7 +10403,7 @@ index 0000000..6101e25
 +}
 diff --git a/pkg/syzpilotlib/inference.proto b/pkg/syzpilotlib/inference.proto
 new file mode 100644
-index 0000000..4c6a7eb
+index 0000000000000000000000000000000000000000..4c6a7eb51fce743d357806a749560dabaec2cce6
 --- /dev/null
 +++ b/pkg/syzpilotlib/inference.proto
 @@ -0,0 +1,52 @@
@@ -8420,10 +10462,10 @@ index 0000000..4c6a7eb
 \ No newline at end of file
 diff --git a/pkg/syzpilotlib/lib.go b/pkg/syzpilotlib/lib.go
 new file mode 100644
-index 0000000..2632416
+index 0000000000000000000000000000000000000000..811c5aa43b97a097b2a29ef3ffb2f56f4a354c90
 --- /dev/null
 +++ b/pkg/syzpilotlib/lib.go
-@@ -0,0 +1,237 @@
+@@ -0,0 +1,252 @@
 +package syzpilotlib
 +
 +import (
@@ -8435,6 +10477,8 @@ index 0000000..2632416
 +
 +	"github.com/google/syzkaller/pkg/debuglogger"
 +)
++
++const MaxExecutorTargetPCs = 256
 +
 +type SyzPilotRuntimeConfig struct {
 +	// task ID assigned by the brain controller
@@ -8497,6 +10541,19 @@ index 0000000..2632416
 +	}
 +	debuglogger.Log(true, "[syzpilotlib] addrStrs: %v, addrVals: %v", addrStrs, addrVals)
 +	return
++}
++
++// ValidateExecutorTargetAddrs validates the compact executor target table.
++func ValidateExecutorTargetAddrs(targetAddrs []string) ([]uint64, error) {
++	_, addrVals, err := ValidateTargetAddrs(targetAddrs)
++	if err != nil {
++		return nil, err
++	}
++	if len(addrVals) > MaxExecutorTargetPCs {
++		return nil, fmt.Errorf("too many target addresses: %d, want at most %d",
++			len(addrVals), MaxExecutorTargetPCs)
++	}
++	return addrVals, nil
 +}
 +
 +func ProbN(N int) bool {
@@ -8663,13 +10720,30 @@ index 0000000..2632416
 +}
 diff --git a/pkg/syzpilotlib/lib_test.go b/pkg/syzpilotlib/lib_test.go
 new file mode 100644
-index 0000000..b52adb6
+index 0000000000000000000000000000000000000000..55de082d84369357e854682aaa8cd8a29a53b73c
 --- /dev/null
 +++ b/pkg/syzpilotlib/lib_test.go
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,109 @@
 +package syzpilotlib
 +
-+import "testing"
++import (
++	"fmt"
++	"testing"
++)
++
++func TestValidateExecutorTargetAddrs(t *testing.T) {
++	if got, err := ValidateExecutorTargetAddrs([]string{"0x81234567"}); err != nil ||
++		len(got) != 1 || got[0] != 0xffffffff81234567 {
++		t.Fatalf("ValidateExecutorTargetAddrs() = (%x, %v)", got, err)
++	}
++	targets := make([]string, MaxExecutorTargetPCs+1)
++	for i := range targets {
++		targets[i] = fmt.Sprintf("0x%08x", 0x81000000+i)
++	}
++	if _, err := ValidateExecutorTargetAddrs(targets); err == nil {
++		t.Fatal("oversized executor target table was accepted")
++	}
++}
 +
 +func TestOneHotLabelClass(t *testing.T) {
 +	tests := []struct {
@@ -8761,7 +10835,7 @@ index 0000000..b52adb6
 +}
 diff --git a/pkg/syzpilotlib/manager/client.go b/pkg/syzpilotlib/manager/client.go
 new file mode 100644
-index 0000000..248d608
+index 0000000000000000000000000000000000000000..248d608a3296882736e87bcba2c2d35796256cc7
 --- /dev/null
 +++ b/pkg/syzpilotlib/manager/client.go
 @@ -0,0 +1,449 @@
@@ -9216,7 +11290,7 @@ index 0000000..248d608
 +}
 diff --git a/pkg/syzpilotlib/manager/client_test.go b/pkg/syzpilotlib/manager/client_test.go
 new file mode 100644
-index 0000000..b8a79a0
+index 0000000000000000000000000000000000000000..b8a79a08b1457f138d3eaa157b96d19d67a9745e
 --- /dev/null
 +++ b/pkg/syzpilotlib/manager/client_test.go
 @@ -0,0 +1,285 @@
@@ -9507,7 +11581,7 @@ index 0000000..b8a79a0
 +}
 diff --git a/pkg/syzpilotlib/manager/network.go b/pkg/syzpilotlib/manager/network.go
 new file mode 100644
-index 0000000..8880ed2
+index 0000000000000000000000000000000000000000..8880ed2de2a271a8407e8ecd26655ea22194c238
 --- /dev/null
 +++ b/pkg/syzpilotlib/manager/network.go
 @@ -0,0 +1,176 @@
@@ -9689,7 +11763,7 @@ index 0000000..8880ed2
 +}
 diff --git a/pkg/syzpilotlib/predictor/predictor.go b/pkg/syzpilotlib/predictor/predictor.go
 new file mode 100644
-index 0000000..b361ff3
+index 0000000000000000000000000000000000000000..b361ff3ba5b97c92fdae6133967ed5ed3b8aeea9
 --- /dev/null
 +++ b/pkg/syzpilotlib/predictor/predictor.go
 @@ -0,0 +1,171 @@
@@ -9866,7 +11940,7 @@ index 0000000..b361ff3
 +}
 diff --git a/pkg/syzpilotlib/syzlangmanifest/manifest.go b/pkg/syzpilotlib/syzlangmanifest/manifest.go
 new file mode 100644
-index 0000000..dc0deab
+index 0000000000000000000000000000000000000000..dc0deab275182ddcc40b94f679a9531edd709a7f
 --- /dev/null
 +++ b/pkg/syzpilotlib/syzlangmanifest/manifest.go
 @@ -0,0 +1,490 @@
@@ -10362,7 +12436,7 @@ index 0000000..dc0deab
 +}
 diff --git a/pkg/syzpilotlib/syzlangmanifest/manifest_test.go b/pkg/syzpilotlib/syzlangmanifest/manifest_test.go
 new file mode 100644
-index 0000000..48b2c65
+index 0000000000000000000000000000000000000000..48b2c655c9b245c0d4095303a1bfff4c262e0bee
 --- /dev/null
 +++ b/pkg/syzpilotlib/syzlangmanifest/manifest_test.go
 @@ -0,0 +1,274 @@
@@ -10642,7 +12716,7 @@ index 0000000..48b2c65
 +}
 diff --git a/pkg/syzpilotlib/transmission.proto b/pkg/syzpilotlib/transmission.proto
 new file mode 100644
-index 0000000..7f926c8
+index 0000000000000000000000000000000000000000..7f926c8695f92be8da8f00f9d367f5d325346054
 --- /dev/null
 +++ b/pkg/syzpilotlib/transmission.proto
 @@ -0,0 +1,50 @@
@@ -10697,7 +12771,7 @@ index 0000000..7f926c8
 +    uint64 total_samples_received = 4;         // total number of samples received
 +}
 diff --git a/prog/mutation.go b/prog/mutation.go
-index eb9e828..7062672 100644
+index eb9e8285d78b641893f061cf0abf3ae3ff51d74e..70626726ce852a6469ed2cfde9af1173a95dc436 100644
 --- a/prog/mutation.go
 +++ b/prog/mutation.go
 @@ -28,29 +28,90 @@ func (p *Prog) Mutate(rs rand.Source, ncalls int, ct *ChoiceTable, noMutate map[
@@ -11136,7 +13210,7 @@ index eb9e828..7062672 100644
  	var baseSize uint64
  	if ctx.Base != nil {
 diff --git a/prog/mutation_test.go b/prog/mutation_test.go
-index 1cd1865..b3f452a 100644
+index 1cd18656e0ed3754a4d114768c0d61187ab00b3c..b3f452a82879e05d4a50524b3125a4d2607cce52 100644
 --- a/prog/mutation_test.go
 +++ b/prog/mutation_test.go
 @@ -7,11 +7,54 @@ import (
@@ -11647,7 +13721,7 @@ index 1cd1865..b3f452a 100644
  	tests := [][2]string{
  		// The call with many arguments has a higher mutation probability.
 diff --git a/prog/prio.go b/prog/prio.go
-index a180082..b452fa9 100644
+index a18008271fbb33f9511bc229279edd49923f7805..b452fa93816f7c7c13bdb5220ec2ec3d2be385f1 100644
 --- a/prog/prio.go
 +++ b/prog/prio.go
 @@ -202,6 +202,12 @@ type ChoiceTable struct {
@@ -11743,7 +13817,7 @@ index a180082..b452fa9 100644
 +	return ct.guidedCalls[len(ct.guidedCalls)-1].ID
 +}
 diff --git a/prog/prio_test.go b/prog/prio_test.go
-index 9355581..c22f7c5 100644
+index 93555818e82c196053439ed246f6f543c288580b..c22f7c5afd6bfe2e2c810c69026560559946283c 100644
 --- a/prog/prio_test.go
 +++ b/prog/prio_test.go
 @@ -4,6 +4,7 @@
@@ -11783,7 +13857,7 @@ index 9355581..c22f7c5 100644
  		{2, 2, 2},
 diff --git a/prog/syzpilot_resources.go b/prog/syzpilot_resources.go
 new file mode 100644
-index 0000000..5185a69
+index 0000000000000000000000000000000000000000..5185a693aff9de7ef6e0338a456b13ca1e6a679e
 --- /dev/null
 +++ b/prog/syzpilot_resources.go
 @@ -0,0 +1,51 @@
@@ -11839,7 +13913,7 @@ index 0000000..5185a69
 +	return dependencies
 +}
 diff --git a/syz-manager/manager.go b/syz-manager/manager.go
-index b494df2..72046e7 100644
+index b494df213919b02b934e6ee28bbeb6a5fe619888..1f07934752fd88c95211eca19091408595b2f5e6 100644
 --- a/syz-manager/manager.go
 +++ b/syz-manager/manager.go
 @@ -6,6 +6,7 @@ package main
@@ -12072,7 +14146,7 @@ index b494df2..72046e7 100644
  	if mgr.cfg.HTTP != "" {
  		go func() {
  			err := mgr.http.Serve(ctx)
-@@ -379,13 +517,346 @@ func RunManager(mode *Mode, cfg *mgrconfig.Config) {
+@@ -379,13 +517,349 @@ func RunManager(mode *Mode, cfg *mgrconfig.Config) {
  	mgr.pool.Loop(ctx)
  }
  
@@ -12116,8 +14190,11 @@ index b494df2..72046e7 100644
 +	if cfg.ObserveTargetCoverage && len(cfg.TargetPCs) == 0 {
 +		return fmt.Errorf("observe_target_coverage requires target_pcs")
 +	}
-+	if cfg.ObserveTargetCoverage && !filepath.IsAbs(cfg.DumpDir) {
-+		return fmt.Errorf("observe_target_coverage requires an explicit absolute dump_dir")
++	if cfg.PersistTargetEvidence && len(cfg.TargetPCs) == 0 {
++		return fmt.Errorf("persist_target_evidence requires target_pcs")
++	}
++	if cfg.PersistTargetEvidence && !filepath.IsAbs(cfg.DumpDir) {
++		return fmt.Errorf("persist_target_evidence requires an explicit absolute dump_dir")
 +	}
 +	if cfg.DirectedCorpus.Enable && len(cfg.TargetPCs) == 0 {
 +		return fmt.Errorf("directed_corpus requires target_pcs")
@@ -12422,7 +14499,7 @@ index b494df2..72046e7 100644
  }
  
  func (mgr *Manager) heartbeatLoop() {
-@@ -1103,6 +1574,7 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
+@@ -1103,6 +1577,7 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
  	}
  	if mgr.mode.ExitAfterMachineCheck {
  		mgr.exit(mgr.mode.Name)
@@ -12430,7 +14507,7 @@ index b494df2..72046e7 100644
  	}
  
  	mgr.mu.Lock()
-@@ -1114,12 +1586,38 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
+@@ -1114,12 +1589,38 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
  		panic("MachineChecked called twice")
  	}
  	mgr.enabledFeatures = features
@@ -12469,7 +14546,7 @@ index b494df2..72046e7 100644
  	mgr.setPhaseLocked(phaseLoadedCorpus)
  	opts := fuzzer.DefaultExecOpts(mgr.cfg, features, *flagDebug)
  
-@@ -1130,7 +1628,7 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
+@@ -1130,7 +1631,7 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
  		mgr.http.Corpus.Store(mgr.corpus)
  
  		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -12478,7 +14555,7 @@ index b494df2..72046e7 100644
  			Corpus:         mgr.corpus,
  			Snapshot:       mgr.cfg.Snapshot,
  			Coverage:       mgr.cfg.Cover,
-@@ -1151,10 +1649,36 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
+@@ -1151,10 +1652,36 @@ func (mgr *Manager) MachineChecked(features flatrpc.Feature,
  				defer mgr.mu.Unlock()
  				return !mgr.saturatedCalls[call]
  			},
@@ -12516,10 +14593,41 @@ index b494df2..72046e7 100644
  		go mgr.corpusInputHandler(corpusUpdates)
  		go mgr.corpusMinimization()
 diff --git a/syz-manager/snapshot.go b/syz-manager/snapshot.go
-index f2a0196..91628fd 100644
+index f2a01961ec215f094b1d89b4455aa79947a806cd..cec29ded2230d6853d36f29673736f331668aedb 100644
 --- a/syz-manager/snapshot.go
 +++ b/syz-manager/snapshot.go
-@@ -143,12 +143,7 @@ func (mgr *Manager) snapshotRun(inst *vm.Instance, builder *flatbuffers.Builder,
+@@ -15,6 +15,7 @@ import (
+ 	"github.com/google/syzkaller/pkg/fuzzer/queue"
+ 	"github.com/google/syzkaller/pkg/log"
+ 	"github.com/google/syzkaller/pkg/manager"
++	"github.com/google/syzkaller/pkg/syzpilotlib"
+ 	"github.com/google/syzkaller/vm"
+ 	"github.com/google/syzkaller/vm/dispatcher"
+ )
+@@ -86,6 +87,14 @@ func (mgr *Manager) snapshotLoop(ctx context.Context, inst *vm.Instance) error {
+ }
+ 
+ func (mgr *Manager) snapshotSetup(inst *vm.Instance, builder *flatbuffers.Builder, env flatrpc.ExecEnv) error {
++	var targetPCs []uint64
++	if mgr.cfg.SyzPilot.UseExecutorTargetHits() {
++		var err error
++		targetPCs, err = syzpilotlib.ValidateExecutorTargetAddrs(mgr.cfg.SyzPilot.TargetPCs)
++		if err != nil {
++			return fmt.Errorf("invalid executor target PCs: %w", err)
++		}
++	}
+ 	msg := flatrpc.SnapshotHandshakeT{
+ 		CoverEdges:       mgr.cfg.Experimental.CoverEdges,
+ 		Kernel64Bit:      mgr.cfg.SysTarget.PtrSize == 8,
+@@ -95,6 +104,7 @@ func (mgr *Manager) snapshotSetup(inst *vm.Instance, builder *flatbuffers.Builde
+ 		Features:         mgr.enabledFeatures,
+ 		EnvFlags:         env,
+ 		SandboxArg:       mgr.cfg.SandboxArg,
++		TargetPcs:        targetPCs,
+ 	}
+ 	builder.Reset()
+ 	builder.Finish(msg.Pack(builder))
+@@ -143,12 +153,7 @@ func (mgr *Manager) snapshotRun(inst *vm.Instance, builder *flatbuffers.Builder,
  		}
  		res.Info.Calls = res.Info.Calls[:len(req.Prog.Calls)]
  		if len(res.Info.ExtraRaw) != 0 {
@@ -12535,10 +14643,10 @@ index f2a0196..91628fd 100644
  
 diff --git a/syz-manager/syzpilot_guidance_test.go b/syz-manager/syzpilot_guidance_test.go
 new file mode 100644
-index 0000000..0d4d8dd
+index 0000000000000000000000000000000000000000..48c38271b9b06dd82426147db755936d843e72ee
 --- /dev/null
 +++ b/syz-manager/syzpilot_guidance_test.go
-@@ -0,0 +1,547 @@
+@@ -0,0 +1,551 @@
 +package main
 +
 +import (
@@ -12644,7 +14752,6 @@ index 0000000..0d4d8dd
 +func TestValidateSyzPilotObservationOnlyRequiresTargets(t *testing.T) {
 +	cfg := mgrconfig.SyzPilotCfg{
 +		ObserveTargetCoverage: true,
-+		DumpDir:               "/tmp/syzpilot-observation-test",
 +	}
 +	if err := validateSyzPilotConfig(cfg); err == nil {
 +		t.Fatal("observation-only configuration without target_pcs was accepted")
@@ -12653,9 +14760,14 @@ index 0000000..0d4d8dd
 +	if err := validateSyzPilotConfig(cfg); err != nil {
 +		t.Fatalf("valid observation-only configuration rejected: %v", err)
 +	}
++	cfg.PersistTargetEvidence = true
 +	cfg.DumpDir = "relative-results"
 +	if err := validateSyzPilotConfig(cfg); err == nil {
-+		t.Fatal("observation-only configuration with relative dump_dir was accepted")
++		t.Fatal("target evidence with relative dump_dir was accepted")
++	}
++	cfg.DumpDir = "/tmp/syzpilot-observation-test"
++	if err := validateSyzPilotConfig(cfg); err != nil {
++		t.Fatalf("valid target-evidence configuration rejected: %v", err)
 +	}
 +}
 +
@@ -13088,7 +15200,7 @@ index 0000000..0d4d8dd
 +}
 diff --git a/syz-manager/syzpilot_model_activation_test.go b/syz-manager/syzpilot_model_activation_test.go
 new file mode 100644
-index 0000000..f19dea5
+index 0000000000000000000000000000000000000000..f19dea5496ff115e7e30a9b318ab2d23bb838d73
 --- /dev/null
 +++ b/syz-manager/syzpilot_model_activation_test.go
 @@ -0,0 +1,86 @@
@@ -13180,7 +15292,7 @@ index 0000000..f19dea5
 +}
 diff --git a/syz-manager/syzpilot_resource_closure.go b/syz-manager/syzpilot_resource_closure.go
 new file mode 100644
-index 0000000..f6c8988
+index 0000000000000000000000000000000000000000..f6c8988befabdd93ad3b629308d0900b55344824
 --- /dev/null
 +++ b/syz-manager/syzpilot_resource_closure.go
 @@ -0,0 +1,296 @@
@@ -13482,7 +15594,7 @@ index 0000000..f6c8988
 +}
 diff --git a/syz-manager/syzpilot_resource_closure_test.go b/syz-manager/syzpilot_resource_closure_test.go
 new file mode 100644
-index 0000000..7c517df
+index 0000000000000000000000000000000000000000..7c517df2c4a4ca59365db1a0bd142d480b2df7a7
 --- /dev/null
 +++ b/syz-manager/syzpilot_resource_closure_test.go
 @@ -0,0 +1,212 @@
@@ -13700,7 +15812,7 @@ index 0000000..7c517df
 +}
 diff --git a/syz-manager/syzpilot_seed_catalog.go b/syz-manager/syzpilot_seed_catalog.go
 new file mode 100644
-index 0000000..1e17a9b
+index 0000000000000000000000000000000000000000..1e17a9b761f5b4f5e31e06b334183dfa08c10851
 --- /dev/null
 +++ b/syz-manager/syzpilot_seed_catalog.go
 @@ -0,0 +1,258 @@
@@ -13964,7 +16076,7 @@ index 0000000..1e17a9b
 +}
 diff --git a/syz-manager/syzpilot_seed_catalog_linux_amd64.json b/syz-manager/syzpilot_seed_catalog_linux_amd64.json
 new file mode 100644
-index 0000000..2851ed3
+index 0000000000000000000000000000000000000000..2851ed3b2111e9b9c1791c00f66c1858eec6da34
 --- /dev/null
 +++ b/syz-manager/syzpilot_seed_catalog_linux_amd64.json
 @@ -0,0 +1,8052 @@
@@ -22022,7 +24134,7 @@ index 0000000..2851ed3
 +}
 diff --git a/tools/README_analyze_dump.md b/tools/README_analyze_dump.md
 new file mode 100644
-index 0000000..6eecec4
+index 0000000000000000000000000000000000000000..6eecec4cce16e85ec305d9eb1e941735e7707e60
 --- /dev/null
 +++ b/tools/README_analyze_dump.md
 @@ -0,0 +1,125 @@
@@ -22154,7 +24266,7 @@ index 0000000..6eecec4
 \ No newline at end of file
 diff --git a/tools/analyze_debuglogger.py b/tools/analyze_debuglogger.py
 new file mode 100644
-index 0000000..cc3e2b6
+index 0000000000000000000000000000000000000000..cc3e2b6e4912f804cb7a946ab4edc1f81d6f9b35
 --- /dev/null
 +++ b/tools/analyze_debuglogger.py
 @@ -0,0 +1,205 @@
@@ -22366,7 +24478,7 @@ index 0000000..cc3e2b6
 \ No newline at end of file
 diff --git a/tools/analyze_dump.py b/tools/analyze_dump.py
 new file mode 100644
-index 0000000..c99d059
+index 0000000000000000000000000000000000000000..c99d059143448cf4efa23ed73bc9e82c716040b9
 --- /dev/null
 +++ b/tools/analyze_dump.py
 @@ -0,0 +1,285 @@
@@ -22657,7 +24769,7 @@ index 0000000..c99d059
 +    main()
 diff --git a/tools/analyze_overhead.py b/tools/analyze_overhead.py
 new file mode 100644
-index 0000000..3ecadf1
+index 0000000000000000000000000000000000000000..3ecadf134342081622f4a49e63a17c84660330ea
 --- /dev/null
 +++ b/tools/analyze_overhead.py
 @@ -0,0 +1,142 @@
@@ -22805,7 +24917,7 @@ index 0000000..3ecadf1
 +    main()
 diff --git a/tools/syzpilot-manifest/manifest.go b/tools/syzpilot-manifest/manifest.go
 new file mode 100644
-index 0000000..42f47a3
+index 0000000000000000000000000000000000000000..42f47a3d7aefdde841bea4a70f7ae535e2d8a992
 --- /dev/null
 +++ b/tools/syzpilot-manifest/manifest.go
 @@ -0,0 +1,82 @@
@@ -22893,7 +25005,7 @@ index 0000000..42f47a3
 +}
 diff --git a/tools/syzpilot-manifest/manifest_test.go b/tools/syzpilot-manifest/manifest_test.go
 new file mode 100644
-index 0000000..3214c39
+index 0000000000000000000000000000000000000000..3214c393c2563dda479c5661d3d79025f5ebb5e0
 --- /dev/null
 +++ b/tools/syzpilot-manifest/manifest_test.go
 @@ -0,0 +1,65 @@
@@ -22964,7 +25076,7 @@ index 0000000..3214c39
 +}
 diff --git a/tools/syzpilot-seed-catalog/catalog.go b/tools/syzpilot-seed-catalog/catalog.go
 new file mode 100644
-index 0000000..bd8659d
+index 0000000000000000000000000000000000000000..bd8659dfe59f1a1d985b6f6180273f0be17edd93
 --- /dev/null
 +++ b/tools/syzpilot-seed-catalog/catalog.go
 @@ -0,0 +1,200 @@
@@ -23170,7 +25282,7 @@ index 0000000..bd8659d
 +}
 diff --git a/tools/syzpilot-seed-catalog/catalog_test.go b/tools/syzpilot-seed-catalog/catalog_test.go
 new file mode 100644
-index 0000000..668ebab
+index 0000000000000000000000000000000000000000..668ebab381e8150b9b405a1ac2a29c2971c687a1
 --- /dev/null
 +++ b/tools/syzpilot-seed-catalog/catalog_test.go
 @@ -0,0 +1,61 @@
@@ -23237,7 +25349,7 @@ index 0000000..668ebab
 +}
 diff --git a/tools/test_analyze_dump.py b/tools/test_analyze_dump.py
 new file mode 100644
-index 0000000..40987c7
+index 0000000000000000000000000000000000000000..40987c7b72ee9f6436b5bfe8cb051ae42201ded8
 --- /dev/null
 +++ b/tools/test_analyze_dump.py
 @@ -0,0 +1,98 @@

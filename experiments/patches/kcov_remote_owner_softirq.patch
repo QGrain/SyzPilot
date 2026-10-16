@@ -1,0 +1,25 @@
+diff --git a/include/linux/kcov.h b/include/linux/kcov.h
+index b851ba415e03..3b479a3d235a 100644
+--- a/include/linux/kcov.h
++++ b/include/linux/kcov.h
+@@ -21,6 +21,8 @@ enum kcov_mode {
+ 	KCOV_MODE_TRACE_PC = 2,
+ 	/* Collecting comparison operands mode. */
+ 	KCOV_MODE_TRACE_CMP = 3,
++	/* The process owns a KCOV remote reference. */
++	KCOV_MODE_REMOTE = 4,
+ };
+ 
+ #define KCOV_IN_CTXSW	(1 << 30)
+diff --git a/kernel/kcov.c b/kernel/kcov.c
+index c3124f6d5536..f0a69d402066 100644
+--- a/kernel/kcov.c
++++ b/kernel/kcov.c
+@@ -632,6 +632,7 @@ static int kcov_ioctl_locked(struct kcov *kcov, unsigned int cmd,
+ 			return -EINVAL;
+ 		kcov->mode = mode;
+ 		t->kcov = kcov;
++		t->kcov_mode = KCOV_MODE_REMOTE;
+ 		kcov->t = t;
+ 		kcov->remote = true;
+ 		kcov->remote_size = remote_arg->area_size;

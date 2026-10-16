@@ -15,6 +15,7 @@
 - Can be imported as a module or used as CLI tool
 - Dry-run mode for testing without actual compilation
 - Automatic fallback to `linux-stable-git-master` when a commit is not present in `linux-git-master`
+- Automatic backport of the upstream remote-KCOV owner fix for affected kernels
 
 ## Usage
 
@@ -140,9 +141,12 @@ For each target kernel, the script performs the following steps:
 2. **Copy repository**: Copy the selected repository to `workdir/case_N`
 3. **Clean & checkout**: Clean the working directory and checkout the specified commit
 4. **Remove .git**: Delete the `.git` directory to save disk space
-5. **Copy config**: Copy the `.config` file to the kernel directory
-6. **Configure**: Run `make CC=<compiler> HOSTCC=<compiler> olddefconfig`
-7. **Compile**: Run `make CC=<compiler> HOSTCC=<compiler> -jX`
+5. **Apply compatibility fix**: Backport Linux commit `01c8f9806bde` when the
+   checked-out kernel supports remote KCOV but lacks its owner-state fix. Kernels
+   without remote KCOV are left unchanged; partial backports are rejected.
+6. **Copy config**: Copy the `.config` file to the kernel directory
+7. **Configure**: Run `make CC=<compiler> HOSTCC=<compiler> olddefconfig`
+8. **Compile**: Run `make CC=<compiler> HOSTCC=<compiler> -jX`
 
 ## Error Handling
 

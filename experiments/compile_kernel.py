@@ -16,6 +16,49 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 
+KCOV_REMOTE_OWNER_PATCH = (
+    Path(__file__).resolve().parent
+    / "patches"
+    / "kcov_remote_owner_softirq.patch"
+)
+
+
+def apply_kcov_remote_owner_fix(kernel_dir: Path) -> bool:
+    """Apply the upstream owner-state fix to kernels with remote KCOV support."""
+    header = kernel_dir / "include/linux/kcov.h"
+    uapi_header = kernel_dir / "include/uapi/linux/kcov.h"
+    source = kernel_dir / "kernel/kcov.c"
+    if not (header.is_file() and uapi_header.is_file() and source.is_file()):
+        return False
+
+    header_text = header.read_text()
+    uapi_text = uapi_header.read_text()
+    source_text = source.read_text()
+    supports_remote = (
+        "KCOV_REMOTE_ENABLE" in uapi_text and "kcov->remote = true" in source_text
+    )
+    if not supports_remote:
+        return False
+
+    has_remote_mode = "KCOV_MODE_REMOTE" in header_text
+    has_owner_assignment = "t->kcov_mode = KCOV_MODE_REMOTE" in source_text
+    if has_remote_mode and has_owner_assignment:
+        return False
+    if has_remote_mode != has_owner_assignment:
+        raise RuntimeError(
+            "inconsistent remote-KCOV owner-state backport: only one fix marker is present"
+        )
+
+    returncode, _, stderr = run_command(
+        ["git", "apply", str(KCOV_REMOTE_OWNER_PATCH)],
+        cwd=str(kernel_dir),
+        capture_output=True,
+    )
+    if returncode != 0:
+        raise RuntimeError(f"failed to apply remote-KCOV compatibility fix: {stderr}")
+    return True
+
+
 class KernelCompilationResult:
     """Represents the result of a kernel compilation."""
 
@@ -210,6 +253,9 @@ def compile_single_kernel(
             if git_dir.exists():
                 shutil.rmtree(git_dir)
 
+        if apply_kcov_remote_owner_fix(case_dir):
+            print(f"[{case_name}] Applied the upstream remote-KCOV owner fix")
+
         # Step 4: Copy .config file
         print(f"[{case_name}] Copying .config file from {config_path}...")
         config_src = Path(config_path)
@@ -386,6 +432,9 @@ def compile_single_kernel_irgen(
             git_dir = case_dir / ".git"
             if git_dir.exists():
                 shutil.rmtree(git_dir)
+
+        if apply_kcov_remote_owner_fix(case_dir):
+            print(f"[{case_name}] Applied the upstream remote-KCOV owner fix")
 
         # Copy .config
         config_src = Path(config_path)

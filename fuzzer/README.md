@@ -7,8 +7,8 @@ upstream Syzkaller commit
 `6e83b42dcfcd13c3b8e0d5c803cdcc424c0fbff9`. Use a clean clone and
 apply from the Syzkaller root. Do not apply it to an arbitrary newer
 Syzkaller revision, since its Go APIs and program mutation semantics change.
-The current patch corresponds to the reviewed SyzPilot-Fuzzer `v0.2.0`
-source release (`212601e`).
+The current patch corresponds to the reviewed SyzPilot-Fuzzer `v0.3.0`
+source release (`b5d48ab`).
 
 ```bash
 git clone https://github.com/google/syzkaller.git SyzPilot-fuzzer
@@ -50,6 +50,16 @@ predictions, and exact-waypoint predictions. Sparse-adaptive Stage 3 may also
 return `Reach_Other` for reached samples whose exact waypoint is inactive. The
 filter treats that label as reached but does not grant an exact-waypoint smash
 bonus. Brain and Fuzzer releases must therefore be upgraded together.
+
+For normal online operation, the Fuzzer asks the executor to return only exact
+configured target-PC hits instead of transporting each full raw KCOV trace.
+This compact route supplies the same complete-program reachability labels and
+target-hit statistics while leaving native Syzkaller triage unchanged. Enable
+`SyzPilot.enable_diverse_cover` only when an experiment needs sampled raw
+coverage; `SyzPilot.enable_dump` requires that raw route. The complete raw
+policy covers candidates, minimization trials, generation, mutation, smash,
+hints, fault injection, and collide, while KCOV comparison collection remains
+outside the policy because comparison and PC modes are mutually exclusive.
 
 ## External baseline patches
 
