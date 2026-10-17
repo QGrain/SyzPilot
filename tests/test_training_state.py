@@ -229,6 +229,72 @@ class TrainingStateTest(unittest.TestCase):
             str(checkpoint), map_location="cpu", weights_only=True
         )
 
+    def test_torchscript_export_does_not_initialize_cuda(self):
+        import torch
+
+        class FakeEncoder(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.config = type("Config", (), {"hidden_size": 4})()
+
+            def forward(self, input_ids, attention_mask=None):
+                hidden = input_ids.unsqueeze(-1).expand(-1, -1, 4).float()
+                return type("Output", (), {"last_hidden_state": hidden})()
+
+        class FakeTokenizer:
+            eos_token = "<eos>"
+            pad_token = None
+
+            def __call__(self, texts, **kwargs):
+                shape = (len(texts), kwargs["max_length"])
+                return {
+                    "input_ids": torch.ones(shape, dtype=torch.long),
+                    "attention_mask": torch.ones(shape, dtype=torch.long),
+                }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint = Path(temp_dir) / "step-1.pt"
+            torch.save({
+                "classifier.0.weight": torch.ones((3, 4)),
+                "classifier.0.bias": torch.zeros(3),
+            }, checkpoint)
+            task = FuzzerTask(
+                task_id="fuzzer@task@1", task_name="task", run_id=1,
+                fuzzer_id="fuzzer", mode="direct",
+                callback_addr="localhost:1",
+            )
+            instance = Controller()
+            with (
+                mock.patch(
+                    "transformers.AutoModel.from_pretrained",
+                    return_value=FakeEncoder(),
+                ),
+                mock.patch(
+                    "transformers.AutoTokenizer.from_pretrained",
+                    return_value=FakeTokenizer(),
+                ),
+                mock.patch.object(controller_module.config, "base_model", "base"),
+                mock.patch.object(controller_module.config, "tokenizer", "tokenizer"),
+                mock.patch(
+                    "torch.cuda.device_count",
+                    side_effect=AssertionError("CUDA must not be queried"),
+                ),
+                mock.patch(
+                    "torch.cuda.empty_cache",
+                    side_effect=AssertionError("CUDA must not be initialized"),
+                ),
+            ):
+                output = instance._export_torchscript(
+                    task, checkpoint, 3, 1, "model", None
+                )
+
+            exported = torch.jit.load(output, map_location="cpu")
+            logits = exported(
+                torch.ones((1, 8), dtype=torch.long),
+                torch.ones((1, 8), dtype=torch.long),
+            )
+            self.assertEqual(tuple(logits.shape), (1, 2))
+
     def test_deployment_uses_latency_bounded_batching_config(self):
         instance = Controller()
         operator = mock.Mock()
@@ -3296,7 +3362,7 @@ class TrainingStateTest(unittest.TestCase):
             self.assertEqual(task.pending_model_name, "")
             self.assertFalse(task.training_in_progress)
             export.assert_called_once_with(
-                task, checkpoint, 3, 1, "reach_filter_test_v1", "0", None
+                task, checkpoint, 3, 1, "reach_filter_test_v1", None
             )
             release_gpu.assert_called_once_with("0")
             deploy.assert_called_once_with(
@@ -3482,7 +3548,7 @@ class TrainingStateTest(unittest.TestCase):
                 )
 
             export.assert_called_once_with(
-                task, checkpoint, 3, 1, "reach_filter_test_v1", "0", None
+                task, checkpoint, 3, 1, "reach_filter_test_v1", None
             )
 
             self.assertEqual(task.training_round, 0)
@@ -3829,7 +3895,7 @@ class TrainingStateTest(unittest.TestCase):
                 )
 
             export.assert_called_once_with(
-                task, checkpoint, 3, 1, "reach_filter_test_v1", "2", None
+                task, checkpoint, 3, 1, "reach_filter_test_v1", None
             )
             release_gpu.assert_called_once_with("2")
             release_port.assert_called_once_with(

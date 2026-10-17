@@ -3564,13 +3564,12 @@ class Controller:
                     try:
                         torchscript_path = self._export_torchscript(
                             task, best_checkpoint, num_classes, stage,
-                            candidate_name, training_gpu, active_classes,
+                            candidate_name, active_classes,
                         )
                     finally:
-                        # Export loads and traces the model on the same GPU as
-                        # the trainer. Keep the admission slot until tracing is
-                        # complete, then release it before TorchServe startup
-                        # and the post-deployment guidance pipeline.
+                        # Keep one lifecycle boundary through serialization,
+                        # then release the trainer before deployment and
+                        # post-deployment guidance.
                         self._release_training_resources(
                             task, training_id, training_port, training_gpu
                         )
@@ -3737,38 +3736,13 @@ class Controller:
 
     def _export_torchscript(self, task: FuzzerTask, ckpt_path: Path,
                             num_classes: int, stage: int,
-                            artifact_name: str, training_gpu: str,
-                            active_classes=None) -> str:
-        """Export trained model checkpoint to TorchScript format."""
-        import importlib
-        import sys
+                            artifact_name: str, active_classes=None) -> str:
+        """Export a trained checkpoint to CPU-portable TorchScript."""
         import torch
-
-        # Add filter directory to path and handle module name collision.
-        # brain/utils.py is cached as 'utils' in sys.modules, which shadows
-        # filter/utils.py (needed by model_v2.py). Temporarily swap it out.
-        here = os.path.dirname(os.path.abspath(__file__))
-        filter_dir = os.path.join(os.path.dirname(here), "filter")
-
-        with Controller._export_lock:
-            if filter_dir not in sys.path:
-                sys.path.insert(0, filter_dir)
-
-            # Save and replace the cached 'utils' module so filter/utils.py loads correctly
-            brain_utils = sys.modules.pop("utils", None)
-            # Also clear any cached model_v2 / config from filter to force reimport
-            for mod_name in ["model_v2", "config", "utils"]:
-                sys.modules.pop(mod_name, None)
-
-            try:
-                from model_v2 import (
-                    TraceClassifierServingWrapper,
-                    TraceClassifierV2,
-                )
-            finally:
-                # Restore brain/utils.py after importing model_v2
-                if brain_utils is not None:
-                    sys.modules["utils"] = brain_utils
+        from filter.model_v2 import (
+            TraceClassifierServingWrapper,
+            TraceClassifierV2,
+        )
 
         logger.info(f"[{task.task_id}] Exporting TorchScript from {ckpt_path}")
 
@@ -3790,18 +3764,10 @@ class Controller:
         )
         serving_model.eval()
 
-        device_index = int(training_gpu)
-        if device_index >= torch.cuda.device_count():
-            raise RuntimeError(
-                f"assigned export GPU {device_index} is unavailable"
-            )
-        device = torch.device(f"cuda:{device_index}")
         input_ids = None
         attention_mask = None
         scripted_model = None
         try:
-            serving_model.to(device)
-
             # Create example inputs for tracing
             from transformers import AutoTokenizer
             tokenizer = AutoTokenizer.from_pretrained(config.tokenizer)
@@ -3816,8 +3782,8 @@ class Controller:
                 truncation=True,
                 max_length=1024,
             )
-            input_ids = tokenized["input_ids"].to(device)
-            attention_mask = tokenized["attention_mask"].to(device)
+            input_ids = tokenized["input_ids"]
+            attention_mask = tokenized["attention_mask"]
 
             # Trace model
             with torch.no_grad():
@@ -3835,24 +3801,12 @@ class Controller:
             )
             return output_path
         finally:
-            # The Controller is long-lived. Drop export-only tensors and
-            # return cached blocks so later admission probes observe the real
-            # post-export free memory rather than this process's cache.
+            # The Controller is long-lived, so drop export-only CPU objects.
             del scripted_model
             del input_ids
             del attention_mask
             del serving_model
             del model
-            try:
-                with torch.cuda.device(device):
-                    torch.cuda.empty_cache()
-            except Exception as error:
-                logger.warning(
-                    "[%s] Failed to release export CUDA cache on %s: %s",
-                    task.task_id,
-                    device,
-                    error,
-                )
 
     def _deploy_to_torchserve(self, task: FuzzerTask, model_name: str,
                               model_version: str, torchscript_path: str,
