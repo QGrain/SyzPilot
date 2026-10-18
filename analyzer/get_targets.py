@@ -638,26 +638,124 @@ def normalize_target(kernel_dir: str, target: str) -> str:
     return f'{func_name}@{abs_file_path}:{line_num}'
 
 
-def get_target_pc(info: dict, target: str, kernel_dir: str) -> str:
-    """Get the pc address of the target"""
+def get_target_pc_candidates(info: dict, target: str, kernel_dir: str) -> list[str]:
+    """Return all KCOV PCs associated with the target source line."""
     func_name = target.split('@')[0]
     bb_loc = target.split('@')[1]
     abs_bb_loc = solve_abs_loc(bb_loc)
 
     if func_name not in info:
-        return None
+        return []
     locs = info[func_name]
     if abs_bb_loc in locs:
-        # notice, the pc addrs in locs[abs_bb_loc] are in ascending order
-        return locs[abs_bb_loc][0]
+        return locs[abs_bb_loc]
     bb_file_path, bb_line_num = split_target_location(abs_bb_loc)
     bb_rel_path = canonicalize_kernel_source_path(kernel_dir, bb_file_path)
     for loc in locs:
         loc_file_path, loc_line_num = split_target_location(loc)
         loc_rel_path = canonicalize_kernel_source_path(kernel_dir, loc_file_path)
         if loc_line_num == bb_line_num and loc_rel_path == bb_rel_path:
-            return locs[loc][0]
-    return None
+            return locs[loc]
+    return []
+
+
+def select_pc_by_instruction_offset(
+    candidates: list[str],
+    instruction_offset: str,
+    function_ranges: dict,
+) -> str | None:
+    """Select the last source-line KCOV PC preceding the report instruction."""
+    if not candidates or not instruction_offset or not function_ranges:
+        return None
+    try:
+        offset_text, size_text = instruction_offset.split('/', 1)
+        report_offset = int(offset_text, 16)
+        report_size = int(size_text, 16)
+    except (AttributeError, ValueError):
+        return None
+    if report_size <= 0 or report_offset < 0 or report_offset > report_size:
+        return None
+
+    predecessors = []
+    starts = function_ranges.get('start_addr', [])
+    stops = function_ranges.get('stop_addr', [])
+    for candidate in candidates:
+        try:
+            candidate_addr = int(candidate, 16)
+        except (TypeError, ValueError):
+            continue
+        for start_text, stop_text in zip(starts, stops):
+            start_addr = int(start_text, 16)
+            stop_addr = int(stop_text, 16)
+            if start_addr <= candidate_addr < stop_addr:
+                if report_offset >= stop_addr - start_addr:
+                    break
+                relative_offset = candidate_addr - start_addr
+                if relative_offset <= report_offset:
+                    predecessors.append((report_offset - relative_offset, candidate))
+                break
+    if not predecessors:
+        return None
+
+    return min(predecessors, key=lambda item: item[0])[1]
+
+
+def filter_candidates_by_inline_context(
+    info: dict,
+    candidates: list[str],
+    inline_context: list[str],
+    kernel_dir: str,
+) -> list[str]:
+    """Keep KCOV PCs whose addr2line stack contains every report inline frame."""
+    matched = set(candidates)
+    for inline_target in inline_context:
+        normalized_target = normalize_target(kernel_dir, inline_target)
+        matched &= set(get_target_pc_candidates(info, normalized_target, kernel_dir))
+    return [candidate for candidate in candidates if candidate in matched]
+
+
+def get_target_pc(
+    info: dict,
+    target: str,
+    kernel_dir: str,
+    instruction_offset: str = None,
+    function_ranges: dict = None,
+    inline_context: list[str] = None,
+) -> str:
+    """Get the KCOV PC for a target, using a report offset when available."""
+    candidates = get_target_pc_candidates(info, target, kernel_dir)
+    if not candidates:
+        return None
+    if instruction_offset is None:
+        return candidates[0]
+
+    if inline_context:
+        contextual_candidates = filter_candidates_by_inline_context(
+            info,
+            candidates,
+            inline_context,
+            kernel_dir,
+        )
+        if not contextual_candidates:
+            print_t(
+                f'[WARN] No KCOV PC for {target} matches report inline context '
+                f'{inline_context}; using the first source-line PC.'
+            )
+            return candidates[0]
+        candidates = contextual_candidates
+
+    offset_pc = select_pc_by_instruction_offset(
+        candidates,
+        instruction_offset,
+        function_ranges,
+    )
+    if offset_pc is None:
+        print_t(
+            f'[WARN] Cannot apply report offset {instruction_offset} to {target}; '
+            'using the first source-line PC.'
+        )
+        return candidates[0]
+    return offset_pc
 
 
 def has_target_func_key_in_info(info: dict, target_func_key: str, kernel_dir: str) -> bool:
@@ -727,8 +825,23 @@ def check_target(info: dict, target: str, kernel_dir: str, default_choice: int =
         raise ValueError('invalid func of target: %s'%target)
 
 
-def action_get(kernel_dir: str, targets: list[str], api_mode: bool = False, fast_mode: bool = False) -> tuple[list[str], list[str]]:
+def action_get(
+    kernel_dir: str,
+    targets: list[str],
+    api_mode: bool = False,
+    fast_mode: bool = False,
+    instruction_offsets: list[str] = None,
+    inline_contexts: list[list[str]] = None,
+) -> tuple[list[str], list[str]]:
     """Get the fuzz targets and pcs"""
+    if instruction_offsets is None:
+        instruction_offsets = [None] * len(targets)
+    if len(instruction_offsets) != len(targets):
+        raise ValueError('targets and instruction offsets have different lengths')
+    if inline_contexts is None:
+        inline_contexts = [[] for _ in targets]
+    if len(inline_contexts) != len(targets):
+        raise ValueError('targets and inline contexts have different lengths')
     resolved_targets = []
     normalize_errors = []
     for target in targets:
@@ -746,11 +859,24 @@ def action_get(kernel_dir: str, targets: list[str], api_mode: bool = False, fast
         info = action_build(kernel_dir, True)
     else:
         info = action_fast_build(kernel_dir, valid_resolved_targets, False) if len(valid_resolved_targets) > 0 else {}
+    offset_target_keys = {
+        get_canonical_target_func_key(kernel_dir, target)
+        for target, normalize_error, instruction_offset in zip(
+            resolved_targets, normalize_errors, instruction_offsets
+        )
+        if normalize_error is None and instruction_offset is not None
+    }
+    function_ranges = (
+        get_funcs_start_stop_addrs(kernel_dir, offset_target_keys)
+        if offset_target_keys else {}
+    )
     full_targets = []
     target_pcs = []
     # max_str_len = 0
     default_choice = 0 if api_mode == True else None
-    for target, normalize_error in zip(resolved_targets, normalize_errors):
+    for target, normalize_error, instruction_offset, inline_context in zip(
+        resolved_targets, normalize_errors, instruction_offsets, inline_contexts
+    ):
         try:
             if normalize_error is not None:
                 raise normalize_error
@@ -761,7 +887,15 @@ def action_get(kernel_dir: str, targets: list[str], api_mode: bool = False, fast
                         f'artifact incomplete: missing instrumentation entries for target function {target_func_key}'
                     )
             target = check_target(info, target, kernel_dir, default_choice)
-            target_pc = get_target_pc(info, target, kernel_dir)
+            target_key = get_canonical_target_func_key(kernel_dir, target)
+            target_pc = get_target_pc(
+                info,
+                target,
+                kernel_dir,
+                instruction_offset=instruction_offset,
+                function_ranges=function_ranges.get(target_key),
+                inline_context=inline_context,
+            )
             if target_pc is None:
                 raise ValueError(f'cannot resolve target pc for target: {target}')
         except Exception as e:

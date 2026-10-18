@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from analyzer import get_targets
+from analyzer.waypoints_extractor import Waypoints
 
 
 class GetTargetsTreeSitterTests(unittest.TestCase):
@@ -599,6 +600,241 @@ class GetTargetsTreeSitterTests(unittest.TestCase):
                 self.kernel_dir, 'kernel/inline_owner.c', 'inline_only\nkernel/inline_owner.c:2'
             )
         )
+
+    def test_report_offset_selects_closest_preceding_source_line_kcov_pc(self):
+        candidates = [
+            '0xffffffff81000082',
+            '0xffffffff8100089b',
+            '0xffffffff81000940',
+        ]
+        function_ranges = {
+            'start_addr': ['0xffffffff81000000'],
+            'stop_addr': ['0xffffffff81000aaf'],
+        }
+
+        selected = get_targets.select_pc_by_instruction_offset(
+            candidates,
+            '0x911/0xb20',
+            function_ranges,
+        )
+
+        self.assertEqual(selected, '0xffffffff8100089b')
+
+    def test_report_offset_never_selects_a_closer_successor(self):
+        candidates = [
+            '0xffffffff810015f0',
+            '0xffffffff81001610',
+        ]
+        function_ranges = {
+            'start_addr': ['0xffffffff81000000'],
+            'stop_addr': ['0xffffffff81002000'],
+        }
+
+        selected = get_targets.select_pc_by_instruction_offset(
+            candidates,
+            '0x1600/0x1ad0',
+            function_ranges,
+        )
+
+        self.assertEqual(selected, '0xffffffff810015f0')
+
+    def test_report_offset_handles_multiple_symbol_ranges(self):
+        selected = get_targets.select_pc_by_instruction_offset(
+            [
+                '0xffffffff81000120',
+                '0xffffffff82000180',
+            ],
+            '0x190/0x300',
+            {
+                'start_addr': [
+                    '0xffffffff81000000',
+                    '0xffffffff82000000',
+                ],
+                'stop_addr': [
+                    '0xffffffff81000300',
+                    '0xffffffff82000300',
+                ],
+            },
+        )
+
+        self.assertEqual(selected, '0xffffffff82000180')
+
+    def test_report_offset_larger_than_current_function_falls_back(self):
+        selected = get_targets.select_pc_by_instruction_offset(
+            ['0xffffffff810001f0'],
+            '0x280/0x300',
+            {
+                'start_addr': ['0xffffffff81000000'],
+                'stop_addr': ['0xffffffff81000200'],
+            },
+        )
+
+        self.assertIsNone(selected)
+
+    def test_report_parser_attaches_inline_frames_to_their_outer_frame(self):
+        waypoints = Waypoints(
+            '\n'.join([
+                'inner_b include/b.h:5 [inline]',
+                'outer_b+0x20/0x80 kernel/b.c:20',
+                'inner_a2 include/a.h:9 [inline]',
+                'inner_a1 include/a.h:4 [inline]',
+                'outer_a+0x10/0x60 kernel/a.c:10',
+            ])
+        )
+        nodes = list(waypoints)
+
+        self.assertEqual(
+            nodes[0].inline_frames,
+            ['inner_a1@include/a.h:4', 'inner_a2@include/a.h:9'],
+        )
+        self.assertEqual(nodes[3].inline_frames, ['inner_b@include/b.h:5'])
+
+    def test_inline_context_filters_an_unrelated_source_line_candidate(self):
+        source_path = self.write_source(
+            'net/demo.c',
+            'static int outer(void) { return 0; }\n',
+        )
+        inline_path = self.write_source(
+            'include/demo.h',
+            'static inline int inner(void) { return 0; }\n',
+        )
+        candidates = [
+            '0xffffffff81000120',
+            '0xffffffff81000180',
+        ]
+        info = {
+            'outer': {f'{source_path}:1': candidates},
+            'inner': {f'{inline_path}:1': ['0xffffffff81000180']},
+        }
+        target = f'outer@{source_path}:1'
+
+        selected = get_targets.get_target_pc(
+            info,
+            target,
+            self.kernel_dir,
+            instruction_offset='0x190/0x300',
+            function_ranges={
+                'start_addr': ['0xffffffff81000000'],
+                'stop_addr': ['0xffffffff81000300'],
+            },
+            inline_context=[f'inner@{inline_path}:1'],
+        )
+
+        self.assertEqual(selected, '0xffffffff81000180')
+
+    def test_invalid_report_offset_warns_and_uses_first_candidate(self):
+        source_path = self.write_source(
+            'fs/demo.c',
+            'static int demo(void) { return 0; }\n',
+        )
+        target = f'demo@{source_path}:1'
+        info = {
+            'demo': {
+                f'{source_path}:1': [
+                    '0xffffffff81000082',
+                    '0xffffffff810000a0',
+                ],
+            },
+        }
+
+        with mock.patch('builtins.print') as print_mock:
+            selected = get_targets.get_target_pc(
+                info,
+                target,
+                self.kernel_dir,
+                instruction_offset='invalid',
+                function_ranges={
+                    'start_addr': ['0xffffffff81000000'],
+                    'stop_addr': ['0xffffffff81000100'],
+                },
+            )
+
+        self.assertEqual(selected, '0xffffffff81000082')
+        self.assertIn('Cannot apply report offset', print_mock.call_args.args[0])
+
+    def test_missing_function_range_warns_and_uses_first_candidate(self):
+        source_path = self.write_source(
+            'fs/demo.c',
+            'static int demo(void) { return 0; }\n',
+        )
+        target = f'demo@{source_path}:1'
+        info = {
+            'demo': {
+                f'{source_path}:1': [
+                    '0xffffffff81000082',
+                    '0xffffffff810000a0',
+                ],
+            },
+        }
+
+        with mock.patch('builtins.print') as print_mock:
+            selected = get_targets.get_target_pc(
+                info,
+                target,
+                self.kernel_dir,
+                instruction_offset='0x90/0x100',
+                function_ranges=None,
+            )
+
+        self.assertEqual(selected, '0xffffffff81000082')
+        self.assertIn('Cannot apply report offset', print_mock.call_args.args[0])
+
+    def test_target_pc_keeps_first_candidate_without_report_offset(self):
+        source_path = self.write_source(
+            'fs/demo.c',
+            'static int demo(void) { return 0; }\n',
+        )
+        target = f'demo@{source_path}:1'
+        info = {
+            'demo': {
+                f'{source_path}:1': [
+                    '0xffffffff81000082',
+                    '0xffffffff8100089b',
+                ],
+            },
+        }
+
+        selected = get_targets.get_target_pc(info, target, self.kernel_dir)
+
+        self.assertEqual(selected, '0xffffffff81000082')
+
+    def test_action_get_uses_report_offset_for_ambiguous_source_line(self):
+        source_path = self.write_source(
+            'fs/demo.c',
+            'static int demo(void) { return 0; }\n',
+        )
+        (Path(self.kernel_dir) / 'vmlinux').write_bytes(b'fake-vmlinux')
+        target = f'demo@{source_path}:1'
+        info = {
+            'demo': {
+                f'{source_path}:1': [
+                    '0xffffffff81000082',
+                    '0xffffffff8100089b',
+                ],
+            },
+        }
+        ranges = {
+            'demo@fs/demo.c': {
+                'start_addr': ['0xffffffff81000000'],
+                'stop_addr': ['0xffffffff81000aaf'],
+            },
+        }
+
+        with mock.patch.object(
+            get_targets, 'action_fast_build', return_value=info
+        ), mock.patch.object(
+            get_targets, 'get_funcs_start_stop_addrs', return_value=ranges
+        ):
+            _, pcs = get_targets.action_get(
+                self.kernel_dir,
+                [target],
+                api_mode=True,
+                fast_mode=True,
+                instruction_offsets=['0x911/0xb20'],
+                inline_contexts=[[]],
+            )
+
+        self.assertEqual(pcs, ['0xffffffff8100089b'])
 
     def test_fast_build_filters_worker_segments_by_debug_source(self):
         outdir = Path(self.kernel_dir) / get_targets.DEF_SETS['outdir']

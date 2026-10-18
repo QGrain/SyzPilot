@@ -6,7 +6,10 @@ import argparse
 import numpy as np
 from math import log2
 from typing import Iterator
-from get_targets import action_get, action_fast_build
+try:
+    from .get_targets import action_get, action_fast_build
+except ImportError:
+    from get_targets import action_get, action_fast_build
 
 
 logging.basicConfig(
@@ -113,6 +116,7 @@ class WaypointNode:
         self.instruct_offset = instruct_offset          # e.g., "0x164/0x1c0" or None
         self.is_inline = is_inline    # bool
         self.original_index = original_index
+        self.inline_frames = []
         self.bb_offset = None
         self.bb_count = None
         self.hot_entry_score = None
@@ -240,6 +244,16 @@ class Waypoints:
                     original_index=idx
                 )
                 self.append_node(node)
+
+        outer_frame = None
+        for node in self:
+            if node.is_inline:
+                if outer_frame is not None:
+                    outer_frame.inline_frames.append(
+                        f"{node.func_name}@{node.location}"
+                    )
+            else:
+                outer_frame = node
 
     def append_node(self, node: WaypointNode):
         """Adds a node to the end of the chain."""
@@ -625,13 +639,24 @@ class WaypointsExtractor:
         logger.info(f"Final waypoints extraction done, waypoints length: {self.waypoints.length}")
 
     def get_pcs(self):
-        targets = self.waypoints.recover_calltrace().split('\n')
-        targets.reverse()
+        ordered_waypoints = list(self.waypoints)
+        targets = [
+            f"{waypoint.func_name}@{waypoint.location}"
+            for waypoint in ordered_waypoints
+        ]
+        instruction_offsets = [
+            waypoint.instruct_offset for waypoint in ordered_waypoints
+        ]
+        inline_contexts = [
+            waypoint.inline_frames for waypoint in ordered_waypoints
+        ]
         full_targets, target_pcs = action_get(
             kernel_dir=self.kernel_dir,
             targets=targets,
             api_mode=True,
-            fast_mode=True
+            fast_mode=True,
+            instruction_offsets=instruction_offsets,
+            inline_contexts=inline_contexts,
         )
         full_targets, target_pcs = deduplicate_target_pcs(full_targets, target_pcs)
         print(f"\n| %0-60s | %0-18s |"%("func_name@file_path:line_num", "pc_addr"))
