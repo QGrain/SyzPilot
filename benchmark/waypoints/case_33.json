@@ -1,0 +1,41 @@
+{
+  "case": "case_33",
+  "final_target": "xdp_umem_create@net/xdp/xdp_umem.c:252",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:bdf328570a16b0835d096d00b83038e5a306f33b",
+  "kernel_commit": "f4bc5bbb5fef",
+  "report_target": "xdp_umem_create@net/xdp/xdp_umem.c:252",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x87209c35",
+    "0x88f8354f",
+    "0x88f8b2ff"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "WARNING: kmalloc bug in xdp_umem_create",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff87209c35",
+      "pc": "0x87209c35",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__sys_setsockopt@net/socket.c:2180"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff88f8354f",
+      "pc": "0x88f8354f",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "xsk_setsockopt@net/xdp/xsk.c:1051"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff88f8b2ff",
+      "pc": "0x88f8b2ff",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "xdp_umem_create@net/xdp/xdp_umem.c:252"
+    }
+  ]
+}

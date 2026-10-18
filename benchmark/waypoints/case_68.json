@@ -1,0 +1,97 @@
+{
+  "case": "case_68",
+  "final_target": "__video_do_ioctl@drivers/media/v4l2-core/v4l2-ioctl.c:3093",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:b0eb7c319dfa4d216d1c4238bbb3c6825e20721c",
+  "kernel_commit": "f08cdc6cc92e",
+  "report_target": "__video_do_ioctl@drivers/media/v4l2-core/v4l2-ioctl.c:3093",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x8156f1df",
+    "0x86d874ff",
+    "0x86d8609e",
+    "0x86d87f64",
+    "0x86da8813",
+    "0x85b55423",
+    "0x85b611c4",
+    "0x86daff05",
+    "0x87af9441",
+    "0x8779206a"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: slab-use-after-free Read in __video_do_ioctl",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff8156f1df",
+      "pc": "0x8156f1df",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "process_one_work@kernel/workqueue.c:3229"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff86d874ff",
+      "pc": "0x86d874ff",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "hub_event@drivers/usb/core/hub.c:5915"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff86d8609e",
+      "pc": "0x86d8609e",
+      "resolution_method": "source-line-lowest-address",
+      "target": "port_event@drivers/usb/core/hub.c:5833"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff86d87f64",
+      "pc": "0x86d87f64",
+      "resolution_method": "source-line-lowest-address",
+      "target": "hub_port_connect@drivers/usb/core/hub.c:5528"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff86da8813",
+      "pc": "0x86da8813",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "usb_set_configuration@drivers/usb/core/message.c:2210"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff85b55423",
+      "pc": "0x85b55423",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "device_add@drivers/base/core.c:3692"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff85b611c4",
+      "pc": "0x85b611c4",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__device_attach_driver@drivers/base/dd.c:957"
+    },
+    {
+      "class_index": 8,
+      "full_pc": "0xffffffff86daff05",
+      "pc": "0x86daff05",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "usb_probe_interface@drivers/usb/core/driver.c:399"
+    },
+    {
+      "class_index": 9,
+      "full_pc": "0xffffffff87af9441",
+      "pc": "0x87af9441",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "hackrf_probe@drivers/media/usb/hackrf/hackrf.c:1525"
+    },
+    {
+      "class_index": 10,
+      "full_pc": "0xffffffff8779206a",
+      "pc": "0x8779206a",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__video_do_ioctl@drivers/media/v4l2-core/v4l2-ioctl.c:3093"
+    }
+  ]
+}

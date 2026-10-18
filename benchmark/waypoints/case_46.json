@@ -1,0 +1,81 @@
+{
+  "case": "case_46",
+  "final_target": "scsi_queue_rq@drivers/scsi/scsi_lib.c:1670",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:15e2383a0ba1f0e5e97f80e7b77f69087e855bae",
+  "kernel_commit": "ec681c53f8d2",
+  "report_target": "scsi_queue_rq@drivers/scsi/scsi_lib.c:1670",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x83c81f53",
+    "0x84946cf0",
+    "0x8482bf82",
+    "0x8482a301",
+    "0x83c7d7f6",
+    "0x83c5fd5e",
+    "0x83c6445a",
+    "0x8484aaf3"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "general protection fault in scsi_queue_rq",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff83c81f53",
+      "pc": "0x83c81f53",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "blkdev_ioctl@block/ioctl.c:589"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff84946cf0",
+      "pc": "0x84946cf0",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "sd_ioctl@drivers/scsi/sd.c:1576"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff8482bf82",
+      "pc": "0x8482bf82",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "scsi_ioctl@drivers/scsi/scsi_ioctl.c:928"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff8482a301",
+      "pc": "0x8482a301",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "sg_io@drivers/scsi/scsi_ioctl.c:484"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff83c7d7f6",
+      "pc": "0x83c7d7f6",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "blk_mq_sched_insert_request@block/blk-mq-sched.c:479"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff83c5fd5e",
+      "pc": "0x83c5fd5e",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__blk_mq_delay_run_hw_queue@block/blk-mq.c:1557"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff83c6445a",
+      "pc": "0x83c6445a",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "blk_mq_dispatch_rq_list@block/blk-mq.c:1360"
+    },
+    {
+      "class_index": 8,
+      "full_pc": "0xffffffff8484aaf3",
+      "pc": "0x8484aaf3",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "scsi_queue_rq@drivers/scsi/scsi_lib.c:1670"
+    }
+  ]
+}

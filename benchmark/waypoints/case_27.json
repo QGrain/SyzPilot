@@ -1,0 +1,33 @@
+{
+  "case": "case_27",
+  "final_target": "btrfs_scan_one_device@fs/btrfs/volumes.c:1366",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:05addfdd2084ab0fbcfe0cbfadd8bde001ac0cfe",
+  "kernel_commit": "521b619acdc8",
+  "report_target": "btrfs_scan_one_device@fs/btrfs/volumes.c:1366",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x831a68eb",
+    "0x832d9dd0"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: slab-out-of-bounds Read in btrfs_scan_one_device",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff831a68eb",
+      "pc": "0x831a68eb",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "btrfs_control_ioctl@fs/btrfs/super.c:2327"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff832d9dd0",
+      "pc": "0x832d9dd0",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "btrfs_scan_one_device@fs/btrfs/volumes.c:1366"
+    }
+  ]
+}

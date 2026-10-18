@@ -1,0 +1,49 @@
+{
+  "case": "case_7",
+  "final_target": "ipvlan_queue_xmit@drivers/net/ipvlan/ipvlan_core.c:644",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:f0a0cbea6d2ab5fc0562c97d13d7293be93ef110",
+  "kernel_commit": "200e340f2196",
+  "report_target": "ipvlan_queue_xmit@drivers/net/ipvlan/ipvlan_core.c:644",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x8743daa9",
+    "0x882b5f8c",
+    "0x874dbe6b",
+    "0x84eac121"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: use-after-free Read in ipvlan_queue_xmit",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff8743daa9",
+      "pc": "0x8743daa9",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__sys_sendto@net/socket.c:2120"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff882b5f8c",
+      "pc": "0x882b5f8c",
+      "resolution_method": "source-line-lowest-address",
+      "target": "packet_snd@net/packet/af_packet.c:3073"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff874dbe6b",
+      "pc": "0x874dbe6b",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__dev_direct_xmit@net/core/dev.c:4311"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff84eac121",
+      "pc": "0x84eac121",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ipvlan_queue_xmit@drivers/net/ipvlan/ipvlan_core.c:644"
+    }
+  ]
+}

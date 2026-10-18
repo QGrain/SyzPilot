@@ -1,0 +1,97 @@
+{
+  "case": "case_67",
+  "final_target": "ebt_do_table@net/bridge/netfilter/ebtables.c:220",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:dd28f0ec6119d506ef4b35f632784c4d42591293",
+  "kernel_commit": "e8f897f4afef",
+  "report_target": "ebt_do_table@net/bridge/netfilter/ebtables.c:220",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x815a8c73",
+    "0x815bf278",
+    "0x889a7bb5",
+    "0x889a3fc7",
+    "0x89852fd7",
+    "0x89900c37",
+    "0x89851fd0",
+    "0x898486bb",
+    "0x8603fca8",
+    "0x8990ef7c"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "general protection fault in ebt_do_table",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff815a8c73",
+      "pc": "0x815a8c73",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "kthread@kernel/kthread.c:388"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff815bf278",
+      "pc": "0x815bf278",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "smpboot_thread_fn@kernel/smpboot.c:164"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff889a7bb5",
+      "pc": "0x889a7bb5",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "net_rx_action@net/core/dev.c:6778"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff889a3fc7",
+      "pc": "0x889a3fc7",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "process_backlog@net/core/dev.c:5976"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff89852fd7",
+      "pc": "0x89852fd7",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "br_handle_frame@net/bridge/br_input.c:417"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff89900c37",
+      "pc": "0x89900c37",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "br_nf_pre_routing_ipv6@net/bridge/br_netfilter_ipv6.c:184"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff89851fd0",
+      "pc": "0x89851fd0",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "br_handle_frame_finish@net/bridge/br_input.c:210"
+    },
+    {
+      "class_index": 8,
+      "full_pc": "0xffffffff898486bb",
+      "pc": "0x898486bb",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__br_forward@net/bridge/br_forward.c:115"
+    },
+    {
+      "class_index": 9,
+      "full_pc": "0xffffffff8603fca8",
+      "pc": "0x8603fca8",
+      "resolution_method": "source-line-lowest-address",
+      "target": "nf_hook@include/linux/netfilter.h:264"
+    },
+    {
+      "class_index": 10,
+      "full_pc": "0xffffffff8990ef7c",
+      "pc": "0x8990ef7c",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ebt_do_table@net/bridge/netfilter/ebtables.c:220"
+    }
+  ]
+}

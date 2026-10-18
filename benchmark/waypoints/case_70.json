@@ -1,0 +1,97 @@
+{
+  "case": "case_70",
+  "final_target": "sco_conn_put@net/bluetooth/sco.c:107",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:0a01ff2625c8b73195dda8007441febc5e4abe97",
+  "kernel_commit": "4701f33a1070",
+  "report_target": "sco_conn_put@net/bluetooth/sco.c:107",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x822ffb3b",
+    "0x8229a2d8",
+    "0x822c650e",
+    "0x853b26f2",
+    "0x8a43869c",
+    "0x8a57090a",
+    "0x8a56473a",
+    "0x8a46a521",
+    "0x8a57a249",
+    "0x8a578d7d"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: slab-out-of-bounds Write in sco_conn_put",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff822ffb3b",
+      "pc": "0x822ffb3b",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "path_openat@fs/namei.c:3989"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff8229a2d8",
+      "pc": "0x8229a2d8",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "do_dentry_open@fs/open.c:956"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff822c650e",
+      "pc": "0x822c650e",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "chrdev_open@fs/char_dev.c:414"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff853b26f2",
+      "pc": "0x853b26f2",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "misc_open@drivers/char/misc.c:179"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff8a43869c",
+      "pc": "0x8a43869c",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "hci_suspend_dev@net/bluetooth/hci_core.c:2812"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff8a57090a",
+      "pc": "0x8a57090a",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "hci_suspend_sync@net/bluetooth/hci_sync.c:6088"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff8a56473a",
+      "pc": "0x8a56473a",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "hci_abort_conn_sync@net/bluetooth/hci_sync.c:5588"
+    },
+    {
+      "class_index": 8,
+      "full_pc": "0xffffffff8a46a521",
+      "pc": "0x8a46a521",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "hci_conn_failed@net/bluetooth/hci_conn.c:1266"
+    },
+    {
+      "class_index": 9,
+      "full_pc": "0xffffffff8a57a249",
+      "pc": "0x8a57a249",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "sco_connect_cfm@net/bluetooth/sco.c:1426"
+    },
+    {
+      "class_index": 10,
+      "full_pc": "0xffffffff8a578d7d",
+      "pc": "0x8a578d7d",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "sco_conn_put@net/bluetooth/sco.c:107"
+    }
+  ]
+}

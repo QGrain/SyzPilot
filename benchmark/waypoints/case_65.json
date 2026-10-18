@@ -1,0 +1,57 @@
+{
+  "case": "case_65",
+  "final_target": "blk_rq_map_user_iov@block/blk-map.c:661",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:e9332d65faa2eb567d0c8b006d967fcd5f721d3d",
+  "kernel_commit": "052d534373b7",
+  "report_target": "blk_rq_map_user_iov@block/blk-map.c:661",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x85ac9a46",
+    "0x85ac7d04",
+    "0x85ac67fc",
+    "0x85ac6354",
+    "0x84498b12"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "WARNING in blk_rq_map_user_iov",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff85ac9a46",
+      "pc": "0x85ac9a46",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "sg_ioctl@drivers/scsi/sg.c:1160"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff85ac7d04",
+      "pc": "0x85ac7d04",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "sg_new_write.isra.0@drivers/scsi/sg.c:770"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff85ac67fc",
+      "pc": "0x85ac67fc",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "sg_common_write.constprop.0@drivers/scsi/sg.c:803"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff85ac6354",
+      "pc": "0x85ac6354",
+      "resolution_method": "source-line-lowest-address",
+      "target": "sg_start_req@drivers/scsi/sg.c:1817"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff84498b12",
+      "pc": "0x84498b12",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "blk_rq_map_user_iov@block/blk-map.c:661"
+    }
+  ]
+}

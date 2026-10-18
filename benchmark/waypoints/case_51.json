@@ -1,0 +1,73 @@
+{
+  "case": "case_51",
+  "final_target": "register_shrinker_prepared@mm/vmscan.c:684",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:63e72e6dbd51c8fcbc2c2374ba3f6ce64376c0d4",
+  "kernel_commit": "a6afa4199d3d",
+  "report_target": "register_shrinker_prepared@mm/vmscan.c:684",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x81464475",
+    "0x814f901a",
+    "0x814f7d06",
+    "0x874de912",
+    "0x874dafb6",
+    "0x874d80ba",
+    "0x81aa2f5e"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: use-after-free Read in register_shrinker_prepared",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff81464475",
+      "pc": "0x81464475",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ksys_unshare@kernel/fork.c:3181"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff814f901a",
+      "pc": "0x814f901a",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "unshare_nsproxy_namespaces@kernel/nsproxy.c:226"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff814f7d06",
+      "pc": "0x814f7d06",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "create_new_namespaces@kernel/nsproxy.c:110"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff874de912",
+      "pc": "0x874de912",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "copy_net_ns@net/core/net_namespace.c:471"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff874dafb6",
+      "pc": "0x874dafb6",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "setup_net@net/core/net_namespace.c:325"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff874d80ba",
+      "pc": "0x874d80ba",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ops_init@net/core/net_namespace.c:139"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff81aa2f5e",
+      "pc": "0x81aa2f5e",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "register_shrinker_prepared@mm/vmscan.c:684"
+    }
+  ]
+}

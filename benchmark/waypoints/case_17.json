@@ -1,0 +1,49 @@
+{
+  "case": "case_17",
+  "final_target": "tracepoint_add_func@kernel/tracepoint.c:291",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:9e04dda67def2c117fa7093afa558a3a0b481958",
+  "kernel_commit": "d2b6f8a17919",
+  "report_target": "tracepoint_add_func@kernel/tracepoint.c:291",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x8180e919",
+    "0x8174f903",
+    "0x8174efb6",
+    "0x8174f109"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "WARNING in tracepoint_add_func",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff8180e919",
+      "pc": "0x8180e919",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "bpf_raw_tracepoint_open@kernel/bpf/syscall.c:2878"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff8174f903",
+      "pc": "0x8174f903",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "tracepoint_probe_register@kernel/tracepoint.c:389"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff8174efb6",
+      "pc": "0x8174efb6",
+      "resolution_method": "source-line-lowest-address",
+      "target": "tracepoint_probe_register_prio@kernel/tracepoint.c:369"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff8174f109",
+      "pc": "0x8174f109",
+      "resolution_method": "inline-source-line-lowest-address",
+      "target": "tracepoint_add_func@kernel/tracepoint.c:291"
+    }
+  ]
+}

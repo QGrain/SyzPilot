@@ -1,0 +1,41 @@
+{
+  "case": "case_10",
+  "final_target": "__dma_map_sg_attrs@kernel/dma/mapping.c:188",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:3a6f39d5d21530b1918faa26da36345f49f8aea8",
+  "kernel_commit": "0457e5153e0e",
+  "report_target": "__dma_map_sg_attrs@kernel/dma/mapping.c:188",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x848a734e",
+    "0x848c1b30",
+    "0x81658e22"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "WARNING in __dma_map_sg_attrs",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff848a734e",
+      "pc": "0x848a734e",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "dma_buf_ioctl@drivers/dma-buf/dma-buf.c:363"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff848c1b30",
+      "pc": "0x848c1b30",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "get_sg_table.isra.0@drivers/dma-buf/udmabuf.c:72"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff81658e22",
+      "pc": "0x81658e22",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__dma_map_sg_attrs@kernel/dma/mapping.c:188"
+    }
+  ]
+}

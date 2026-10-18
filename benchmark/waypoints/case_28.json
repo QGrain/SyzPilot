@@ -1,0 +1,33 @@
+{
+  "case": "case_28",
+  "final_target": "watch_queue_set_size@kernel/watch_queue.c:275",
+  "final_target_kind": "nearest-instrumented-crash-caller",
+  "kernel_build_identity": "build-id:f7e1ce9f72ed92dcbd7f4e0a36d2ab1e7a4f5979",
+  "kernel_commit": "56e337f2cf13",
+  "report_target": "__free_pages@mm/page_alloc.c:5473",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x81ce5643",
+    "0x819df3d6"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: null-ptr-deref Read in __free_pages",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff81ce5643",
+      "pc": "0x81ce5643",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "pipe_ioctl@fs/pipe.c:632"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff819df3d6",
+      "pc": "0x819df3d6",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "watch_queue_set_size@kernel/watch_queue.c:275"
+    }
+  ]
+}

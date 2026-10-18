@@ -1,0 +1,57 @@
+{
+  "case": "case_18",
+  "final_target": "snd_pcm_plugin_alloc@sound/core/oss/pcm_plugin.c:71",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:5c397802f9acc333c0903a2666b7d4995e0a934e",
+  "kernel_commit": "68453767131a",
+  "report_target": "snd_pcm_plugin_alloc@sound/core/oss/pcm_plugin.c:71",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x86fe8f6d",
+    "0x86fe45ac",
+    "0x86fe2272",
+    "0x86fed84c",
+    "0x86fed165"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "WARNING: kmalloc bug in snd_pcm_plugin_alloc",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff86fe8f6d",
+      "pc": "0x86fe8f6d",
+      "resolution_method": "source-line-lowest-address",
+      "target": "snd_pcm_oss_set_rate@sound/core/oss/pcm_oss.c:1770"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff86fe45ac",
+      "pc": "0x86fe45ac",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "snd_pcm_oss_get_active_substream@sound/core/oss/pcm_oss.c:1121"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff86fe2272",
+      "pc": "0x86fe2272",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "snd_pcm_oss_change_params_locked@sound/core/oss/pcm_oss.c:1041"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff86fed84c",
+      "pc": "0x86fed84c",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "snd_pcm_plug_alloc@sound/core/oss/pcm_plugin.c:118"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff86fed165",
+      "pc": "0x86fed165",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "snd_pcm_plugin_alloc@sound/core/oss/pcm_plugin.c:71"
+    }
+  ]
+}

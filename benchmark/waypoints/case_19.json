@@ -1,0 +1,81 @@
+{
+  "case": "case_19",
+  "final_target": "sco_sock_timeout@net/bluetooth/sco.c:88",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:ee00925de9927c3055204b7a885879ea25fb7d08",
+  "kernel_commit": "cf1d2c3e7e2f",
+  "report_target": "sco_sock_timeout@net/bluetooth/sco.c:88",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x814cba85",
+    "0x81c854cb",
+    "0x870ff0c7",
+    "0x88237588",
+    "0x88233215",
+    "0x8711ddd5",
+    "0x8711dcc5",
+    "0x88234557"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: use-after-free Write in sco_sock_timeout",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff814cba85",
+      "pc": "0x814cba85",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "task_work_run@kernel/task_work.c:164"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff81c854cb",
+      "pc": "0x81c854cb",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__fput@fs/file_table.c:280"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff870ff0c7",
+      "pc": "0x870ff0c7",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__sock_release@net/socket.c:649"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff88237588",
+      "pc": "0x88237588",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "sco_sock_release@net/bluetooth/sco.c:1090"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff88233215",
+      "pc": "0x88233215",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "sco_sock_kill@net/bluetooth/sco.c:412"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff8711ddd5",
+      "pc": "0x8711ddd5",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__sk_free@net/core/sock.c:1969"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff8711dcc5",
+      "pc": "0x8711dcc5",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "sk_destruct@net/core/sock.c:1958"
+    },
+    {
+      "class_index": 8,
+      "full_pc": "0xffffffff88234557",
+      "pc": "0x88234557",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "sco_sock_timeout@net/bluetooth/sco.c:88"
+    }
+  ]
+}

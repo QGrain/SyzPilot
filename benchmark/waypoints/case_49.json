@@ -1,0 +1,49 @@
+{
+  "case": "case_49",
+  "final_target": "post_one_notification.isra.0@kernel/watch_queue.c:86",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:715328b6322ac36f7bd31b198d7eccf33baba07e",
+  "kernel_commit": "e71e60cd74df",
+  "report_target": "post_one_notification.isra.0@kernel/watch_queue.c:86",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x814ed145",
+    "0x81d51d9a",
+    "0x81d735fd",
+    "0x81a0614a"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: use-after-free Read in post_one_notification",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff814ed145",
+      "pc": "0x814ed145",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "task_work_run@kernel/task_work.c:177"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff81d51d9a",
+      "pc": "0x81d51d9a",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__fput@fs/file_table.c:317"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff81d735fd",
+      "pc": "0x81d735fd",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "pipe_release@fs/pipe.c:734"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff81a0614a",
+      "pc": "0x81a0614a",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "post_one_notification.isra.0@kernel/watch_queue.c:86"
+    }
+  ]
+}

@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from analyzer import get_targets
-from analyzer.waypoints_extractor import Waypoints
+from analyzer.waypoints_extractor import Waypoints, WaypointsExtractor
 
 
 class GetTargetsTreeSitterTests(unittest.TestCase):
@@ -25,6 +25,120 @@ class GetTargetsTreeSitterTests(unittest.TestCase):
         Path(abs_path).parent.mkdir(parents=True, exist_ok=True)
         Path(abs_path).write_text(textwrap.dedent(content).lstrip('\n'))
         return abs_path
+
+    def make_extractor(self, title: str, report: str) -> WaypointsExtractor:
+        title_path = Path(self.kernel_dir) / 'case.title'
+        report_path = Path(self.kernel_dir) / 'case.report'
+        title_path.write_text(title + '\n', encoding='utf-8')
+        report_path.write_text(textwrap.dedent(report), encoding='utf-8')
+        return WaypointsExtractor(
+            self.kernel_dir, str(title_path), str(report_path)
+        )
+
+    def test_kcov_runtime_pc_is_call_instruction_plus_five(self):
+        info = {}
+        get_targets.add_instru_info(
+            info,
+            'demo',
+            '/kernel/demo.c:7',
+            '0xffffffff8100d4a6',
+        )
+
+        self.assertEqual(
+            info['demo']['/kernel/demo.c:7'],
+            ['0xffffffff8100d4ab'],
+        )
+
+    def test_wrapper_collapse_preserves_report_target_with_prefix_name(self):
+        extractor = self.make_extractor(
+            'KASAN: slab-out-of-bounds Read in vxlan_vnifilter_dump_dev',
+            '''
+            Call Trace:
+             vxlan_vnifilter_dump_dev+0x90/0xb0 drivers/net/vxlan.c:50
+             vxlan_vnifilter_dump+0x40/0x80 drivers/net/vxlan.c:40
+             netlink_dump+0x30/0x70 net/netlink.c:30
+             sys_sendmsg+0x20/0x60 net/socket.c:20
+             entry_root+0x10/0x50 kernel/entry.c:10
+             </TASK>
+            ''',
+        )
+        extractor.trace_sanitization()
+        info = {
+            node.func_name: {
+                os.path.join(self.kernel_dir, node.location): [
+                    hex(0xffffffff81000000 + node.original_index * 0x20)
+                ]
+            }
+            for node in extractor.waypoints
+        }
+        extractor.load_bb_info(info)
+        extractor.non_trivial_stage_separation()
+
+        self.assertIs(extractor.waypoints.tail, extractor.final_target_node)
+        self.assertEqual(
+            extractor.final_target_node.func_name,
+            'vxlan_vnifilter_dump_dev',
+        )
+
+    def test_missing_report_target_uses_nearest_instrumented_crash_caller(self):
+        extractor = self.make_extractor(
+            'KASAN: use-after-free Read in remove_wait_queue',
+            '''
+            Call Trace:
+             remove_wait_queue+0x1d/0x180 kernel/sched/wait.c:55
+             ep_remove_wait_queue+0x88/0x1a0 fs/eventpoll.c:545
+             ep_remove+0x106/0x9c0 fs/eventpoll.c:690
+             entry_SYSCALL_64_after_hwframe+0x44/0xae
+
+            Freed by task 7:
+             causal_free+0x20/0x80 kernel/causal.c:20
+             causal_root+0x10/0x60 kernel/causal.c:10
+             entry_SYSCALL_64_after_hwframe+0x44/0xae
+            ''',
+        )
+        extractor.trace_sanitization()
+        info = {
+            'causal_free': {
+                os.path.join(self.kernel_dir, 'kernel/causal.c:20'): [
+                    '0xffffffff81000120'
+                ],
+            },
+            'causal_root': {
+                os.path.join(self.kernel_dir, 'kernel/causal.c:10'): [
+                    '0xffffffff81000100'
+                ],
+            },
+            'ep_remove_wait_queue': {
+                os.path.join(self.kernel_dir, 'fs/eventpoll.c:545'): [
+                    '0xffffffff81000200'
+                ],
+            },
+        }
+        extractor.load_bb_info(info)
+
+        self.assertEqual(extractor.report_target.split('@', 1)[0], 'remove_wait_queue')
+        self.assertEqual(
+            extractor.final_target_node.func_name,
+            'ep_remove_wait_queue',
+        )
+        self.assertEqual(
+            extractor.final_target_kind,
+            'nearest-instrumented-crash-caller',
+        )
+        self.assertIs(extractor.waypoints.tail, extractor.final_target_node)
+
+    def test_report_target_matches_sys_prefix_omitted_by_title(self):
+        extractor = self.make_extractor(
+            'KASAN: vmalloc-out-of-bounds Write in imageblit',
+            '''
+            Call Trace:
+             sys_imageblit+0x20/0x80 drivers/video/sysimgblt.c:20
+             caller+0x10/0x60 drivers/video/caller.c:10
+             </TASK>
+            ''',
+        )
+
+        self.assertEqual(extractor.report_target_node.func_name, 'sys_imageblit')
 
     def test_function_pointer_multiline_signature(self):
         self.write_source(
@@ -632,7 +746,7 @@ class GetTargetsTreeSitterTests(unittest.TestCase):
 
         selected = get_targets.select_pc_by_instruction_offset(
             candidates,
-            '0x1600/0x1ad0',
+            '0x1600/0x2000',
             function_ranges,
         )
 
@@ -659,13 +773,28 @@ class GetTargetsTreeSitterTests(unittest.TestCase):
 
         self.assertEqual(selected, '0xffffffff82000180')
 
-    def test_report_offset_larger_than_current_function_falls_back(self):
+    def test_report_position_is_scaled_to_local_function_size(self):
         selected = get_targets.select_pc_by_instruction_offset(
-            ['0xffffffff810001f0'],
+            [
+                '0xffffffff81000120',
+                '0xffffffff810001f0',
+            ],
             '0x280/0x300',
             {
                 'start_addr': ['0xffffffff81000000'],
                 'stop_addr': ['0xffffffff81000200'],
+            },
+        )
+
+        self.assertEqual(selected, '0xffffffff81000120')
+
+    def test_report_offset_at_function_size_is_invalid(self):
+        selected = get_targets.select_pc_by_instruction_offset(
+            ['0xffffffff81000120'],
+            '0x300/0x300',
+            {
+                'start_addr': ['0xffffffff81000000'],
+                'stop_addr': ['0xffffffff81000300'],
             },
         )
 
@@ -721,6 +850,314 @@ class GetTargetsTreeSitterTests(unittest.TestCase):
         )
 
         self.assertEqual(selected, '0xffffffff81000180')
+
+    def test_inline_context_tolerates_local_line_number_shift(self):
+        source_path = self.write_source(
+            'net/demo.c',
+            'static int outer(void) { return 0; }\n',
+        )
+        inline_path = self.write_source(
+            'include/demo.h',
+            'static inline int inner(void) { return 0; }\n',
+        )
+        candidates = [
+            '0xffffffff81000120',
+            '0xffffffff81000180',
+        ]
+        info = {
+            'outer': {f'{source_path}:1': candidates},
+            'inner': {f'{inline_path}:2': ['0xffffffff81000180']},
+        }
+
+        selected = get_targets.get_target_pc(
+            info,
+            f'outer@{source_path}:1',
+            self.kernel_dir,
+            instruction_offset='0x190/0x300',
+            function_ranges={
+                'start_addr': ['0xffffffff81000000'],
+                'stop_addr': ['0xffffffff81000300'],
+            },
+            inline_context=[f'inner@{inline_path}:1'],
+        )
+
+        self.assertEqual(selected, '0xffffffff81000180')
+
+    def test_missing_inline_context_does_not_discard_offset_selected_block(self):
+        source_path = self.write_source(
+            'net/demo.c',
+            'static int outer(void) { return 0; }\n',
+        )
+        candidates = [
+            '0xffffffff81000082',
+            '0xffffffff81000180',
+        ]
+        info = {
+            'outer': {f'{source_path}:1': candidates},
+        }
+        target = f'outer@{source_path}:1'
+
+        selected = get_targets.get_target_pc(
+            info,
+            target,
+            self.kernel_dir,
+            instruction_offset='0x190/0x300',
+            function_ranges={
+                'start_addr': ['0xffffffff81000000'],
+                'stop_addr': ['0xffffffff81000300'],
+            },
+            inline_context=['missing@net/missing.h:1'],
+        )
+
+        self.assertEqual(selected, '0xffffffff81000180')
+
+    def test_report_offset_uses_outer_function_candidates_across_source_lines(self):
+        source_path = self.write_source(
+            'net/demo.c',
+            'static int outer(void) {\n  return 0;\n}\n',
+        )
+        info = {
+            'outer': {
+                f'{source_path}:1': ['0xffffffff81000080'],
+                f'{source_path}:2': ['0xffffffff81000180'],
+            },
+        }
+
+        selected = get_targets.get_target_pc(
+            info,
+            f'outer@{source_path}:3',
+            self.kernel_dir,
+            instruction_offset='0x190/0x300',
+            function_ranges={
+                'start_addr': ['0xffffffff81000000'],
+                'stop_addr': ['0xffffffff81000300'],
+            },
+        )
+
+        self.assertEqual(selected, '0xffffffff81000180')
+
+    def test_report_symbol_suffix_uses_dwarf_source_function_key(self):
+        source_path = self.write_source(
+            'fs/demo.c',
+            'static int demo(void) { return 0; }\n',
+        )
+        info = {
+            'demo': {
+                f'{source_path}:1': ['0xffffffff81000180'],
+            },
+        }
+
+        selected = get_targets.get_target_pc(
+            info,
+            f'demo.cold@{source_path}:1',
+            self.kernel_dir,
+            instruction_offset='0x190/0x300',
+            function_ranges={
+                'start_addr': ['0xffffffff81000000'],
+                'stop_addr': ['0xffffffff81000300'],
+            },
+            strict_report_offset=True,
+        )
+
+        self.assertEqual(selected, '0xffffffff81000180')
+
+    def test_compiler_suffix_chain_maps_to_source_function(self):
+        self.assertEqual(
+            get_targets.source_function_name('demo.constprop.0.cold'),
+            'demo',
+        )
+
+    def test_function_ranges_match_renumbered_compiler_clone(self):
+        (Path(self.kernel_dir) / 'vmlinux').write_bytes(b'fake-vmlinux')
+        nm_output = '\n'.join([
+            'ffffffff81000000 t demo.constprop.1',
+            'ffffffff81000100 t next_symbol',
+        ])
+        target_key = 'demo.constprop.0@fs/demo.c'
+
+        with mock.patch.object(
+            get_targets.os,
+            'popen',
+            return_value=mock.Mock(read=mock.Mock(return_value=nm_output)),
+        ):
+            ranges = get_targets.get_funcs_start_stop_addrs(
+                self.kernel_dir, {target_key}
+            )
+
+        self.assertTrue(ranges[target_key]['has_independent_symbol'])
+        self.assertEqual(
+            ranges[target_key]['range_kind'],
+            'compiler-normalized-symbol',
+        )
+        self.assertEqual(
+            ranges[target_key]['start_addr'],
+            ['0xffffffff81000000'],
+        )
+
+    def test_function_ranges_prefer_exact_clone_over_siblings(self):
+        (Path(self.kernel_dir) / 'vmlinux').write_bytes(b'fake-vmlinux')
+        nm_output = '\n'.join([
+            'ffffffff81000000 t demo.constprop.0',
+            'ffffffff81000100 t demo.constprop.1',
+            'ffffffff81000200 t next_symbol',
+        ])
+        target_key = 'demo.constprop.0@fs/demo.c'
+
+        with mock.patch.object(
+            get_targets.os,
+            'popen',
+            return_value=mock.Mock(read=mock.Mock(return_value=nm_output)),
+        ):
+            ranges = get_targets.get_funcs_start_stop_addrs(
+                self.kernel_dir, {target_key}
+            )
+
+        self.assertEqual(ranges[target_key]['range_kind'], 'exact-symbol')
+        self.assertEqual(
+            ranges[target_key]['start_addr'],
+            ['0xffffffff81000000'],
+        )
+
+    def test_function_ranges_reject_ambiguous_renumbered_clones(self):
+        (Path(self.kernel_dir) / 'vmlinux').write_bytes(b'fake-vmlinux')
+        nm_output = '\n'.join([
+            'ffffffff81000000 t demo.constprop.1',
+            'ffffffff81000100 t demo.constprop.2',
+            'ffffffff81000200 t next_symbol',
+        ])
+        target_key = 'demo.constprop.0@fs/demo.c'
+
+        with mock.patch.object(
+            get_targets.os,
+            'popen',
+            return_value=mock.Mock(read=mock.Mock(return_value=nm_output)),
+        ):
+            ranges = get_targets.get_funcs_start_stop_addrs(
+                self.kernel_dir, {target_key}
+            )
+
+        self.assertTrue(ranges[target_key]['has_independent_symbol'])
+        self.assertEqual(
+            ranges[target_key]['range_kind'],
+            'ambiguous-compiler-normalized-symbol',
+        )
+        self.assertEqual(ranges[target_key]['start_addr'], [])
+
+    def test_strict_report_offset_rejects_mismatched_independent_range(self):
+        source_path = self.write_source(
+            'fs/demo.c',
+            'static int demo(void) { return 0; }\n',
+        )
+        candidate = '0xffffffff81000120'
+        info = {
+            'demo': {f'{source_path}:1': [candidate]},
+        }
+
+        selected = get_targets.get_target_pc(
+            info,
+            f'demo@{source_path}:1',
+            self.kernel_dir,
+            instruction_offset='0x190/0x300',
+            function_ranges={
+                'start_addr': ['0xffffffff82000000'],
+                'stop_addr': ['0xffffffff82000300'],
+                'has_independent_symbol': True,
+                'range_kind': 'exact-symbol',
+            },
+            strict_report_offset=True,
+        )
+
+        self.assertIsNone(selected)
+
+    def test_unavailable_inline_context_accepts_unique_outer_candidate(self):
+        source_path = self.write_source(
+            'net/demo.c',
+            'static int outer(void) { return 0; }\n',
+        )
+        candidate = '0xffffffff81000120'
+        info = {
+            'outer': {f'{source_path}:1': [candidate]},
+        }
+
+        selected = get_targets.get_target_pc(
+            info,
+            f'outer@{source_path}:1',
+            self.kernel_dir,
+            instruction_offset='0x190/0x300',
+            function_ranges={
+                'start_addr': ['0xffffffff81000000'],
+                'stop_addr': ['0xffffffff81000300'],
+            },
+            inline_context=['missing@net/missing.h:1'],
+        )
+
+        self.assertEqual(selected, candidate)
+
+    def test_unavailable_inline_frame_does_not_discard_observed_context(self):
+        source_path = self.write_source(
+            'net/demo.c',
+            'static int outer(void) { return 0; }\n',
+        )
+        inline_path = self.write_source(
+            'include/demo.h',
+            'static inline int inner(void) { return 0; }\n',
+        )
+        candidates = [
+            '0xffffffff81000120',
+            '0xffffffff81000180',
+        ]
+        info = {
+            'outer': {f'{source_path}:1': candidates},
+            'inner': {f'{inline_path}:1': ['0xffffffff81000180']},
+        }
+
+        selected = get_targets.get_target_pc(
+            info,
+            f'outer@{source_path}:1',
+            self.kernel_dir,
+            instruction_offset='0x190/0x300',
+            function_ranges={
+                'start_addr': ['0xffffffff81000000'],
+                'stop_addr': ['0xffffffff81000300'],
+            },
+            inline_context=[
+                f'inner@{inline_path}:1',
+                'missing@net/missing.h:1',
+            ],
+        )
+
+        self.assertEqual(selected, '0xffffffff81000180')
+
+    def test_mismatched_inline_context_accepts_unique_outer_candidate(self):
+        source_path = self.write_source(
+            'net/demo.c',
+            'static int outer(void) { return 0; }\n',
+        )
+        inline_path = self.write_source(
+            'include/demo.h',
+            'static inline int inner(void) { return 0; }\n',
+        )
+        candidate = '0xffffffff81000120'
+        info = {
+            'outer': {f'{source_path}:1': [candidate]},
+            'inner': {
+                f'{inline_path}:1': ['0xffffffff81000220'],
+            },
+        }
+
+        selected = get_targets.get_target_pc(
+            info,
+            f'outer@{source_path}:1',
+            self.kernel_dir,
+            instruction_offset='0x190/0x300',
+            function_ranges={
+                'start_addr': ['0xffffffff81000000'],
+                'stop_addr': ['0xffffffff81000300'],
+            },
+            inline_context=[f'inner@{inline_path}:1'],
+        )
+
+        self.assertEqual(selected, candidate)
 
     def test_invalid_report_offset_warns_and_uses_first_candidate(self):
         source_path = self.write_source(
@@ -798,6 +1235,49 @@ class GetTargetsTreeSitterTests(unittest.TestCase):
 
         self.assertEqual(selected, '0xffffffff81000082')
 
+    def test_ambiguous_target_without_offset_logs_debug_fallback(self):
+        source_path = self.write_source(
+            'fs/demo.c',
+            'static int demo(void) { return 0; }\n',
+        )
+        target = f'demo@{source_path}:1'
+        info = {
+            'demo': {
+                f'{source_path}:1': [
+                    '0xffffffff810000a0',
+                    '0xffffffff81000082',
+                ],
+            },
+        }
+
+        with self.assertLogs('analyzer.get_targets', level='DEBUG') as logs:
+            selected = get_targets.get_target_pc(
+                info, target, self.kernel_dir
+            )
+
+        self.assertEqual(selected, '0xffffffff81000082')
+        self.assertIn('Address order does not imply control-flow depth', logs.output[0])
+
+    def test_single_target_without_offset_logs_debug_fallback(self):
+        source_path = self.write_source(
+            'fs/demo.c',
+            'static int demo(void) { return 0; }\n',
+        )
+        target = f'demo@{source_path}:1'
+        info = {
+            'demo': {
+                f'{source_path}:1': ['0xffffffff81000082'],
+            },
+        }
+
+        with self.assertLogs('analyzer.get_targets', level='DEBUG') as logs:
+            selected = get_targets.get_target_pc(
+                info, target, self.kernel_dir
+            )
+
+        self.assertEqual(selected, '0xffffffff81000082')
+        self.assertIn('1 KCOV PC(s)', logs.output[0])
+
     def test_action_get_uses_report_offset_for_ambiguous_source_line(self):
         source_path = self.write_source(
             'fs/demo.c',
@@ -835,6 +1315,132 @@ class GetTargetsTreeSitterTests(unittest.TestCase):
             )
 
         self.assertEqual(pcs, ['0xffffffff8100089b'])
+
+    def test_action_get_does_not_rewrite_report_line_before_offset_resolution(self):
+        source_path = self.write_source(
+            'fs/demo.c',
+            'static int demo(void) {\n  return 0;\n}\n',
+        )
+        (Path(self.kernel_dir) / 'vmlinux').write_bytes(b'fake-vmlinux')
+        target = f'demo@{source_path}:3'
+        info = {
+            'demo': {
+                f'{source_path}:1': ['0xffffffff81000080'],
+                f'{source_path}:2': ['0xffffffff81000180'],
+            },
+        }
+        ranges = {
+            'demo@fs/demo.c': {
+                'start_addr': ['0xffffffff81000000'],
+                'stop_addr': ['0xffffffff81000300'],
+            },
+        }
+
+        with mock.patch.object(
+            get_targets, 'get_funcs_start_stop_addrs', return_value=ranges
+        ):
+            full_targets, pcs = get_targets.action_get(
+                self.kernel_dir,
+                [target],
+                api_mode=True,
+                fast_mode=True,
+                instruction_offsets=['0x190/0x300'],
+                instrumentation_info=info,
+            )
+
+        self.assertEqual(full_targets, [target])
+        self.assertEqual(pcs, ['0xffffffff81000180'])
+
+    def test_strict_report_resolution_records_symbol_less_inline_fallback(self):
+        source_path = self.write_source(
+            'include/demo.h',
+            'static inline int demo(void) { return 0; }\n',
+        )
+        (Path(self.kernel_dir) / 'vmlinux').write_bytes(b'fake-vmlinux')
+        target = f'demo@{source_path}:1'
+        info = {
+            'demo': {
+                f'{source_path}:1': ['0xffffffff81000120'],
+            },
+        }
+        ranges = {
+            'demo@include/demo.h': {
+                'start_addr': ['0xffffffff82000000'],
+                'stop_addr': ['0xffffffff82000300'],
+                'has_independent_symbol': False,
+                'range_kind': 'enclosing-source-symbol',
+            },
+        }
+
+        with mock.patch.object(
+            get_targets, 'get_funcs_start_stop_addrs', return_value=ranges
+        ):
+            _, pcs, methods = get_targets.action_get(
+                self.kernel_dir,
+                [target],
+                api_mode=True,
+                fast_mode=True,
+                instruction_offsets=['0x190/0x300'],
+                instrumentation_info=info,
+                strict_report_offsets=True,
+                return_resolution_methods=True,
+            )
+
+        self.assertEqual(pcs, ['0xffffffff81000120'])
+        self.assertEqual(methods, ['inline-source-line-lowest-address'])
+
+    def test_action_get_keeps_resolvable_targets_from_partial_fast_build(self):
+        source_path = self.write_source(
+            'fs/demo.c',
+            'static int present(void) { return 0; }\n'
+            'static int missing(void) { return 0; }\n',
+        )
+        (Path(self.kernel_dir) / 'vmlinux').write_bytes(b'fake-vmlinux')
+        present = f'present@{source_path}:1'
+        missing = f'missing@{source_path}:2'
+        info = {
+            'present': {
+                f'{source_path}:1': ['0xffffffff81000082'],
+            },
+        }
+
+        with mock.patch.object(
+            get_targets, 'action_fast_build', return_value=info
+        ) as fast_build:
+            _, pcs = get_targets.action_get(
+                self.kernel_dir,
+                [present, missing],
+                api_mode=True,
+                fast_mode=True,
+                allow_partial_fast_build=True,
+            )
+
+        self.assertEqual(pcs, ['0xffffffff81000082', '0x0000000000000000'])
+        self.assertTrue(fast_build.call_args.kwargs['allow_partial'])
+
+    def test_action_get_reuses_extractor_instrumentation_info(self):
+        source_path = self.write_source(
+            'fs/demo.c',
+            'static int present(void) { return 0; }\n',
+        )
+        target = f'present@{source_path}:1'
+        info = {
+            'present': {
+                f'{source_path}:1': ['0xffffffff81000082'],
+            },
+        }
+
+        with mock.patch.object(get_targets, 'action_fast_build') as fast_build:
+            _, pcs = get_targets.action_get(
+                self.kernel_dir,
+                [target],
+                api_mode=True,
+                fast_mode=True,
+                instrumentation_info=info,
+            )
+
+        self.assertEqual(pcs, ['0xffffffff81000082'])
+        fast_build.assert_not_called()
 
     def test_fast_build_filters_worker_segments_by_debug_source(self):
         outdir = Path(self.kernel_dir) / get_targets.DEF_SETS['outdir']

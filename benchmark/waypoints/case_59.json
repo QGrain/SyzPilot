@@ -1,0 +1,97 @@
+{
+  "case": "case_59",
+  "final_target": "rhashtable_free_and_destroy@lib/rhashtable.c:1137",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:49a2cf0dae2011701955d8730688a9bbb1c1a010",
+  "kernel_commit": "9f4ad9e425a1",
+  "report_target": "rhashtable_free_and_destroy@lib/rhashtable.c:1137",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x814bd57d",
+    "0x814a80c1",
+    "0x814a6df6",
+    "0x8836fd2e",
+    "0x885729a1",
+    "0x8836f84a",
+    "0x86f941a5",
+    "0x86f933ae",
+    "0x8856687b",
+    "0x83c76e92"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: null-ptr-deref Write in rhashtable_free_and_destroy",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff814bd57d",
+      "pc": "0x814bd57d",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "kthread@kernel/kthread.c:292"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff814a80c1",
+      "pc": "0x814a80c1",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "worker_thread@kernel/workqueue.c:2421"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff814a6df6",
+      "pc": "0x814a6df6",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "process_one_work@kernel/workqueue.c:2275"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff8836fd2e",
+      "pc": "0x8836fd2e",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "cfg80211_destroy_ifaces@net/wireless/core.c:341"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff885729a1",
+      "pc": "0x885729a1",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ieee80211_if_remove@net/mac80211/iface.c:2020"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff8836f84a",
+      "pc": "0x8836f84a",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "_cfg80211_unregister_wdev@net/wireless/core.c:1127"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff86f941a5",
+      "pc": "0x86f941a5",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "unregister_netdevice_queue@net/core/dev.c:10870"
+    },
+    {
+      "class_index": 8,
+      "full_pc": "0xffffffff86f933ae",
+      "pc": "0x86f933ae",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "unregister_netdevice_many@net/core/dev.c:10953"
+    },
+    {
+      "class_index": 9,
+      "full_pc": "0xffffffff8856687b",
+      "pc": "0x8856687b",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ieee80211_teardown_sdata@net/mac80211/iface.c:691"
+    },
+    {
+      "class_index": 10,
+      "full_pc": "0xffffffff83c76e92",
+      "pc": "0x83c76e92",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "rhashtable_free_and_destroy@lib/rhashtable.c:1137"
+    }
+  ]
+}

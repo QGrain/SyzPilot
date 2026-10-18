@@ -1,0 +1,25 @@
+{
+  "case": "case_58",
+  "final_target": "filp_close@fs/open.c:1382",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:5c44c25efe699b0cbc01bbc3a76563cbe1fe0c88",
+  "kernel_commit": "952923ddc011",
+  "report_target": "filp_close@fs/open.c:1382",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x81d37d35"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: use-after-free Read in filp_close",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff81d37d35",
+      "pc": "0x81d37d35",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "filp_close@fs/open.c:1382"
+    }
+  ]
+}

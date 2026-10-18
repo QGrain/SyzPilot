@@ -1,0 +1,73 @@
+{
+  "case": "case_38",
+  "final_target": "fbcon_cursor@drivers/video/fbdev/core/fbcon.c:1336",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:d2a4f1b9199cb5e5ad602cbf5f726a53f1353e1f",
+  "kernel_commit": "4ee998b0ef8b",
+  "report_target": "fbcon_cursor@drivers/video/fbdev/core/fbcon.c:1336",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x83f2756c",
+    "0x83f589cb",
+    "0x83f53846",
+    "0x83f46f75",
+    "0x841d0d5c",
+    "0x841cf89b",
+    "0x83f4bfc7"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "BUG: unable to handle kernel NULL pointer dereference in fbcon_cursor",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff83f2756c",
+      "pc": "0x83f2756c",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "do_fb_ioctl@drivers/video/fbdev/core/fbmem.c:1156"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff83f589cb",
+      "pc": "0x83f589cb",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "fbcon_set_con2fb_map_ioctl@drivers/video/fbdev/core/fbcon.c:3010"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff83f53846",
+      "pc": "0x83f53846",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "set_con2fb_map@drivers/video/fbdev/core/fbcon.c:879"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff83f46f75",
+      "pc": "0x83f46f75",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "fbcon_set_disp@drivers/video/fbdev/core/fbcon.c:1402"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff841d0d5c",
+      "pc": "0x841d0d5c",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "vc_do_resize@drivers/tty/vt/vt.c:1325"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff841cf89b",
+      "pc": "0x841cf89b",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "redraw_screen@drivers/tty/vt/vt.c:1012"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff83f4bfc7",
+      "pc": "0x83f4bfc7",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "fbcon_cursor@drivers/video/fbdev/core/fbcon.c:1336"
+    }
+  ]
+}

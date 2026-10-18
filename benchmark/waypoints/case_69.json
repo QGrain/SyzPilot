@@ -1,0 +1,57 @@
+{
+  "case": "case_69",
+  "final_target": "squashfs_cache_delete.part.0@fs/squashfs/cache.c:204",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:75f12600b5390be5ec88b2c620591caf29552352",
+  "kernel_commit": "a64dcfb451e2",
+  "report_target": "squashfs_cache_delete.part.0@fs/squashfs/cache.c:204",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x823871bd",
+    "0x823863d9",
+    "0x822dc60f",
+    "0x8287ec1a",
+    "0x828717b6"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "BUG: unable to handle kernel paging request in squashfs_cache_delete",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff823871bd",
+      "pc": "0x823871bd",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "path_mount@fs/namespace.c:3887"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff823863d9",
+      "pc": "0x823863d9",
+      "resolution_method": "source-line-lowest-address",
+      "target": "do_new_mount@fs/namespace.c:3560"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff822dc60f",
+      "pc": "0x822dc60f",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "get_tree_bdev_flags@fs/super.c:1636"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff8287ec1a",
+      "pc": "0x8287ec1a",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "squashfs_fill_super@fs/squashfs/super.c:470"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff828717b6",
+      "pc": "0x828717b6",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "squashfs_cache_delete.part.0@fs/squashfs/cache.c:204"
+    }
+  ]
+}

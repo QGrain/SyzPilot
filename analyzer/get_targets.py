@@ -10,6 +10,7 @@ import os
 import json
 import hashlib
 import argparse
+import logging
 import subprocess
 import re
 from time import time
@@ -34,8 +35,9 @@ DEF_SETS = {
 }
 
 start_t = time()
+logger = logging.getLogger(__name__)
 SOURCE_FUNCTION_CACHE = {}
-FAST_CACHE_VERSION = 'v6'
+FAST_CACHE_VERSION = 'v8'
 VMLINUX_IDENTITY_CACHE = {}
 TREE_SITTER_C_PARSER = None
 TREE_SITTER_TOPLEVEL_CONTAINER_TYPES = {
@@ -386,6 +388,24 @@ def get_canonical_target_func_key(kernel_dir: str, target: str) -> str:
     return f'{func_name}@{canonical_path}'
 
 
+COMPILER_FUNCTION_SUFFIX = re.compile(
+    r'(?:\.(?:cold|isra|constprop|part)(?:\.\d+)?)+$'
+)
+
+
+def source_function_name(func_name: str) -> str:
+    """Remove a chain of compiler-generated suffixes from a symbol name."""
+    return COMPILER_FUNCTION_SUFFIX.sub('', func_name)
+
+
+def instrumentation_function_name(info: dict, func_name: str) -> str | None:
+    """Resolve a report symbol to its instrumentation/DWARF function key."""
+    if func_name in info:
+        return func_name
+    source_name = source_function_name(func_name)
+    return source_name if source_name in info else None
+
+
 def get_tree_sitter_c_parser() -> Parser:
     """Get a cached Tree-sitter C parser."""
     global TREE_SITTER_C_PARSER
@@ -644,19 +664,42 @@ def get_target_pc_candidates(info: dict, target: str, kernel_dir: str) -> list[s
     bb_loc = target.split('@')[1]
     abs_bb_loc = solve_abs_loc(bb_loc)
 
-    if func_name not in info:
+    info_func_name = instrumentation_function_name(info, func_name)
+    if info_func_name is None:
         return []
-    locs = info[func_name]
+    locs = info[info_func_name]
     if abs_bb_loc in locs:
-        return locs[abs_bb_loc]
+        return sorted(set(locs[abs_bb_loc]), key=lambda pc: int(pc, 16))
     bb_file_path, bb_line_num = split_target_location(abs_bb_loc)
     bb_rel_path = canonicalize_kernel_source_path(kernel_dir, bb_file_path)
     for loc in locs:
         loc_file_path, loc_line_num = split_target_location(loc)
         loc_rel_path = canonicalize_kernel_source_path(kernel_dir, loc_file_path)
         if loc_line_num == bb_line_num and loc_rel_path == bb_rel_path:
-            return locs[loc]
+            return sorted(set(locs[loc]), key=lambda pc: int(pc, 16))
     return []
+
+
+def get_function_pc_candidates(
+    info: dict,
+    target: str,
+    kernel_dir: str,
+) -> list[str]:
+    """Return every KCOV PC attributed to the target's outer function/file."""
+    func_name, target_loc = target.split('@', 1)
+    target_file, _ = split_target_location(target_loc)
+    target_rel_path = canonicalize_kernel_source_path(kernel_dir, target_file)
+    candidates = set()
+    info_func_name = instrumentation_function_name(info, func_name)
+    if info_func_name is None:
+        return []
+    for loc, pcs in info[info_func_name].items():
+        loc_file, _ = split_target_location(loc)
+        if canonicalize_kernel_source_path(
+            kernel_dir, loc_file
+        ) == target_rel_path:
+            candidates.update(pcs)
+    return sorted(candidates, key=lambda pc: int(pc, 16))
 
 
 def select_pc_by_instruction_offset(
@@ -664,7 +707,13 @@ def select_pc_by_instruction_offset(
     instruction_offset: str,
     function_ranges: dict,
 ) -> str | None:
-    """Select the last source-line KCOV PC preceding the report instruction."""
+    """Select the source-line KCOV PC preceding the reported function position.
+
+    Syzkaller reports ``+offset/size`` for the crashing binary. A locally
+    rebuilt function can have a different byte size, so compare normalized
+    positions within each local symbol range rather than reusing the report's
+    raw byte offset.
+    """
     if not candidates or not instruction_offset or not function_ranges:
         return None
     try:
@@ -673,7 +722,7 @@ def select_pc_by_instruction_offset(
         report_size = int(size_text, 16)
     except (AttributeError, ValueError):
         return None
-    if report_size <= 0 or report_offset < 0 or report_offset > report_size:
+    if report_size <= 0 or report_offset < 0 or report_offset >= report_size:
         return None
 
     predecessors = []
@@ -688,11 +737,13 @@ def select_pc_by_instruction_offset(
             start_addr = int(start_text, 16)
             stop_addr = int(stop_text, 16)
             if start_addr <= candidate_addr < stop_addr:
-                if report_offset >= stop_addr - start_addr:
-                    break
+                local_size = stop_addr - start_addr
                 relative_offset = candidate_addr - start_addr
-                if relative_offset <= report_offset:
-                    predecessors.append((report_offset - relative_offset, candidate))
+                expected_offset = report_offset * local_size // report_size
+                if relative_offset <= expected_offset:
+                    predecessors.append(
+                        (expected_offset - relative_offset, candidate)
+                    )
                 break
     if not predecessors:
         return None
@@ -706,11 +757,56 @@ def filter_candidates_by_inline_context(
     inline_context: list[str],
     kernel_dir: str,
 ) -> list[str]:
-    """Keep KCOV PCs whose addr2line stack contains every report inline frame."""
+    """Keep KCOV PCs whose addr2line stack contains every inline function.
+
+    The report and locally rebuilt DWARF can assign slightly different source
+    lines to the same inline function. Match the function and source file while
+    deliberately ignoring that unstable line number.
+    """
     matched = set(candidates)
+    constrained = False
     for inline_target in inline_context:
-        normalized_target = normalize_target(kernel_dir, inline_target)
-        matched &= set(get_target_pc_candidates(info, normalized_target, kernel_dir))
+        try:
+            normalized_target = normalize_target(kernel_dir, inline_target)
+        except (FileNotFoundError, ValueError) as exc:
+            logger.debug(
+                "Ignoring unmappable report inline frame %s: %s",
+                inline_target,
+                exc,
+            )
+            continue
+        func_name, location = normalized_target.split('@', 1)
+        source_path, _ = split_target_location(location)
+        source_rel_path = canonicalize_kernel_source_path(
+            kernel_dir, source_path
+        )
+        inline_candidates = set()
+        info_func_name = instrumentation_function_name(info, func_name)
+        if info_func_name is None:
+            continue
+        for loc, pcs in info[info_func_name].items():
+            loc_path, _ = split_target_location(loc)
+            if canonicalize_kernel_source_path(
+                kernel_dir, loc_path
+            ) == source_rel_path:
+                inline_candidates.update(pcs)
+        if not inline_candidates:
+            logger.debug(
+                "Ignoring unavailable local DWARF inline frame %s while "
+                "resolving the outer report frame.",
+                inline_target,
+            )
+            continue
+        constrained = True
+        matched &= inline_candidates
+    if not constrained:
+        return candidates if len(candidates) == 1 else []
+    if not matched and len(candidates) == 1:
+        logger.debug(
+            "Report inline context does not survive in the unique local "
+            "source-line candidate; accepting that unambiguous outer PC."
+        )
+        return candidates
     return [candidate for candidate in candidates if candidate in matched]
 
 
@@ -721,49 +817,107 @@ def get_target_pc(
     instruction_offset: str = None,
     function_ranges: dict = None,
     inline_context: list[str] = None,
+    strict_report_offset: bool = False,
 ) -> str:
     """Get the KCOV PC for a target, using a report offset when available."""
-    candidates = get_target_pc_candidates(info, target, kernel_dir)
-    if not candidates:
-        return None
+    line_candidates = get_target_pc_candidates(info, target, kernel_dir)
     if instruction_offset is None:
-        return candidates[0]
+        if not line_candidates:
+            return None
+        logger.debug(
+            "Target %s maps to %d KCOV PC(s) but has no instruction "
+            "offset; using the lowest-address candidate %s as the "
+            "deterministic fallback. Address order does not imply "
+            "control-flow depth.",
+            target,
+            len(line_candidates),
+            line_candidates[0],
+        )
+        return line_candidates[0]
 
-    if inline_context:
+    function_candidates = get_function_pc_candidates(
+        info, target, kernel_dir
+    )
+    has_independent_symbol = (
+        function_ranges.get('has_independent_symbol')
+        if function_ranges is not None else
+        None
+    )
+    offset_pc = None
+    if has_independent_symbol is not False:
+        offset_pc = select_pc_by_instruction_offset(
+            function_candidates,
+            instruction_offset,
+            function_ranges,
+        )
+    if offset_pc is not None:
+        # A KCOV call is emitted at the basic-block entry. Its DWARF inline
+        # stack can therefore precede the inline call that appears later in
+        # the same block. Inline context is useful corroborating evidence, but
+        # must not discard the offset-selected block boundary.
+        if inline_context:
+            contextual_candidates = filter_candidates_by_inline_context(
+                info,
+                function_candidates,
+                inline_context,
+                kernel_dir,
+            )
+            if contextual_candidates and offset_pc in contextual_candidates:
+                logger.debug(
+                    "Report inline context confirms offset-selected KCOV PC "
+                    "%s for %s.",
+                    offset_pc,
+                    target,
+                )
+            else:
+                logger.debug(
+                    "Offset-selected KCOV PC %s for %s has no identical "
+                    "inline DWARF stack at the block entry; retaining the "
+                    "function-relative predecessor.",
+                    offset_pc,
+                    target,
+                )
+        logger.debug(
+            "Resolved report-derived target %s at offset %s to KCOV PC %s "
+            "from %d outer-function candidates.",
+            target,
+            instruction_offset,
+            offset_pc,
+            len(function_candidates),
+        )
+        return offset_pc
+
+    # Strict report resolution may fall back to a source-line PC only when
+    # symbol-table analysis explicitly established that the frame has no
+    # independent ELF symbol (for example, a fully inlined helper). Missing or
+    # mismatched range data is not evidence of inlining.
+    if strict_report_offset and has_independent_symbol is not False:
+        return None
+
+    if inline_context and line_candidates:
         contextual_candidates = filter_candidates_by_inline_context(
             info,
-            candidates,
+            line_candidates,
             inline_context,
             kernel_dir,
         )
-        if not contextual_candidates:
-            print_t(
-                f'[WARN] No KCOV PC for {target} matches report inline context '
-                f'{inline_context}; using the first source-line PC.'
-            )
-            return candidates[0]
-        candidates = contextual_candidates
+        if contextual_candidates:
+            line_candidates = contextual_candidates
 
-    offset_pc = select_pc_by_instruction_offset(
-        candidates,
-        instruction_offset,
-        function_ranges,
+    print_t(
+        f'[WARN] Cannot apply report offset {instruction_offset} to {target}; '
+        'using the first source-line PC.'
     )
-    if offset_pc is None:
-        print_t(
-            f'[WARN] Cannot apply report offset {instruction_offset} to {target}; '
-            'using the first source-line PC.'
-        )
-        return candidates[0]
-    return offset_pc
+    return line_candidates[0] if line_candidates else None
 
 
 def has_target_func_key_in_info(info: dict, target_func_key: str, kernel_dir: str) -> bool:
     """Check whether a fast-build artifact contains any instrumentation entry for target func@file."""
     func_name, target_rel_path = target_func_key.split('@', 1)
-    if func_name not in info:
+    info_func_name = instrumentation_function_name(info, func_name)
+    if info_func_name is None:
         return False
-    for loc in info[func_name]:
+    for loc in info[info_func_name]:
         loc_file_path, _ = split_target_location(loc)
         if canonicalize_kernel_source_path(kernel_dir, loc_file_path) == target_rel_path:
             return True
@@ -798,13 +952,14 @@ def check_target(info: dict, target: str, kernel_dir: str, default_choice: int =
     lnum = str(lnum)
     target_rel_path = canonicalize_kernel_source_path(kernel_dir, fpath)
 
-    if func in info:
-        if bb_loc in info[func]:
+    info_func = instrumentation_function_name(info, func)
+    if info_func is not None:
+        if bb_loc in info[info_func]:
             return target
         else:
             matched_instru_loc = None
             instru_sites = []
-            for loc in info[func]:
+            for loc in info[info_func]:
                 loc_file_path, _ = split_target_location(loc)
                 loc_rel_path = canonicalize_kernel_source_path(kernel_dir, loc_file_path)
                 if loc_rel_path == target_rel_path:
@@ -832,7 +987,11 @@ def action_get(
     fast_mode: bool = False,
     instruction_offsets: list[str] = None,
     inline_contexts: list[list[str]] = None,
-) -> tuple[list[str], list[str]]:
+    allow_partial_fast_build: bool = False,
+    instrumentation_info: dict = None,
+    strict_report_offsets: bool = False,
+    return_resolution_methods: bool = False,
+) -> tuple[list[str], list[str]] | tuple[list[str], list[str], list[str]]:
     """Get the fuzz targets and pcs"""
     if instruction_offsets is None:
         instruction_offsets = [None] * len(targets)
@@ -855,10 +1014,20 @@ def action_get(
         target for target, err in zip(resolved_targets, normalize_errors)
         if err is None
     ]
-    if fast_mode == False:
+    if instrumentation_info is not None:
+        info = instrumentation_info
+    elif fast_mode == False:
         info = action_build(kernel_dir, True)
     else:
-        info = action_fast_build(kernel_dir, valid_resolved_targets, False) if len(valid_resolved_targets) > 0 else {}
+        info = (
+            action_fast_build(
+                kernel_dir,
+                valid_resolved_targets,
+                False,
+                allow_partial=allow_partial_fast_build,
+            )
+            if valid_resolved_targets else {}
+        )
     offset_target_keys = {
         get_canonical_target_func_key(kernel_dir, target)
         for target, normalize_error, instruction_offset in zip(
@@ -872,6 +1041,7 @@ def action_get(
     )
     full_targets = []
     target_pcs = []
+    resolution_methods = []
     # max_str_len = 0
     default_choice = 0 if api_mode == True else None
     for target, normalize_error, instruction_offset, inline_context in zip(
@@ -886,7 +1056,8 @@ def action_get(
                     raise ValueError(
                         f'artifact incomplete: missing instrumentation entries for target function {target_func_key}'
                     )
-            target = check_target(info, target, kernel_dir, default_choice)
+            if instruction_offset is None:
+                target = check_target(info, target, kernel_dir, default_choice)
             target_key = get_canonical_target_func_key(kernel_dir, target)
             target_pc = get_target_pc(
                 info,
@@ -895,7 +1066,26 @@ def action_get(
                 instruction_offset=instruction_offset,
                 function_ranges=function_ranges.get(target_key),
                 inline_context=inline_context,
+                strict_report_offset=strict_report_offsets,
             )
+            if (
+                target_pc is None and
+                instruction_offset is not None and
+                not strict_report_offsets
+            ):
+                fallback_target = check_target(
+                    info, target, kernel_dir, default_choice
+                )
+                target_pc = get_target_pc(
+                    info,
+                    fallback_target,
+                    kernel_dir,
+                )
+                if target_pc is not None:
+                    print_t(
+                        f'[WARN] Falling back from report-derived target '
+                        f'{target} to source-line target {fallback_target}.'
+                    )
             if target_pc is None:
                 raise ValueError(f'cannot resolve target pc for target: {target}')
         except Exception as e:
@@ -903,7 +1093,33 @@ def action_get(
             print_t('[ERROR] Fail to get target_pc: %s'%e)
         full_targets.append(target)
         target_pcs.append(target_pc)
+        if int(target_pc, 16) & 0xffffffff == 0:
+            resolution_methods.append('unresolved')
+        elif instruction_offset is None:
+            resolution_methods.append('source-line-lowest-address')
+        else:
+            function_candidates = get_function_pc_candidates(
+                info, target, kernel_dir
+            )
+            range_info = function_ranges.get(target_key)
+            offset_candidate = None
+            if (
+                range_info is None or
+                range_info.get('has_independent_symbol') is not False
+            ):
+                offset_candidate = select_pc_by_instruction_offset(
+                    function_candidates,
+                    instruction_offset,
+                    range_info,
+                )
+            resolution_methods.append(
+                'report-relative-outer-function-predecessor'
+                if offset_candidate == target_pc else
+                'inline-source-line-lowest-address'
+            )
         # max_str_len = max(max_str_len, len(target))
+    if return_resolution_methods:
+        return full_targets, target_pcs, resolution_methods
     return full_targets, target_pcs
 
 
@@ -939,23 +1155,54 @@ def get_funcs_start_stop_addrs(kernel_dir: str, target_func_keys: set[str]) -> d
             continue
         ordered_records.append((addr, func))
 
-    func_name_to_keys = {}
     d_funcs_addrs = {} # format like: {func_name@file_path: (start_addr, stop_addr)}
     for target_func_key in target_func_keys:
-        func_name, file_path = target_func_key.split('@', 1)
-        func_name_to_keys.setdefault(func_name, []).append(target_func_key)
-        d_funcs_addrs.setdefault(target_func_key, {'start_addr': [], 'stop_addr': []})
+        d_funcs_addrs.setdefault(
+            target_func_key,
+            {
+                'start_addr': [],
+                'stop_addr': [],
+                'has_independent_symbol': False,
+                'range_kind': 'unresolved',
+            },
+        )
     assert len(d_funcs_addrs) == len(target_func_keys)
 
+    ranges_by_symbol = {}
     for i, (addr, func) in enumerate(ordered_records):
         # the tail records of the symbol table are usually BSS (not .text symbols), so break here
         if i == len(ordered_records)-1:
             break
-        if func in func_name_to_keys:
-            stop_addr = ordered_records[i+1][0]
-            for target_func_key in func_name_to_keys[func]:
-                d_funcs_addrs[target_func_key]['start_addr'].append(addr)
-                d_funcs_addrs[target_func_key]['stop_addr'].append(stop_addr)
+        ranges_by_symbol.setdefault(func, []).append(
+            (addr, ordered_records[i+1][0])
+        )
+
+    for target_func_key, entry in d_funcs_addrs.items():
+        target_func = target_func_key.split('@', 1)[0]
+        exact_ranges = ranges_by_symbol.get(target_func, [])
+        if exact_ranges:
+            selected_ranges = exact_ranges
+            entry['has_independent_symbol'] = True
+            entry['range_kind'] = 'exact-symbol'
+        else:
+            normalized_target = source_function_name(target_func)
+            sibling_names = [
+                symbol for symbol in ranges_by_symbol
+                if source_function_name(symbol) == normalized_target
+            ]
+            if len(sibling_names) == 1:
+                selected_ranges = ranges_by_symbol[sibling_names[0]]
+                entry['has_independent_symbol'] = True
+                entry['range_kind'] = 'compiler-normalized-symbol'
+            elif len(sibling_names) > 1:
+                selected_ranges = []
+                entry['has_independent_symbol'] = True
+                entry['range_kind'] = 'ambiguous-compiler-normalized-symbol'
+            else:
+                selected_ranges = []
+        for start_addr, stop_addr in selected_ranges:
+            entry['start_addr'].append(start_addr)
+            entry['stop_addr'].append(stop_addr)
 
     for target_func_key in target_func_keys:
         assert len(d_funcs_addrs[target_func_key]['start_addr']) == len(d_funcs_addrs[target_func_key]['stop_addr'])
@@ -973,7 +1220,10 @@ def fill_missing_func_addrs_from_same_source_file(kernel_dir: str, ordered_recor
     """
     missing_keys = [
         func_key for func_key, addrs in d_funcs_addrs.items()
-        if len(addrs['start_addr']) == 0
+        if (
+            len(addrs['start_addr']) == 0 and
+            not addrs.get('has_independent_symbol', False)
+        )
     ]
     if not missing_keys:
         return
@@ -997,6 +1247,10 @@ def fill_missing_func_addrs_from_same_source_file(kernel_dir: str, ordered_recor
                 continue
             d_funcs_addrs[func_key]['start_addr'].append(addr)
             d_funcs_addrs[func_key]['stop_addr'].append(stop_addr)
+            d_funcs_addrs[func_key].setdefault(
+                'has_independent_symbol', False
+            )
+            d_funcs_addrs[func_key]['range_kind'] = 'enclosing-source-symbol'
 
 
 def addr2line_output_contains_target_source(kernel_dir: str, target_rel_path: str, output: str) -> bool:
@@ -1183,7 +1437,11 @@ if __name__ == '__main__':
     get_parser.add_argument('-a', '--api_mode', action='store_true', help='test api mode')
     get_parser.add_argument('-f', '--fast_mode', action='store_true', help='fast mode (no need to do build action, very fast)')
     get_parser.add_argument('-c', '--comprehensive_mode', action='store_true', help='comprehensive mode (TODO)')
+    get_parser.add_argument('-d', '--debug', action='store_true', help='show target-PC selection details')
     args = parser.parse_args()
+
+    if getattr(args, 'debug', False):
+        logging.basicConfig(level=logging.DEBUG)
 
     if args.action == 'build':
         info = action_build(args.kernel_dir, args.api_mode, args.rebuild)

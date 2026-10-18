@@ -1,0 +1,57 @@
+{
+  "case": "case_54",
+  "final_target": "squashfs_get_id@fs/squashfs/id.c:38",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:919f97bbab89b42fd0120afd6566feafbc274eac",
+  "kernel_commit": "cd796ed33450",
+  "report_target": "squashfs_get_id@fs/squashfs/id.c:38",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x81c5d799",
+    "0x81c5ca68",
+    "0x81bd449b",
+    "0x8219efde",
+    "0x8219aa62"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: slab-out-of-bounds Read in squashfs_get_id",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff81c5d799",
+      "pc": "0x81c5d799",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "path_mount@fs/namespace.c:3205"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff81c5ca68",
+      "pc": "0x81c5ca68",
+      "resolution_method": "source-line-lowest-address",
+      "target": "do_new_mount@fs/namespace.c:2875"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff81bd449b",
+      "pc": "0x81bd449b",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "get_tree_bdev@fs/super.c:1344"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff8219efde",
+      "pc": "0x8219efde",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "squashfs_fill_super@fs/squashfs/super.c:310"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff8219aa62",
+      "pc": "0x8219aa62",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "squashfs_get_id@fs/squashfs/id.c:38"
+    }
+  ]
+}

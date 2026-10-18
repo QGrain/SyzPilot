@@ -1,0 +1,89 @@
+{
+  "case": "case_1",
+  "final_target": "validate_xmit_skb@net/core/dev.c:3763",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:6ad8e2ab5abe1aa40eb9cd7ee899fcf6b916bb6c",
+  "kernel_commit": "761c6d7ec820",
+  "report_target": "validate_xmit_skb@net/core/dev.c:3763",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x870b2a76",
+    "0x87ebeb3a",
+    "0x8714e814",
+    "0x8714e856",
+    "0x8730e5b3",
+    "0x84cf8b21",
+    "0x879257aa",
+    "0x8714d11c",
+    "0x8714b0fc"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "kernel BUG in validate_xmit_skb",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff870b2a76",
+      "pc": "0x870b2a76",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__sys_sendto@net/socket.c:2019"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff87ebeb3a",
+      "pc": "0x87ebeb3a",
+      "resolution_method": "source-line-lowest-address",
+      "target": "packet_snd@net/packet/af_packet.c:3016"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff8714e814",
+      "pc": "0x8714e814",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__dev_queue_xmit@net/core/dev.c:4253"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff8714e856",
+      "pc": "0x8714e856",
+      "resolution_method": "source-line-lowest-address",
+      "target": "__dev_xmit_skb@net/core/dev.c:3944"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff8730e5b3",
+      "pc": "0x8730e5b3",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "sch_direct_xmit@net/sched/sch_generic.c:342"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff84cf8b21",
+      "pc": "0x84cf8b21",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "geneve_xmit@drivers/net/geneve.c:1082"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff879257aa",
+      "pc": "0x879257aa",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ip_finish_output2@net/ipv4/ip_output.c:230"
+    },
+    {
+      "class_index": 8,
+      "full_pc": "0xffffffff8714d11c",
+      "pc": "0x8714d11c",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__dev_queue_xmit@net/core/dev.c:4276"
+    },
+    {
+      "class_index": 9,
+      "full_pc": "0xffffffff8714b0fc",
+      "pc": "0x8714b0fc",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "validate_xmit_skb@net/core/dev.c:3763"
+    }
+  ]
+}

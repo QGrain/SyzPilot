@@ -1,0 +1,73 @@
+{
+  "case": "case_3",
+  "final_target": "fifo_set_limit@net/sched/sch_fifo.c:238",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:d7aa561cbb1cfb9f1b870a2aaaaa519c55f0228f",
+  "kernel_commit": "02d5e016800d",
+  "report_target": "fifo_set_limit@net/sched/sch_fifo.c:242",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x87555d88",
+    "0x8755529f",
+    "0x87556eb1",
+    "0x871f5335",
+    "0x87385637",
+    "0x874572cd",
+    "0x87404d1a"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "BUG: unable to handle kernel NULL pointer dereference in fifo_set_limit",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff87555d88",
+      "pc": "0x87555d88",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_sendmsg@net/netlink/af_netlink.c:1929"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff8755529f",
+      "pc": "0x8755529f",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_unicast@net/netlink/af_netlink.c:1340"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff87556eb1",
+      "pc": "0x87556eb1",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_rcv_skb@net/netlink/af_netlink.c:2504"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff871f5335",
+      "pc": "0x871f5335",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "rtnetlink_rcv_msg@net/core/rtnetlink.c:5572"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff87385637",
+      "pc": "0x87385637",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "tc_modify_qdisc@net/sched/sch_api.c:1634"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff874572cd",
+      "pc": "0x874572cd",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "tbf_change@net/sched/sch_tbf.c:418"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff87404d1a",
+      "pc": "0x87404d1a",
+      "resolution_method": "source-line-lowest-address",
+      "target": "fifo_set_limit@net/sched/sch_fifo.c:238"
+    }
+  ]
+}

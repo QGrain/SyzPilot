@@ -1,0 +1,89 @@
+{
+  "case": "case_29",
+  "final_target": "internal_create_group@fs/sysfs/group.c:116",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:48fb5dd3a0ba59b17b0263e09d449b3b861e325f",
+  "kernel_commit": "8cae8cd89f05",
+  "report_target": "internal_create_group@fs/sysfs/group.c:116",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x874ea7e8",
+    "0x874e9cff",
+    "0x874eb911",
+    "0x874ef1ca",
+    "0x846cebec",
+    "0x846c598e",
+    "0x83c3bec5",
+    "0x83bedb0a",
+    "0x81f2d4bd"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "WARNING in internal_create_group",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff874ea7e8",
+      "pc": "0x874ea7e8",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_sendmsg@net/netlink/af_netlink.c:1929"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff874e9cff",
+      "pc": "0x874e9cff",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_unicast@net/netlink/af_netlink.c:1340"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff874eb911",
+      "pc": "0x874eb911",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_rcv_skb@net/netlink/af_netlink.c:2504"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff874ef1ca",
+      "pc": "0x874ef1ca",
+      "resolution_method": "source-line-lowest-address",
+      "target": "genl_family_rcv_msg@net/netlink/genetlink.c:783"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff846cebec",
+      "pc": "0x846cebec",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "nbd_genl_connect@drivers/block/nbd.c:1842"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff846c598e",
+      "pc": "0x846c598e",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "nbd_dev_add@drivers/block/nbd.c:1733"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff83c3bec5",
+      "pc": "0x83c3bec5",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__device_add_disk@block/genhd.c:529"
+    },
+    {
+      "class_index": 8,
+      "full_pc": "0xffffffff83bedb0a",
+      "pc": "0x83bedb0a",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "blk_register_queue@block/blk-sysfs.c:871"
+    },
+    {
+      "class_index": 9,
+      "full_pc": "0xffffffff81f2d4bd",
+      "pc": "0x81f2d4bd",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "internal_create_group@fs/sysfs/group.c:116"
+    }
+  ]
+}

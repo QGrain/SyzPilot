@@ -1,0 +1,49 @@
+{
+  "case": "case_48",
+  "final_target": "ext4_xattr_set_entry@fs/ext4/xattr.c:1640",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:c6ad6c782bc821401064c9550cd30fa9ff98077b",
+  "kernel_commit": "f6e1ea196492",
+  "report_target": "ext4_xattr_set_entry@fs/ext4/xattr.c:1640",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x81ca66ed",
+    "0x8218388d",
+    "0x8217c9f4",
+    "0x8217b170"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "WARNING in ext4_xattr_set_entry",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff81ca66ed",
+      "pc": "0x81ca66ed",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "setxattr@fs/xattr.c:553"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff8218388d",
+      "pc": "0x8218388d",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ext4_xattr_set@fs/ext4/xattr.c:2490"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff8217c9f4",
+      "pc": "0x8217c9f4",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ext4_xattr_block_set@fs/ext4/xattr.c:1941"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff8217b170",
+      "pc": "0x8217b170",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ext4_xattr_set_entry@fs/ext4/xattr.c:1640"
+    }
+  ]
+}

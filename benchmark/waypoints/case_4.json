@@ -1,0 +1,97 @@
+{
+  "case": "case_4",
+  "final_target": "tcf_action_destroy@net/sched/act_api.c:1121",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:c73155d4848752f800e62b4d5c7e9642fdd20588",
+  "kernel_commit": "1ec35eadc3b4",
+  "report_target": "tcf_action_destroy@net/sched/act_api.c:1121",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x88051695",
+    "0x88466497",
+    "0x884658e3",
+    "0x88467e73",
+    "0x8815832f",
+    "0x882d14d1",
+    "0x8843da6d",
+    "0x882bf7b1",
+    "0x882bdd28",
+    "0x882d8e55"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: slab-use-after-free Read in tcf_action_destroy",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff88051695",
+      "pc": "0x88051695",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__sys_sendmsg@net/socket.c:2587"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff88466497",
+      "pc": "0x88466497",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_sendmsg@net/netlink/af_netlink.c:1942"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff884658e3",
+      "pc": "0x884658e3",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_unicast@net/netlink/af_netlink.c:1365"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff88467e73",
+      "pc": "0x88467e73",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_rcv_skb@net/netlink/af_netlink.c:2574"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff8815832f",
+      "pc": "0x8815832f",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "rtnetlink_rcv_msg@net/core/rtnetlink.c:6165"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff882d14d1",
+      "pc": "0x882d14d1",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "tc_new_tfilter@net/sched/cls_api.c:2310"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff8843da6d",
+      "pc": "0x8843da6d",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "fl_change@net/sched/cls_flower.c:2234"
+    },
+    {
+      "class_index": 8,
+      "full_pc": "0xffffffff882bf7b1",
+      "pc": "0x882bf7b1",
+      "resolution_method": "source-line-lowest-address",
+      "target": "tcf_exts_init_ex@net/sched/cls_api.c:3237"
+    },
+    {
+      "class_index": 9,
+      "full_pc": "0xffffffff882bdd28",
+      "pc": "0x882bdd28",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "tcf_exts_destroy@net/sched/cls_api.c:3249"
+    },
+    {
+      "class_index": 10,
+      "full_pc": "0xffffffff882d8e55",
+      "pc": "0x882d8e55",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "tcf_action_destroy@net/sched/act_api.c:1121"
+    }
+  ]
+}

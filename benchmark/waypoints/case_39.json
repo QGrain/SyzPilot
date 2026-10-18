@@ -1,0 +1,81 @@
+{
+  "case": "case_39",
+  "final_target": "del_gendisk@block/genhd.c:587",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:b539d96d78fc62e0725835de8759c9b04e41b1e4",
+  "kernel_commit": "64b4fc45bea6",
+  "report_target": "del_gendisk@block/genhd.c:587",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x870b5810",
+    "0x874f4ce8",
+    "0x874f41ff",
+    "0x874f5e11",
+    "0x874f96ca",
+    "0x846d6f58",
+    "0x846d6fe3",
+    "0x83c429c3"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "possible deadlock in del_gendisk",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff870b5810",
+      "pc": "0x870b5810",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__sys_sendmsg@net/socket.c:2475"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff874f4ce8",
+      "pc": "0x874f4ce8",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_sendmsg@net/netlink/af_netlink.c:1929"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff874f41ff",
+      "pc": "0x874f41ff",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_unicast@net/netlink/af_netlink.c:1340"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff874f5e11",
+      "pc": "0x874f5e11",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_rcv_skb@net/netlink/af_netlink.c:2504"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff874f96ca",
+      "pc": "0x874f96ca",
+      "resolution_method": "source-line-lowest-address",
+      "target": "genl_family_rcv_msg@net/netlink/genetlink.c:783"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff846d6f58",
+      "pc": "0x846d6f58",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "nbd_genl_connect@drivers/block/nbd.c:2003"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff846d6fe3",
+      "pc": "0x846d6fe3",
+      "resolution_method": "source-line-lowest-address",
+      "target": "nbd_put@drivers/block/nbd.c:1913"
+    },
+    {
+      "class_index": 8,
+      "full_pc": "0xffffffff83c429c3",
+      "pc": "0x83c429c3",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "del_gendisk@block/genhd.c:587"
+    }
+  ]
+}

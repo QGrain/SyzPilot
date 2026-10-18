@@ -1,0 +1,25 @@
+{
+  "case": "case_14",
+  "final_target": "disk_part_iter_next@block/genhd.c:206",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:1ad480a87bf33e02405e358b074df81e653d32b7",
+  "kernel_commit": "1c273e10bc0c",
+  "report_target": "disk_part_iter_next@block/genhd.c:206",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x83b6b0a3"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: use-after-free Read in disk_part_iter_next",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff83b6b0a3",
+      "pc": "0x83b6b0a3",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "disk_part_iter_next@block/genhd.c:206"
+    }
+  ]
+}

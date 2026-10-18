@@ -1,0 +1,81 @@
+{
+  "case": "case_5",
+  "final_target": "vxlan_vnifilter_dump_dev@drivers/net/vxlan/vxlan_vnifilter.c:349",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:52994c9c38190c4869dedefbb754b08ce8e950ad",
+  "kernel_commit": "d888c83fcec7",
+  "report_target": "vxlan_vnifilter_dump_dev@drivers/net/vxlan/vxlan_vnifilter.c:349",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x8773e1e7",
+    "0x8773d64f",
+    "0x8773f2d1",
+    "0x873c6818",
+    "0x877367c3",
+    "0x8773421d",
+    "0x84eaf891",
+    "0x84ea8913"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: slab-out-of-bounds Read in vxlan_vnifilter_dump_dev",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff8773e1e7",
+      "pc": "0x8773e1e7",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_sendmsg@net/netlink/af_netlink.c:1921"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff8773d64f",
+      "pc": "0x8773d64f",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_unicast@net/netlink/af_netlink.c:1345"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff8773f2d1",
+      "pc": "0x8773f2d1",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_rcv_skb@net/netlink/af_netlink.c:2496"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff873c6818",
+      "pc": "0x873c6818",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "rtnetlink_rcv_msg@net/core/rtnetlink.c:5953"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff877367c3",
+      "pc": "0x877367c3",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__netlink_dump_start@net/netlink/af_netlink.c:2375"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff8773421d",
+      "pc": "0x8773421d",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_dump@net/netlink/af_netlink.c:2270"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff84eaf891",
+      "pc": "0x84eaf891",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "vxlan_vnifilter_dump@drivers/net/vxlan/vxlan_vnifilter.c:428"
+    },
+    {
+      "class_index": 8,
+      "full_pc": "0xffffffff84ea8913",
+      "pc": "0x84ea8913",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "vxlan_vnifilter_dump_dev@drivers/net/vxlan/vxlan_vnifilter.c:349"
+    }
+  ]
+}

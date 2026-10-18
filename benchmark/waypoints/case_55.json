@@ -1,0 +1,89 @@
+{
+  "case": "case_55",
+  "final_target": "leaf_paste_entries@fs/reiserfs/lbalance.c:1377",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:90a99bd62976a215511b5fa631d0efbce91fcc0c",
+  "kernel_commit": "1bdc3d5be7e1",
+  "report_target": "leaf_paste_entries@fs/reiserfs/lbalance.c:1377",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x81d03768",
+    "0x81d02a9c",
+    "0x81c76795",
+    "0x82027d79",
+    "0x81feb63c",
+    "0x81fea546",
+    "0x8204b79a",
+    "0x81fe140e",
+    "0x82032d8a"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: out-of-bounds Read in leaf_paste_entries",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff81d03768",
+      "pc": "0x81d03768",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "path_mount@fs/namespace.c:3253"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff81d02a9c",
+      "pc": "0x81d02a9c",
+      "resolution_method": "source-line-lowest-address",
+      "target": "do_new_mount@fs/namespace.c:2923"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff81c76795",
+      "pc": "0x81c76795",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "mount_bdev@fs/super.c:1368"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff82027d79",
+      "pc": "0x82027d79",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "reiserfs_fill_super@fs/reiserfs/super.c:2185"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff81feb63c",
+      "pc": "0x81feb63c",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "reiserfs_mkdir@fs/reiserfs/namei.c:860"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff81fea546",
+      "pc": "0x81fea546",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "reiserfs_add_entry@fs/reiserfs/namei.c:567"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff8204b79a",
+      "pc": "0x8204b79a",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "reiserfs_paste_into_item@fs/reiserfs/stree.c:2159"
+    },
+    {
+      "class_index": 8,
+      "full_pc": "0xffffffff81fe140e",
+      "pc": "0x81fe140e",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "balance_leaf@fs/reiserfs/do_balan.c:1452"
+    },
+    {
+      "class_index": 9,
+      "full_pc": "0xffffffff82032d8a",
+      "pc": "0x82032d8a",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "leaf_paste_entries@fs/reiserfs/lbalance.c:1377"
+    }
+  ]
+}

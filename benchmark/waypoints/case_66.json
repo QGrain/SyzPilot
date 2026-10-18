@@ -1,0 +1,49 @@
+{
+  "case": "case_66",
+  "final_target": "p9_client_create@net/9p/client.c:1042",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:23186ee61fa1ff989650c128e3fb1d5b7c09481d",
+  "kernel_commit": "2f87d0916ce0",
+  "report_target": "p9_client_create@net/9p/client.c:1042",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x820bb93e",
+    "0x820185c9",
+    "0x8348e618",
+    "0x8ac8dae0"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "WARNING in p9_client_create",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff820bb93e",
+      "pc": "0x820bb93e",
+      "resolution_method": "source-line-lowest-address",
+      "target": "do_new_mount@fs/namespace.c:3507"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff820185c9",
+      "pc": "0x820185c9",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "vfs_get_tree@fs/super.c:1800"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff8348e618",
+      "pc": "0x8348e618",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "v9fs_mount@fs/9p/vfs_super.c:122"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff8ac8dae0",
+      "pc": "0x8ac8dae0",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "p9_client_create@net/9p/client.c:1042"
+    }
+  ]
+}

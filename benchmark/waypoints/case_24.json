@@ -1,0 +1,65 @@
+{
+  "case": "case_24",
+  "final_target": "close_fs_devices@fs/btrfs/volumes.c:1168",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:231626d94f0b16e1fd750b813a0a5398a6b6208e",
+  "kernel_commit": "315d99318179",
+  "report_target": "close_fs_devices@fs/btrfs/volumes.c:1168",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x81ce0bb4",
+    "0x81cdffec",
+    "0x81c4fc32",
+    "0x832f03c3",
+    "0x88d47fe2",
+    "0x833f8782"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "WARNING in close_fs_devices",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff81ce0bb4",
+      "pc": "0x81ce0bb4",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "path_mount@fs/namespace.c:3235"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff81cdffec",
+      "pc": "0x81cdffec",
+      "resolution_method": "source-line-lowest-address",
+      "target": "do_new_mount@fs/namespace.c:2905"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff81c4fc32",
+      "pc": "0x81c4fc32",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "vfs_get_tree@fs/super.c:1498"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff832f03c3",
+      "pc": "0x832f03c3",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "btrfs_mount_root@fs/btrfs/super.c:1749"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff88d47fe2",
+      "pc": "0x88d47fe2",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "open_ctree@fs/btrfs/disk-io.c:3693"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff833f8782",
+      "pc": "0x833f8782",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "close_fs_devices@fs/btrfs/volumes.c:1168"
+    }
+  ]
+}

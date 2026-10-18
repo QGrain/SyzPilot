@@ -1,0 +1,81 @@
+{
+  "case": "case_60",
+  "final_target": "sys_imageblit@drivers/video/fbdev/core/sysimgblt.c:323",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:e56e3d7238154400e27a36a46f170eb6c9ab7f2c",
+  "kernel_commit": "200e340f2196",
+  "report_target": "sys_imageblit@drivers/video/fbdev/core/sysimgblt.c:323",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x8454bd53",
+    "0x845873be",
+    "0x84336e15",
+    "0x843361af",
+    "0x845a18ad",
+    "0x84598f4b",
+    "0x84344618",
+    "0x8435ddb7"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: vmalloc-out-of-bounds Write in imageblit",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff8454bd53",
+      "pc": "0x8454bd53",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "tty_ioctl@drivers/tty/tty_io.c:2778"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff845873be",
+      "pc": "0x845873be",
+      "resolution_method": "source-line-lowest-address",
+      "target": "vt_k_ioctl@drivers/tty/vt/vt_ioctl.c:474"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff84336e15",
+      "pc": "0x84336e15",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "fbcon_set_font@drivers/video/fbdev/core/fbcon.c:2522"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff843361af",
+      "pc": "0x843361af",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "fbcon_do_set_font@drivers/video/fbdev/core/fbcon.c:2435"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff845a18ad",
+      "pc": "0x845a18ad",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "redraw_screen@drivers/tty/vt/vt.c:1035"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff84598f4b",
+      "pc": "0x84598f4b",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "do_update_region@drivers/tty/vt/vt.c:676"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff84344618",
+      "pc": "0x84344618",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "bit_putcs@drivers/video/fbdev/core/bitblit.c:188"
+    },
+    {
+      "class_index": 8,
+      "full_pc": "0xffffffff8435ddb7",
+      "pc": "0x8435ddb7",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "sys_imageblit@drivers/video/fbdev/core/sysimgblt.c:323"
+    }
+  ]
+}

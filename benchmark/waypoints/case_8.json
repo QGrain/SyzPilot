@@ -1,0 +1,41 @@
+{
+  "case": "case_8",
+  "final_target": "squashfs_export_iget@fs/squashfs/export.c:69",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:0ca09fa6188e6ebe5c92e04fd6f9e81742d7bb11",
+  "kernel_commit": "5c8fe583cce5",
+  "report_target": "squashfs_export_iget@fs/squashfs/export.c:69",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x81bedd32",
+    "0x814c2624",
+    "0x821d3e00"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: slab-out-of-bounds Read in squashfs_export_iget",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff81bedd32",
+      "pc": "0x81bedd32",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "do_faccessat@fs/open.c:464"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff814c2624",
+      "pc": "0x814c2624",
+      "resolution_method": "source-line-lowest-address",
+      "target": "put_cred@include/linux/cred.h:287"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff821d3e00",
+      "pc": "0x821d3e00",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "squashfs_export_iget@fs/squashfs/export.c:69"
+    }
+  ]
+}

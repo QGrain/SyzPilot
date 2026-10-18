@@ -1,0 +1,57 @@
+{
+  "case": "case_34",
+  "final_target": "btf_decl_tag_resolve@kernel/bpf/btf.c:3910",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:540888934cd46cccd224148d7bcdf1f07385f91a",
+  "kernel_commit": "3aa430d33b8d",
+  "report_target": "btf_decl_tag_resolve@kernel/bpf/btf.c:3910",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x8186bc35",
+    "0x8192edb1",
+    "0x8192fddb",
+    "0x81924adf",
+    "0x81918645"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "general protection fault in btf_decl_tag_resolve",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff8186bc35",
+      "pc": "0x8186bc35",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__sys_bpf@kernel/bpf/syscall.c:4679"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff8192edb1",
+      "pc": "0x8192edb1",
+      "resolution_method": "source-line-lowest-address",
+      "target": "btf_parse@kernel/bpf/btf.c:4513"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff8192fddb",
+      "pc": "0x8192fddb",
+      "resolution_method": "source-line-lowest-address",
+      "target": "btf_check_all_types@kernel/bpf/btf.c:4239"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff81924adf",
+      "pc": "0x81924adf",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "btf_resolve@kernel/bpf/btf.c:4198"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff81918645",
+      "pc": "0x81918645",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "btf_decl_tag_resolve@kernel/bpf/btf.c:3910"
+    }
+  ]
+}

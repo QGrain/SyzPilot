@@ -1,0 +1,57 @@
+{
+  "case": "case_11",
+  "final_target": "kvm_mmu_notifier_invalidate_range_start@virt/kvm/kvm_main.c:714",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:f9052a8499e947ead2fca1e0820ee0028574da31",
+  "kernel_commit": "56e337f2cf13",
+  "report_target": "kvm_mmu_notifier_invalidate_range_start@virt/kvm/kvm_main.c:714",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x81b229d5",
+    "0x81b20ffe",
+    "0x81b2052e",
+    "0x81bdeae3",
+    "0x8108efc3"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "WARNING in kvm_mmu_notifier_invalidate_range_start",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff81b229d5",
+      "pc": "0x81b229d5",
+      "resolution_method": "source-line-lowest-address",
+      "target": "mremap_to@mm/mremap.c:862"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff81b20ffe",
+      "pc": "0x81b20ffe",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "move_vma@mm/mremap.c:629"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff81b2052e",
+      "pc": "0x81b2052e",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "move_page_tables@mm/mremap.c:498"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff81bdeae3",
+      "pc": "0x81bdeae3",
+      "resolution_method": "source-line-lowest-address",
+      "target": "mn_hlist_invalidate_range_start@mm/mmu_notifier.c:493"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff8108efc3",
+      "pc": "0x8108efc3",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "kvm_mmu_notifier_invalidate_range_start@virt/kvm/kvm_main.c:714"
+    }
+  ]
+}

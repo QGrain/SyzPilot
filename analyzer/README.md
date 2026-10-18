@@ -73,6 +73,54 @@ g++ -std=c++17 -O2 src/DominatorAnalyzer.cpp \
 These tools analyze a static call graph only. They do not consume target PoCs,
 train the model, or supply runtime guidance automatically.
 
+Graph-derived nodes normally identify a function or source callsite, not the
+dynamic instruction offset present in a crash report. If a graph-derived or
+manual `function@file:line` target maps to multiple KCOV PCs,
+`get_targets.py` uses the lowest-address candidate as a deterministic fallback
+and prints the ambiguity with `--debug`. The lowest address is not guaranteed
+to be the earliest, shallowest, or mandatory control-flow block.
+
+Report-derived extraction is more precise because
+`waypoints_extractor.py` retains each frame's `+offset/size` and inline stack.
+It maps the reported relative function position to the locally rebuilt symbol,
+then selects the closest preceding KCOV PC from that outer function.
+An exact local ELF symbol is preferred; a compiler-normalized clone is used
+only when it is unique, while ambiguous sibling clones fail publication.
+Normalizing by both sizes is a best-effort tie-breaker when compiler output
+changes; it does not assume that two different builds have
+instruction-for-instruction equivalent layouts. Inline functions and source
+files are retained as corroborating context rather than hard filters: a KCOV
+call is at the basic-block entry, whose DWARF inline stack can precede an
+inline call later in the same block.
+
+If a report frame has no independent local ELF symbol because it was fully
+inlined, function-relative offset mapping is unavailable. The publisher keeps
+the frame only when local DWARF exposes its source-line KCOV PCs, selects the
+lowest-address source-line PC, and records
+`inline-source-line-lowest-address` in that waypoint. If the report's crash
+frame has no KCOV point at all, the extractor uses the nearest instrumented
+caller on the primary crash trace as an explicit proxy. Published JSON records
+both `report_target` and `final_target_kind`; the proxy is never presented as
+the original crash frame.
+
+The published value is the runtime KCOV PC (the return address immediately
+after the compiler-inserted coverage call), not the address of that call
+instruction. Consequently, running `addr2line` on the published PC can display
+the following source line; the extractor resolves the source location at the
+coverage call site before converting it to KCOV's runtime PC convention.
+Use `extract_benchmark_waypoints.py` to regenerate portable JSON for a set of
+compiled benchmark kernels:
+
+```bash
+python analyzer/extract_benchmark_waypoints.py \
+  --benchmark-dir benchmark \
+  --kernel-root /path/to/compiled/cases
+```
+
+Each generated waypoint records its `resolution_method`. Offset-bearing frames
+with a usable local symbol range fail publication if relative-position
+resolution fails; they do not silently degrade to a source-line candidate.
+
 ## Patch validation
 
 The patch was checked against a clean checkout of the exact base commit with

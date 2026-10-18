@@ -1,0 +1,97 @@
+{
+  "case": "case_35",
+  "final_target": "gfs2_withdraw.cold@fs/gfs2/util.c:294",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:2d0dcf8f6ab25f6f31e3b63384816326e1454142",
+  "kernel_commit": "139711f033f6",
+  "report_target": "gfs2_withdraw.cold@fs/gfs2/util.c:294",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x81c983d9",
+    "0x81c976a8",
+    "0x81c0ef2b",
+    "0x834fe5e1",
+    "0x83506996",
+    "0x834cae9f",
+    "0x834ca0a1",
+    "0x834c8baa",
+    "0x834c95b9",
+    "0x88bb5a38"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "general protection fault in gfs2_withdraw",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff81c983d9",
+      "pc": "0x81c983d9",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "path_mount@fs/namespace.c:3208"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff81c976a8",
+      "pc": "0x81c976a8",
+      "resolution_method": "source-line-lowest-address",
+      "target": "do_new_mount@fs/namespace.c:2878"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff81c0ef2b",
+      "pc": "0x81c0ef2b",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "get_tree_bdev@fs/super.c:1291"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff834fe5e1",
+      "pc": "0x834fe5e1",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "gfs2_fill_super@fs/gfs2/ops_fstype.c:1184"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff83506996",
+      "pc": "0x83506996",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "gfs2_lookupi@fs/gfs2/inode.c:322"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff834cae9f",
+      "pc": "0x834cae9f",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "gfs2_glock_nq@fs/gfs2/glock.c:1408"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff834ca0a1",
+      "pc": "0x834ca0a1",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "run_queue@fs/gfs2/glock.c:753"
+    },
+    {
+      "class_index": 8,
+      "full_pc": "0xffffffff834c8baa",
+      "pc": "0x834c8baa",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "do_xmote@fs/gfs2/glock.c:688"
+    },
+    {
+      "class_index": 9,
+      "full_pc": "0xffffffff834c95b9",
+      "pc": "0x834c95b9",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "finish_xmote@fs/gfs2/glock.c:562"
+    },
+    {
+      "class_index": 10,
+      "full_pc": "0xffffffff88bb5a38",
+      "pc": "0x88bb5a38",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "gfs2_withdraw.cold@fs/gfs2/util.c:294"
+    }
+  ]
+}

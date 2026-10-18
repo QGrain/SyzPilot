@@ -7,9 +7,9 @@ import numpy as np
 from math import log2
 from typing import Iterator
 try:
-    from .get_targets import action_get, action_fast_build
+    from .get_targets import action_get, action_fast_build, source_function_name
 except ImportError:
-    from get_targets import action_get, action_fast_build
+    from get_targets import action_get, action_fast_build, source_function_name
 
 
 logging.basicConfig(
@@ -57,14 +57,18 @@ def match_stack_frame(line: str):
 
 
 def deduplicate_target_pcs(
-    full_targets: list[str], target_pcs: list[str]
-) -> tuple[list[str], list[str]]:
+    full_targets: list[str],
+    target_pcs: list[str],
+    return_indices: bool = False,
+) -> tuple[list[str], list[str]] | tuple[list[str], list[str], list[int]]:
     """Drop zero and duplicate fuzzer PCs while preserving the deepest target."""
     if len(full_targets) != len(target_pcs):
         raise ValueError("resolved targets and PCs have different lengths")
     retained_reversed = []
     seen_pc32 = set()
-    for target, pc in reversed(list(zip(full_targets, target_pcs))):
+    for index in range(len(full_targets) - 1, -1, -1):
+        target = full_targets[index]
+        pc = target_pcs[index]
         try:
             pc32 = int(pc, 16) & 0xffffffff
         except (TypeError, ValueError):
@@ -80,11 +84,15 @@ def deduplicate_target_pcs(
             )
             continue
         seen_pc32.add(pc32)
-        retained_reversed.append((target, pc))
+        retained_reversed.append((target, pc, index))
     if not retained_reversed:
         raise ValueError("no nonzero unique target PCs remain")
     retained = list(reversed(retained_reversed))
-    return [target for target, _ in retained], [pc for _, pc in retained]
+    targets = [target for target, _, _ in retained]
+    pcs = [pc for _, pc, _ in retained]
+    if return_indices:
+        return targets, pcs, [index for _, _, index in retained]
+    return targets, pcs
 
 
 def read_file(file_path: str) -> str:
@@ -121,6 +129,7 @@ class WaypointNode:
         self.bb_count = None
         self.hot_entry_score = None
         self.value_score = None
+        self.is_final_target = False
 
         # Linked list pointers
         self.next = None
@@ -132,7 +141,11 @@ class WaypointNode:
         type of instrumentation_info: dict[str, dict[str, list[str]]]
         return boolean success or failure
         """
-        func_instru_info = instrumentation_info.get(self.func_name, {})
+        func_instru_info = instrumentation_info.get(self.func_name)
+        if func_instru_info is None:
+            func_instru_info = instrumentation_info.get(
+                source_function_name(self.func_name), {}
+            )
         if func_instru_info == {}:
             return False
 
@@ -317,7 +330,7 @@ class Waypoints:
                 gamma
             )
             # increase the value score of the bug function waypoint to make it undeletable
-            if current_waypoint.func_name == self.bug_func:
+            if current_waypoint.is_final_target:
                 current_waypoint.value_score += 100
             current_waypoint = next_waypoint
         logger.info(f"calc_waypoints_value_scores done, waypoints length: {self.length}")
@@ -385,7 +398,58 @@ class WaypointsExtractor:
         self.report_type = self.detect_report_type()
         self.call_trace = self.extract_calltrace()
         self.waypoints = Waypoints(self.call_trace, self.bug_func)
+        self.primary_call_trace = self.extract_primary_calltrace()
+        self.primary_waypoints = Waypoints(
+            self.primary_call_trace, self.bug_func
+        )
+        self.report_target_node = self.find_report_target(self.waypoints)
+        if self.report_target_node is None:
+            raise ValueError(
+                f"cannot find report target frame for {self.bug_func}"
+            )
+        self.report_target = (
+            f"{self.report_target_node.func_name}@"
+            f"{self.report_target_node.location}"
+        )
+        self.final_target_node = None
+        self.final_target_kind = None
         self.debug = debug
+        self.instrumentation_info = None
+
+    def find_report_target(self, waypoints: Waypoints) -> WaypointNode | None:
+        """Find the deepest frame matching the title's compiler-normalized symbol."""
+        bug_name = source_function_name(self.bug_func)
+        matches = [
+            node for node in waypoints
+            if source_function_name(node.func_name) in {
+                bug_name,
+                f"sys_{bug_name}",
+            }
+        ]
+        return max(matches, key=lambda node: node.original_index, default=None)
+
+    def extract_primary_calltrace(self) -> str:
+        """Return the primary crash trace, including callers used for a PC proxy."""
+        if self.report_type == "Normal":
+            return self.call_trace
+        lines = []
+        in_trace = False
+        for raw_line in self.bug_report.split('\n'):
+            line = raw_line.strip()
+            if line.startswith('Call Trace:'):
+                in_trace = True
+                continue
+            if not in_trace:
+                continue
+            if (
+                line.startswith('entry_SYSCALL') or
+                line.startswith('</TASK>') or
+                line.startswith(KASAN_TRACE_BOUNDARY_PREFIXES)
+            ):
+                break
+            if match_stack_frame(line) is not None:
+                lines.append(line)
+        return '\n'.join(lines)
 
     def detect_report_type(self) -> str:
         if "KASAN" in self.bug_title and "Freed by" in self.bug_report:
@@ -476,6 +540,44 @@ class WaypointsExtractor:
         return call_trace
 
     def load_bb_info(self, instrumentation_info: dict):
+        if self.report_target_node.get_bb_offset_and_count(instrumentation_info):
+            self.final_target_node = self.report_target_node
+            self.final_target_kind = "report-frame"
+        else:
+            primary_target = self.find_report_target(self.primary_waypoints)
+            proxy = primary_target.prev if primary_target is not None else None
+            while proxy is not None:
+                if proxy.get_bb_offset_and_count(instrumentation_info):
+                    break
+                proxy = proxy.prev
+            if proxy is None:
+                raise ValueError(
+                    f"neither report target {self.report_target} nor an "
+                    "instrumented caller proxy can be resolved"
+                )
+            existing_proxy = next(
+                (
+                    node for node in self.waypoints
+                    if node.func_name == proxy.func_name and
+                    node.location == proxy.location
+                ),
+                None,
+            )
+            if existing_proxy is None:
+                existing_proxy = WaypointNode(
+                    proxy.func_name,
+                    proxy.location,
+                    proxy.instruct_offset,
+                    proxy.is_inline,
+                    proxy.original_index,
+                )
+                existing_proxy.inline_frames = list(proxy.inline_frames)
+                existing_proxy.get_bb_offset_and_count(instrumentation_info)
+                self.waypoints.append_node(existing_proxy)
+            self.final_target_node = existing_proxy
+            self.final_target_kind = "nearest-instrumented-crash-caller"
+
+        self.final_target_node.is_final_target = True
         current_waypoint = self.waypoints.head
         while current_waypoint is not None:
             next_waypoint = current_waypoint.next
@@ -498,12 +600,12 @@ class WaypointsExtractor:
         reached_bug_func = False
         while current_waypoint is not None:
             next_waypoint = current_waypoint.next
-            if any(one in repr(current_waypoint) for one in black_list_sanitizers) or \
+            if (any(one in repr(current_waypoint) for one in black_list_sanitizers) or \
                 any(one in repr(current_waypoint) for one in black_list_boilerplates) or \
                 any(one in repr(current_waypoint) for one in black_list_functions) or \
-                reached_bug_func:
+                reached_bug_func) and current_waypoint is not self.report_target_node:
                 self.waypoints.delete_node(current_waypoint)
-            if current_waypoint.func_name == self.bug_func:
+            if current_waypoint is self.report_target_node:
                 reached_bug_func = True
             current_waypoint = next_waypoint
         if self.debug:
@@ -515,7 +617,10 @@ class WaypointsExtractor:
         current_waypoint = self.waypoints.head
         while current_waypoint is not None:
             next_waypoint = current_waypoint.next
-            if current_waypoint.bb_count < self.MIN_BB_COUNT and current_waypoint.func_name != self.bug_func:
+            if (
+                current_waypoint.bb_count < self.MIN_BB_COUNT and
+                not current_waypoint.is_final_target
+            ):
                 self.waypoints.delete_node(current_waypoint)
             current_waypoint = next_waypoint
             if self.waypoints.length <= self.MIN_WAYPOINTS_LENGTH:
@@ -535,7 +640,10 @@ class WaypointsExtractor:
                     next_waypoint.hot_entry_score is not None and
                     0 <= next_waypoint.hot_entry_score <= 1
                 ), f"hot_entry_score {next_waypoint.hot_entry_score} is not calculated or invalid"
-                if next_waypoint.hot_entry_score >= self.HOT_ENTRY_SCORE_THRESHOLD and next_waypoint.func_name != self.bug_func:
+                if (
+                    next_waypoint.hot_entry_score >= self.HOT_ENTRY_SCORE_THRESHOLD and
+                    not next_waypoint.is_final_target
+                ):
                     self.waypoints.delete_node(next_waypoint)
             current_waypoint = current_waypoint.next
             if self.waypoints.length <= self.MIN_WAYPOINTS_LENGTH:
@@ -552,7 +660,10 @@ class WaypointsExtractor:
                     continue_to_check_wrapper = False
                     break
                 next_waypoint = current_waypoint.next
-                if current_waypoint.func_name in next_waypoint.func_name:
+                if (
+                    current_waypoint.func_name in next_waypoint.func_name and
+                    not next_waypoint.is_final_target
+                ):
                     self.waypoints.delete_node(next_waypoint)
                     continue_to_check_wrapper = True
                 current_waypoint = next_waypoint
@@ -576,7 +687,10 @@ class WaypointsExtractor:
         current_waypoint = self.waypoints.head
         while current_waypoint is not None:
             assert current_waypoint.value_score is not None, f"value_score is not calculated for {current_waypoint.func_name}@{current_waypoint.location}"
-            if current_waypoint.value_score < lowest_value_score:
+            if (
+                not current_waypoint.is_final_target and
+                current_waypoint.value_score < lowest_value_score
+            ):
                 lowest_value_score = current_waypoint.value_score
                 waypoint_to_delete = current_waypoint
             current_waypoint = current_waypoint.next
@@ -602,7 +716,7 @@ class WaypointsExtractor:
         z_score = compute_robust_z_score(value_scores)
         lower_outlier_masks = z_score < -1.0
         for i, waypoint in enumerate(self.waypoints):
-            if lower_outlier_masks[i]:
+            if lower_outlier_masks[i] and not waypoint.is_final_target:
                 outlier_waypoints.append([waypoint, z_score[i]])
 
         sorted_outlier_waypoints = sorted(outlier_waypoints, key=lambda x: x[1])
@@ -616,12 +730,31 @@ class WaypointsExtractor:
 
     def extract(self):
         self.trace_sanitization()
+        analysis_targets = self.waypoints.recover_calltrace().split('\n')
         instru_info = action_fast_build(
             self.kernel_dir,
-            self.waypoints.recover_calltrace().split('\n'),
+            list(dict.fromkeys(analysis_targets)),
             False,
             allow_partial=True,
         )
+        if not self.report_target_node.get_bb_offset_and_count(instru_info):
+            proxy_targets = [
+                f"{node.func_name}@{node.location}"
+                for node in self.primary_waypoints
+            ]
+            proxy_info = action_fast_build(
+                self.kernel_dir,
+                list(dict.fromkeys(proxy_targets)),
+                False,
+                allow_partial=True,
+            )
+            for func_name, locations in proxy_info.items():
+                for location, pcs in locations.items():
+                    merged = instru_info.setdefault(func_name, {}).setdefault(
+                        location, []
+                    )
+                    merged.extend(pc for pc in pcs if pc not in merged)
+        self.instrumentation_info = instru_info
         self.load_bb_info(instru_info)
         self.complexity_based_filtering()
         self.non_trivial_stage_separation()
@@ -640,6 +773,8 @@ class WaypointsExtractor:
 
     def get_pcs(self):
         ordered_waypoints = list(self.waypoints)
+        if not ordered_waypoints or ordered_waypoints[-1] is not self.final_target_node:
+            raise ValueError("final report target or proxy is not the deepest waypoint")
         targets = [
             f"{waypoint.func_name}@{waypoint.location}"
             for waypoint in ordered_waypoints
@@ -650,15 +785,43 @@ class WaypointsExtractor:
         inline_contexts = [
             waypoint.inline_frames for waypoint in ordered_waypoints
         ]
-        full_targets, target_pcs = action_get(
+        full_targets, target_pcs, resolution_methods = action_get(
             kernel_dir=self.kernel_dir,
             targets=targets,
             api_mode=True,
             fast_mode=True,
             instruction_offsets=instruction_offsets,
             inline_contexts=inline_contexts,
+            allow_partial_fast_build=True,
+            instrumentation_info=self.instrumentation_info,
+            strict_report_offsets=True,
+            return_resolution_methods=True,
         )
-        full_targets, target_pcs = deduplicate_target_pcs(full_targets, target_pcs)
+        unresolved_report_targets = [
+            target for target, pc, instruction_offset in zip(
+                full_targets, target_pcs, instruction_offsets
+            )
+            if instruction_offset is not None and
+            int(pc, 16) & 0xffffffff == 0
+        ]
+        if unresolved_report_targets:
+            raise ValueError(
+                "cannot resolve report-offset waypoint PCs: "
+                + ", ".join(unresolved_report_targets)
+            )
+        if not target_pcs or int(target_pcs[-1], 16) & 0xffffffff == 0:
+            raise ValueError(
+                "cannot resolve the deepest extracted waypoint PC"
+            )
+        full_targets, target_pcs, retained_indices = deduplicate_target_pcs(
+            full_targets,
+            target_pcs,
+            return_indices=True,
+        )
+        self.pc_resolution_methods = [
+            resolution_methods[index]
+            for index in retained_indices
+        ]
         print(f"\n| %0-60s | %0-18s |"%("func_name@file_path:line_num", "pc_addr"))
         for i in range(len(target_pcs)):
             print(f"| {full_targets[i]} | {target_pcs[i]} |")
@@ -668,6 +831,7 @@ class WaypointsExtractor:
         print(f"\n[For bench_parser:]")
         s = " ".join([f"reachability-0x{pc[-8:]}" for pc in target_pcs])
         print(s)
+        return full_targets, target_pcs
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Extract waypoints from syzkaller-style report")
@@ -676,6 +840,9 @@ if __name__ == "__main__":
     parser.add_argument("-r", "--report_path", type=str, default="case_1.report")
     parser.add_argument("-d", "--debug", action="store_true", help="print debug information")
     args = parser.parse_args()
+
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
 
     waypoints_extractor = WaypointsExtractor(args.kernel_dir, args.title_path, args.report_path, args.debug)
     waypoints_extractor.extract()

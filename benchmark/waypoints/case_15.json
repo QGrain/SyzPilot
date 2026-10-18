@@ -1,0 +1,49 @@
+{
+  "case": "case_15",
+  "final_target": "null_skcipher_crypt@crypto/crypto_null.c:85",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:0c42ffd0a5f33ffc6f75393e7d0c5aaf88f6c90d",
+  "kernel_commit": "78e709522d2c",
+  "report_target": "null_skcipher_crypt@crypto/crypto_null.c:85",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x81c93e5c",
+    "0x839fe22e",
+    "0x83a0899e",
+    "0x83ae72c4"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: use-after-free Write in null_skcipher_crypt",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff81c93e5c",
+      "pc": "0x81c93e5c",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "vfs_statx@fs/stat.c:225"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff839fe22e",
+      "pc": "0x839fe22e",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "tomoyo_path_perm@security/tomoyo/file.c:822"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff83a0899e",
+      "pc": "0x83a0899e",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "tomoyo_realpath_from_path@security/tomoyo/realpath.c:291"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff83ae72c4",
+      "pc": "0x83ae72c4",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "null_skcipher_crypt@crypto/crypto_null.c:85"
+    }
+  ]
+}

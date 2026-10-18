@@ -1,0 +1,49 @@
+{
+  "case": "case_30",
+  "final_target": "netlbl_catmap_walk@net/netlabel/netlabel_kapi.c:615",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:27f3313fbbb37d988f6051bf00b7b278de0399ed",
+  "kernel_commit": "6e764bcd1cf7",
+  "report_target": "netlbl_catmap_walk@net/netlabel/netlabel_kapi.c:615",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x81c68c54",
+    "0x81c67ea8",
+    "0x839ca2de",
+    "0x889c0aa1"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: use-after-free Read in netlbl_catmap_walk",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff81c68c54",
+      "pc": "0x81c68c54",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ksys_write@fs/read_write.c:658"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff81c67ea8",
+      "pc": "0x81c67ea8",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "vfs_write@fs/read_write.c:603"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff839ca2de",
+      "pc": "0x839ca2de",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "smk_set_cipso@security/smack/smackfs.c:923"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff889c0aa1",
+      "pc": "0x889c0aa1",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlbl_catmap_walk@net/netlabel/netlabel_kapi.c:615"
+    }
+  ]
+}

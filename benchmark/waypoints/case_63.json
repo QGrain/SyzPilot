@@ -1,0 +1,89 @@
+{
+  "case": "case_63",
+  "final_target": "nfc_llcp_register_device@net/nfc/llcp_core.c:1604",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:340b4d4069081d3c026628822688baf8b0bf4d33",
+  "kernel_commit": "a4d7d7011219",
+  "report_target": "nfc_llcp_register_device@net/nfc/llcp_core.c:1604",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x81e4ca8b",
+    "0x81ea0548",
+    "0x81ea01d6",
+    "0x81e452a7",
+    "0x81e6b3d8",
+    "0x848f02ee",
+    "0x8532260b",
+    "0x89e48ed5",
+    "0x89e38568"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "BUG: corrupted list in nfc_llcp_register_device",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff81e4ca8b",
+      "pc": "0x81e4ca8b",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "do_sys_openat2@fs/open.c:1356"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff81ea0548",
+      "pc": "0x81ea0548",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "path_openat@fs/namei.c:3791"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff81ea01d6",
+      "pc": "0x81ea01d6",
+      "resolution_method": "source-line-lowest-address",
+      "target": "do_open@fs/namei.c:3636"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff81e452a7",
+      "pc": "0x81e452a7",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "do_dentry_open@fs/open.c:920"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff81e6b3d8",
+      "pc": "0x81e6b3d8",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "chrdev_open@fs/char_dev.c:414"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff848f02ee",
+      "pc": "0x848f02ee",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "misc_open@drivers/char/misc.c:165"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff8532260b",
+      "pc": "0x8532260b",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "virtual_ncidev_open@drivers/nfc/virtual_ncidev.c:148"
+    },
+    {
+      "class_index": 8,
+      "full_pc": "0xffffffff89e48ed5",
+      "pc": "0x89e48ed5",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "nci_register_device@net/nfc/nci/core.c:1257"
+    },
+    {
+      "class_index": 9,
+      "full_pc": "0xffffffff89e38568",
+      "pc": "0x89e38568",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "nfc_llcp_register_device@net/nfc/llcp_core.c:1604"
+    }
+  ]
+}

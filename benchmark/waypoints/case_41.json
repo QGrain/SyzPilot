@@ -1,0 +1,25 @@
+{
+  "case": "case_41",
+  "final_target": "idr_for_each@lib/idr.c:202",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:86fdcde9a4417b0df80fdb6fcd8d1646d4ddc47b",
+  "kernel_commit": "dd86e7fa07a3",
+  "report_target": "idr_for_each@lib/idr.c:202",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x83d9db18"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: use-after-free Read in idr_for_each",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff83d9db18",
+      "pc": "0x83d9db18",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "idr_for_each@lib/idr.c:202"
+    }
+  ]
+}

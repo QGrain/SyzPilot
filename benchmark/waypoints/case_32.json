@@ -1,0 +1,65 @@
+{
+  "case": "case_32",
+  "final_target": "p9_client_create@net/9p/client.c:1063",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:0e903da7538be5cc96ad37ae0c39f69359e9dda5",
+  "kernel_commit": "fe75a21824e7",
+  "report_target": "p9_client_create@net/9p/client.c:1063",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x81ca2209",
+    "0x81ca14d8",
+    "0x81c14b36",
+    "0x82e4683f",
+    "0x83d8fc62",
+    "0x8882b499"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: invalid-free in p9_client_create",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff81ca2209",
+      "pc": "0x81ca2209",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "path_mount@fs/namespace.c:3211"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff81ca14d8",
+      "pc": "0x81ca14d8",
+      "resolution_method": "source-line-lowest-address",
+      "target": "do_new_mount@fs/namespace.c:2881"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff81c14b36",
+      "pc": "0x81c14b36",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "vfs_get_tree@fs/super.c:1496"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff82e4683f",
+      "pc": "0x82e4683f",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "v9fs_mount@fs/9p/vfs_super.c:126"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff83d8fc62",
+      "pc": "0x83d8fc62",
+      "resolution_method": "source-line-lowest-address",
+      "target": "kobject_cleanup@lib/kobject.c:705"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff8882b499",
+      "pc": "0x8882b499",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "p9_client_create@net/9p/client.c:1063"
+    }
+  ]
+}

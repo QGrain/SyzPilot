@@ -1,0 +1,25 @@
+{
+  "case": "case_57",
+  "final_target": "cipso_v4_genopt@net/ipv4/cipso_ipv4.c:1784",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:477b0766ad267b24fecf145a228057b80e5da28d",
+  "kernel_commit": "7a7fd0de4a98",
+  "report_target": "cipso_v4_genopt@net/ipv4/cipso_ipv4.c:1784",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x8796070c"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: use-after-free Read in cipso_v4_genopt",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff8796070c",
+      "pc": "0x8796070c",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "cipso_v4_genopt@net/ipv4/cipso_ipv4.c:1784"
+    }
+  ]
+}

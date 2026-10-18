@@ -1,0 +1,81 @@
+{
+  "case": "case_56",
+  "final_target": "ntfs_attr_find@fs/ntfs/attrib.c:597",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:967499479c197690a0545dc0b93183b30c116d26",
+  "kernel_commit": "a6afa4199d3d",
+  "report_target": "ntfs_attr_find@fs/ntfs/attrib.c:597",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x81df8597",
+    "0x81df78f9",
+    "0x81d613a2",
+    "0x81d65e75",
+    "0x82a05ad6",
+    "0x829d5271",
+    "0x829ad5f3",
+    "0x829ab91a"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: use-after-free Read in ntfs_attr_find",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff81df8597",
+      "pc": "0x81df8597",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "path_mount@fs/namespace.c:3370"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff81df78f9",
+      "pc": "0x81df78f9",
+      "resolution_method": "source-line-lowest-address",
+      "target": "do_new_mount@fs/namespace.c:3040"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff81d613a2",
+      "pc": "0x81d613a2",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "vfs_get_tree@fs/super.c:1530"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff81d65e75",
+      "pc": "0x81d65e75",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "mount_bdev@fs/super.c:1400"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff82a05ad6",
+      "pc": "0x82a05ad6",
+      "resolution_method": "source-line-lowest-address",
+      "target": "load_system_files@fs/ntfs/super.c:1847"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff829d5271",
+      "pc": "0x829d5271",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ntfs_read_locked_inode@fs/ntfs/inode.c:999"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff829ad5f3",
+      "pc": "0x829ad5f3",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ntfs_attr_lookup@fs/ntfs/attrib.c:1193"
+    },
+    {
+      "class_index": 8,
+      "full_pc": "0xffffffff829ab91a",
+      "pc": "0x829ab91a",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ntfs_attr_find@fs/ntfs/attrib.c:597"
+    }
+  ]
+}

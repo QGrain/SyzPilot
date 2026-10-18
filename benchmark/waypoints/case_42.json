@@ -1,0 +1,89 @@
+{
+  "case": "case_42",
+  "final_target": "ieee80211_assign_vif_chanctx@net/mac80211/chan.c:746",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:23a9271cc812117c001ed67a21ceb30f4805960c",
+  "kernel_commit": "7acac4b3196c",
+  "report_target": "ieee80211_assign_vif_chanctx@net/mac80211/chan.c:746",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x8730ca75",
+    "0x8730bf32",
+    "0x8730dab3",
+    "0x873112fa",
+    "0x88401590",
+    "0x883576fd",
+    "0x88532399",
+    "0x885fdeb6",
+    "0x885fa696"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "general protection fault in ieee80211_assign_vif_chanctx",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff8730ca75",
+      "pc": "0x8730ca75",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_sendmsg@net/netlink/af_netlink.c:1927"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff8730bf32",
+      "pc": "0x8730bf32",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_unicast@net/netlink/af_netlink.c:1338"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff8730dab3",
+      "pc": "0x8730dab3",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_rcv_skb@net/netlink/af_netlink.c:2502"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff873112fa",
+      "pc": "0x873112fa",
+      "resolution_method": "source-line-lowest-address",
+      "target": "genl_family_rcv_msg@net/netlink/genetlink.c:783"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff88401590",
+      "pc": "0x88401590",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "nl80211_set_interface@net/wireless/nl80211.c:3912"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff883576fd",
+      "pc": "0x883576fd",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "cfg80211_change_iface@net/wireless/util.c:1047"
+    },
+    {
+      "class_index": 7,
+      "full_pc": "0xffffffff88532399",
+      "pc": "0x88532399",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ieee80211_ibss_disconnect@net/mac80211/ibss.c:735"
+    },
+    {
+      "class_index": 8,
+      "full_pc": "0xffffffff885fdeb6",
+      "pc": "0x885fdeb6",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__ieee80211_vif_release_channel@net/mac80211/chan.c:1619"
+    },
+    {
+      "class_index": 9,
+      "full_pc": "0xffffffff885fa696",
+      "pc": "0x885fa696",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ieee80211_assign_vif_chanctx@net/mac80211/chan.c:746"
+    }
+  ]
+}

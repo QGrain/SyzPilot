@@ -1,0 +1,65 @@
+{
+  "case": "case_13",
+  "final_target": "madvise_update_vma@mm/madvise.c:212",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:a13500af99bfc9d0a33cde992131c8419680b99c",
+  "kernel_commit": "dfd42facf1e4",
+  "report_target": "madvise_update_vma@mm/madvise.c:212",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x81b6d6dc",
+    "0x81b73f25",
+    "0x81b73677",
+    "0x81b0812d",
+    "0x81b05bf0",
+    "0x81b73a72"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: use-after-free Read in madvise_update_vma",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff81b6d6dc",
+      "pc": "0x81b6d6dc",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "madvise_walk_vmas@mm/madvise.c:1207"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff81b73f25",
+      "pc": "0x81b73f25",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "madvise_vma_behavior@mm/madvise.c:1043"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff81b73677",
+      "pc": "0x81b73677",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "madvise_update_vma@mm/madvise.c:180"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff81b0812d",
+      "pc": "0x81b0812d",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "vma_merge@mm/mmap.c:1217"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff81b05bf0",
+      "pc": "0x81b05bf0",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__vma_adjust@mm/mmap.c:962"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff81b73a72",
+      "pc": "0x81b73a72",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "madvise_update_vma@mm/madvise.c:212"
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "case": "case_50",
+  "final_target": "bond_ipsec_add_sa@drivers/net/bonding/bond_main.c:411",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:8a277151f970233f92e4379902668591e5b62bd7",
+  "kernel_commit": "57fa2369ab17",
+  "report_target": "bond_ipsec_add_sa@drivers/net/bonding/bond_main.c:411",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x8735299e",
+    "0x87351ebf",
+    "0x87a7a622",
+    "0x87a82861",
+    "0x87a70a36",
+    "0x84a5eead"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "WARNING: suspicious RCU usage in bond_ipsec_add_sa",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff8735299e",
+      "pc": "0x8735299e",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_sendmsg@net/netlink/af_netlink.c:1927"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff87351ebf",
+      "pc": "0x87351ebf",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "netlink_unicast@net/netlink/af_netlink.c:1338"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff87a7a622",
+      "pc": "0x87a7a622",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "xfrm_user_rcv_msg@net/xfrm/xfrm_user.c:2812"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff87a82861",
+      "pc": "0x87a82861",
+      "resolution_method": "source-line-lowest-address",
+      "target": "xfrm_state_construct@net/xfrm/xfrm_user.c:651"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff87a70a36",
+      "pc": "0x87a70a36",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "xfrm_dev_state_add@net/xfrm/xfrm_device.c:266"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff84a5eead",
+      "pc": "0x84a5eead",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "bond_ipsec_add_sa@drivers/net/bonding/bond_main.c:411"
+    }
+  ]
+}

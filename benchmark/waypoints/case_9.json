@@ -1,0 +1,57 @@
+{
+  "case": "case_9",
+  "final_target": "snd_seq_timer_interrupt@sound/core/seq/seq_timer.c:130",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:9081ea2ffd7b642c95c94ee12f891699d7ce1b2c",
+  "kernel_commit": "e5220dd16778",
+  "report_target": "snd_seq_timer_interrupt@sound/core/seq/seq_timer.c:130",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x814c3fc5",
+    "0x81c4f2eb",
+    "0x86dc77fe",
+    "0x86dd3a5f",
+    "0x86dd8315"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: use-after-free Read in snd_seq_timer_interrupt",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff814c3fc5",
+      "pc": "0x814c3fc5",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "task_work_run@kernel/task_work.c:164"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff81c4f2eb",
+      "pc": "0x81c4f2eb",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__fput@fs/file_table.c:280"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff86dc77fe",
+      "pc": "0x86dc77fe",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "snd_seq_release@sound/core/seq/seq_clientmgr.c:382"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff86dd3a5f",
+      "pc": "0x86dd3a5f",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "snd_seq_queue_client_leave@sound/core/seq/seq_queue.c:552"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff86dd8315",
+      "pc": "0x86dd8315",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "snd_seq_timer_interrupt@sound/core/seq/seq_timer.c:130"
+    }
+  ]
+}

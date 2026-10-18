@@ -1,0 +1,57 @@
+{
+  "case": "case_23",
+  "final_target": "sys_imageblit@drivers/video/fbdev/core/sysimgblt.c:275",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:a4ae8d6e9d097c330146c0d4e0af49c36eacc7e3",
+  "kernel_commit": "f40ddce88593",
+  "report_target": "sys_imageblit@drivers/video/fbdev/core/sysimgblt.c:275",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x83ebeeee",
+    "0x84141076",
+    "0x8413861b",
+    "0x83ed05b8",
+    "0x83ee9b75"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: vmalloc-out-of-bounds Write in imageblit",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff83ebeeee",
+      "pc": "0x83ebeeee",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "fbcon_modechanged@drivers/video/fbdev/core/fbcon.c:2656"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff84141076",
+      "pc": "0x84141076",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "redraw_screen@drivers/tty/vt/vt.c:1035"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff8413861b",
+      "pc": "0x8413861b",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "do_update_region@drivers/tty/vt/vt.c:676"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff83ed05b8",
+      "pc": "0x83ed05b8",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "bit_putcs@drivers/video/fbdev/core/bitblit.c:188"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff83ee9b75",
+      "pc": "0x83ee9b75",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "sys_imageblit@drivers/video/fbdev/core/sysimgblt.c:275"
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "case": "case_37",
+  "final_target": "qrtr_tun_write_iter@net/qrtr/tun.c:83",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:fc38ff064573a04ffe2baa858fdba2c78a3a7163",
+  "kernel_commit": "6207214a70bf",
+  "report_target": "qrtr_tun_write_iter@net/qrtr/tun.c:83",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x81c01f97",
+    "0x81c0182b",
+    "0x81bf9f40",
+    "0x88a9d595"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "WARNING in qrtr_tun_write_iter",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff81c01f97",
+      "pc": "0x81c01f97",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ksys_write@fs/read_write.c:658"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff81c0182b",
+      "pc": "0x81c0182b",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "vfs_write@fs/read_write.c:605"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff81bf9f40",
+      "pc": "0x81bf9f40",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "new_sync_write@fs/read_write.c:518"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff88a9d595",
+      "pc": "0x88a9d595",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "qrtr_tun_write_iter@net/qrtr/tun.c:83"
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "case": "case_20",
+  "final_target": "ep_remove_wait_queue@fs/eventpoll.c:545",
+  "final_target_kind": "nearest-instrumented-crash-caller",
+  "kernel_build_identity": "build-id:8fd160e260dff887afe7e8ed1d5b129a94cca214",
+  "kernel_commit": "2585cf9dfaad",
+  "report_target": "remove_wait_queue@kernel/sched/wait.c:55",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x81c8a0a3",
+    "0x81c898e3",
+    "0x81f3a86a",
+    "0x816f3277",
+    "0x81707011",
+    "0x81dca7ec"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: use-after-free Read in remove_wait_queue",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff81c8a0a3",
+      "pc": "0x81c8a0a3",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ksys_write@fs/read_write.c:643"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff81c898e3",
+      "pc": "0x81c898e3",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "vfs_write@fs/read_write.c:590"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff81f3a86a",
+      "pc": "0x81f3a86a",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "kernfs_fop_write_iter@fs/kernfs/file.c:296"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff816f3277",
+      "pc": "0x816f3277",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "cgroup_file_write@kernel/cgroup/cgroup.c:3852"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff81707011",
+      "pc": "0x81707011",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "cgroup_pressure_write@kernel/cgroup/cgroup.c:3651"
+    },
+    {
+      "class_index": 6,
+      "full_pc": "0xffffffff81dca7ec",
+      "pc": "0x81dca7ec",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "ep_remove_wait_queue@fs/eventpoll.c:545"
+    }
+  ]
+}

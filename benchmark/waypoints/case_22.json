@@ -1,0 +1,25 @@
+{
+  "case": "case_22",
+  "final_target": "rxrpc_lookup_local@net/rxrpc/local_object.c:224",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:efd623c72172266ed97b3f537f62390e81823d1b",
+  "kernel_commit": "b6bb9676f216",
+  "report_target": "rxrpc_lookup_local@net/rxrpc/local_object.c:224",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x88f37f21"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: use-after-free Read in rxrpc_lookup_local",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff88f37f21",
+      "pc": "0x88f37f21",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "rxrpc_lookup_local@net/rxrpc/local_object.c:224"
+    }
+  ]
+}

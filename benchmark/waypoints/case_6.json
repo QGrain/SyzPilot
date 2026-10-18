@@ -1,0 +1,49 @@
+{
+  "case": "case_6",
+  "final_target": "packet_set_ring@net/packet/af_packet.c:4495",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:a83f6cbe7e3637f466d7948cf5cb7b4558dc81d5",
+  "kernel_commit": "a763d5a5abd6",
+  "report_target": "packet_set_ring@net/packet/af_packet.c:4495",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x871cec15",
+    "0x88006de2",
+    "0x87ff45cc",
+    "0x87ff4ea9"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "KASAN: invalid-free in packet_set_ring",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff871cec15",
+      "pc": "0x871cec15",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "__sys_setsockopt@net/socket.c:2176"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff88006de2",
+      "pc": "0x88006de2",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "packet_setsockopt@net/packet/af_packet.c:3785"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff87ff45cc",
+      "pc": "0x87ff45cc",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "packet_set_ring@net/packet/af_packet.c:4497"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff87ff4ea9",
+      "pc": "0x87ff4ea9",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "packet_set_ring@net/packet/af_packet.c:4495"
+    }
+  ]
+}

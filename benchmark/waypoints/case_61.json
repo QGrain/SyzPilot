@@ -1,0 +1,57 @@
+{
+  "case": "case_61",
+  "final_target": "kvm_vcpu_memslots@include/linux/kvm_host.h:892",
+  "final_target_kind": "report-frame",
+  "kernel_build_identity": "build-id:224370bbe381c27608ca5ddb102c5540c4f5274f",
+  "kernel_commit": "9d6bde853685",
+  "report_target": "kvm_vcpu_memslots@include/linux/kvm_host.h:892",
+  "schema_version": 2,
+  "source": "report-derived",
+  "status": "ok",
+  "target_pcs": [
+    "0x8108c4a5",
+    "0x8110960c",
+    "0x810f9b71",
+    "0x81242aa4",
+    "0x8109b65b"
+  ],
+  "target_resolution_policy": "report-relative-position-closest-preceding-outer-function-pc; inline-function-and-file-context-corroboration; symbol-less-inline-source-line-fallback; explicit-nearest-instrumented-crash-caller-proxy; no-offset-lowest-address-debug-fallback",
+  "title": "WARNING: suspicious RCU usage in kvm_vcpu_memslots",
+  "waypoints": [
+    {
+      "class_index": 1,
+      "full_pc": "0xffffffff8108c4a5",
+      "pc": "0x8108c4a5",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "kvm_vcpu_ioctl@virt/kvm/kvm_main.c:4019"
+    },
+    {
+      "class_index": 2,
+      "full_pc": "0xffffffff8110960c",
+      "pc": "0x8110960c",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "kvm_arch_vcpu_ioctl@arch/x86/kvm/x86.c:5278"
+    },
+    {
+      "class_index": 3,
+      "full_pc": "0xffffffff810f9b71",
+      "pc": "0x810f9b71",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "kvm_vcpu_ioctl_x86_set_vcpu_events@arch/x86/kvm/x86.c:4793"
+    },
+    {
+      "class_index": 4,
+      "full_pc": "0xffffffff81242aa4",
+      "pc": "0x81242aa4",
+      "resolution_method": "report-relative-outer-function-predecessor",
+      "target": "nested_vmx_vmexit@arch/x86/kvm/vmx/nested.c:4662"
+    },
+    {
+      "class_index": 5,
+      "full_pc": "0xffffffff8109b65b",
+      "pc": "0x8109b65b",
+      "resolution_method": "inline-source-line-lowest-address",
+      "target": "kvm_vcpu_memslots@include/linux/kvm_host.h:892"
+    }
+  ]
+}
