@@ -42,6 +42,25 @@ The default base is pinned to the multi-platform digest of
 `qgrain/kernel-fuzz:2404_v1`. Override `KERNEL_FUZZ_IMAGE` only with a tested,
 digest-pinned compatible image.
 
+The released image already contains the apt-provided GCC 11.4 used by the
+functional kernel workflow. In a custom environment where a direct
+`cvm install gcc 11.4.0` fails under a GCC 14 host compiler, LLVM can bootstrap
+the requested GCC version without changing the compiler used for the target
+kernel:
+
+```bash
+command -v clang clang++
+(
+  export CC="$(command -v clang)"
+  export CXX="$(command -v clang++)"
+  cvm install gcc 11.4.0 --jobs 8
+)
+```
+
+The resulting CVM toolchain is GCC 11.4; pass its `gcc` path to
+`experiments/compile_kernel.py --compiler` as documented in
+[`artifact/README.md`](../artifact/README.md).
+
 ## Create a Brain container
 
 Run the Brain role on a GPU host. The explicit `sleep infinity` below is a

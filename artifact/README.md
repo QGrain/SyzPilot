@@ -152,8 +152,26 @@ python experiments/compile_kernel.py ... \
   --compiler /usr/bin/gcc-11
 ```
 
-Installing GCC 11.4 from source with CVM is not recommended on a GCC 14 host:
-that host compiler rejects an incompatibility in the older GCC source tree.
+If a direct `cvm install gcc 11.4.0` fails because the host defaults to GCC 14,
+use LLVM only to bootstrap the GCC 11.4 toolchain:
+
+```bash
+command -v clang clang++
+(
+  export CC="$(command -v clang)"
+  export CXX="$(command -v clang++)"
+  cvm install gcc 11.4.0 --jobs 8
+)
+
+python experiments/compile_kernel.py ... \
+  --compiler "$HOME/.cvm/toolchains/gcc/11.4.0/bin/gcc"
+```
+
+GCC 14 rejects a legacy source incompatibility while building GCC 11.4, whereas
+Clang accepts it with a warning. LLVM is used only for this bootstrap step; the
+result is a normal GCC 11.4 installation, and GCC 11.4 still compiles the target
+kernel. The released image already includes the apt-provided GCC 11.4 and does
+not require this workaround.
 
 The unified image inherits a disposable Trixie guest template at
 `/root/images/image-template/{disk.img,disk.id_rsa}`. The generated manager
