@@ -10,10 +10,7 @@ ARG SYZPILOT_REPOSITORY=https://github.com/QGrain/SyzPilot.git
 ARG SYZPILOT_REVISION
 ARG SYZENCODER_REPOSITORY=zzra1n/SyzEncoder
 ARG SYZENCODER_REVISION=6140b0b46c81bb6428458fde5fd800a0e4a0687d
-ARG KERNEL_GCC_VERSION=11.4.0
-ARG KERNEL_GCC_JOBS=8
-ARG OCI_CREATED=unknown
-ARG OCI_REVISION
+ARG KERNEL_GCC_PACKAGE_VERSION=11.4.0-9ubuntu1
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -29,25 +26,27 @@ ENV DEBIAN_FRONTEND=noninteractive \
     SYZPILOT_SYZLANG_MANIFEST=/root/syzpilot-assets/syzlang/linux-amd64.json
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    autossh libaio-dev libprotobuf-dev openjdk-17-jre-headless && \
+    autossh libaio-dev libprotobuf-dev openjdk-17-jre-headless \
+    "gcc-11=${KERNEL_GCC_PACKAGE_VERSION}" \
+    "gcc-11-base=${KERNEL_GCC_PACKAGE_VERSION}" \
+    "cpp-11=${KERNEL_GCC_PACKAGE_VERSION}" \
+    "libgcc-11-dev=${KERNEL_GCC_PACKAGE_VERSION}" \
+    "libasan6=${KERNEL_GCC_PACKAGE_VERSION}" \
+    "libtsan0=${KERNEL_GCC_PACKAGE_VERSION}" && \
     rm -rf /var/lib/apt/lists/*
 
 # Linux 5.11-rc2's objtool does not build with modern GCC warnings promoted
 # to errors. Keep the benchmark compiler alongside the base image's current
-# toolchain without changing its global cvm default.
-RUN --mount=type=cache,target=/root/.cvm/cache \
-    cvm install gcc "${KERNEL_GCC_VERSION}" --jobs "${KERNEL_GCC_JOBS}" && \
-    test -x "/root/.cvm/toolchains/gcc/${KERNEL_GCC_VERSION}/bin/gcc"
+# toolchain without changing its global compiler selection.
+RUN test "$(/usr/bin/gcc-11 -dumpfullversion)" = "11.4.0"
 
-ENV SYZPILOT_KERNEL_CC=/root/.cvm/toolchains/gcc/${KERNEL_GCC_VERSION}/bin/gcc
+ENV SYZPILOT_KERNEL_CC=/usr/bin/gcc-11
 
 RUN /opt/miniforge/bin/conda create -y -n syzpilot python=3.11 pip && \
     /opt/miniforge/bin/conda clean -afy && \
     sed -i 's/conda activate kernel-fuzz/conda activate syzpilot/' /root/.bash_env
 
 RUN test -n "${SYZPILOT_REVISION}" && \
-    test -n "${OCI_REVISION}" && \
-    test "${SYZPILOT_REVISION}" = "${OCI_REVISION}" && \
     git init -q /root/SyzPilot && \
     git -C /root/SyzPilot remote add origin "${SYZPILOT_REPOSITORY}" && \
     git -C /root/SyzPilot fetch -q --depth 1 origin "${SYZPILOT_REVISION}" && \
@@ -108,8 +107,7 @@ PY
 LABEL org.opencontainers.image.title="SyzPilot" \
     org.opencontainers.image.description="Unified environment for the SyzPilot Brain and Fuzzer" \
     org.opencontainers.image.source="https://github.com/QGrain/SyzPilot" \
-    org.opencontainers.image.revision="${OCI_REVISION}" \
-    org.opencontainers.image.created="${OCI_CREATED}" \
+    org.opencontainers.image.revision="${SYZPILOT_REVISION}" \
     org.opencontainers.image.licenses="Apache-2.0" \
     org.opencontainers.image.base.name="qgrain/kernel-fuzz:2404_v1"
 

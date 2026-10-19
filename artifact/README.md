@@ -10,6 +10,10 @@ build. It never uses the target PoC or reproducer as a fuzzing seed or guidance
 input. Reaching a target PC and reproducing the corresponding crash are
 reported separately.
 
+This is the maintained evaluator-facing guide. The commands below use the
+single helper [`scripts/artifact_eval.sh`](../scripts/artifact_eval.sh) for
+repeatable in-container steps; each section also states the expected output.
+
 ## Evaluation budget
 
 | Activity | Approximate wall-clock time |
@@ -40,6 +44,11 @@ the estimates.
 Run vulnerable kernels only inside isolated VMs. Do not expose Controller,
 Receiver, TorchServe, or manager callback ports to the public Internet.
 
+Evaluators without NVIDIA GPUs can still complete A1, A2, and E1 in the
+Fuzzer container. They cannot validate online training, deployment, or
+inference in E2; this is a hardware limitation rather than a CPU fallback
+mode.
+
 ## A0: Create the two roles
 
 The same image is used on both hosts. It deliberately starts no service by
@@ -49,12 +58,13 @@ Fuzzer patch.
 
 ```bash
 docker pull qgrain/syzpilot:ndss27-ae
+docker image inspect qgrain/syzpilot:ndss27-ae \
+  --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
 mkdir -p /HOST/SYZPILOT-BRAIN-STATE/{receiver_data,logs,model_store}
 
 # GPU host
 docker run -d --init --name syzpilot-brain --network host \
-  --gpus 'device=0,1' \
-  -v /HOST/KERNELS:/root/kernels \
+  --gpus '"device=0,1"' \
   -v /HOST/SYZPILOT-RUNS:/root/syzpilot-runs \
   -v /HOST/SYZPILOT-BRAIN-STATE/receiver_data:/root/SyzPilot/brain/receiver_data \
   -v /HOST/SYZPILOT-BRAIN-STATE/logs:/root/SyzPilot/brain/logs \
@@ -68,6 +78,21 @@ docker run -d --init --name syzpilot-fuzzer --network host --device /dev/kvm \
   qgrain/syzpilot:ndss27-ae sleep infinity
 ```
 
+The image starts no hidden service. The Fuzzer container is deliberately not
+created with `--cpuset-cpus`; CPU affinity is applied only to the measured
+`syz-manager` process in E2. `--device /dev/kvm` exposes only the device QEMU
+needs and is preferred to the much broader `--privileged` mode.
+
+Confirm that the image contains one matched source/model/toolchain snapshot:
+
+```bash
+docker exec syzpilot-fuzzer bash -lc \
+  'cd /root/SyzPilot && scripts/artifact_eval.sh image-info'
+```
+
+Expected output includes a 40-character SyzPilot revision, `gcc (GCC) 11.4.0`,
+and `SyzEncoder: available`.
+
 If the prebuilt tag is unavailable, build `docker/Dockerfile` as described in
 the root README and [`docker/README.md`](../docker/README.md). For evaluation,
 keep the image's source checkout, Fuzzer patch, and compiled Syzlang assets at
@@ -80,16 +105,14 @@ Run from the Fuzzer host; the command enters the named container explicitly:
 ```bash
 docker exec syzpilot-fuzzer bash -lc '
   cd /root/SyzPilot
-  scripts/patch_fuzzers.sh SyzPilot
-  cd /root/fuzzers/SyzPilot-fuzzer
-  make -j"$(nproc)"
-  /root/SyzPilot/scripts/verify_setup.sh fuzzer
+  scripts/artifact_eval.sh prepare-fuzzer
 '
 ```
 
 The patch script obtains exact upstream Syzkaller commit
 `6e83b42dcfcd13c3b8e0d5c803cdcc424c0fbff9` over HTTPS and applies
-`fuzzer/SyzPilot-fuzzer.diff`.
+`fuzzer/SyzPilot-fuzzer.diff`. Success ends with
+`Fuzzer setup is ready with KVM access.`
 
 ## A2: Build case 36
 
@@ -99,61 +122,59 @@ output before a fresh build, so both explicit guards are important.
 
 ```bash
 docker exec syzpilot-fuzzer bash -lc '
-  test ! -e /root/kernels/linux-git-master
-  git clone --filter=blob:none https://github.com/torvalds/linux.git \
-    /root/kernels/linux-git-master
-  git -C /root/kernels/linux-git-master fetch origin \
-    6207214a70bfaec7b41f39502353fd3ca89df68c
-
   cd /root/SyzPilot
-  test ! -e /root/kernels/case_36
-  test -x "$SYZPILOT_KERNEL_CC"
-  python experiments/compile_kernel.py \
-    --workdir /root/kernels \
-    --linux-git-master /root/kernels/linux-git-master \
-    --config mini-benchmark/compile_case_36.csv \
-    --compiler "$SYZPILOT_KERNEL_CC" -j 8
-  test -s /root/kernels/case_36/vmlinux
-  test -s /root/kernels/case_36/arch/x86/boot/bzImage
+  scripts/artifact_eval.sh build-case36
 '
 ```
 
-The recommended compiler for the supplied benchmark is GCC 11.4, exposed by
-the unified image as `SYZPILOT_KERNEL_CC` to match the retained local builds.
-`compile_kernel.py` otherwise defaults to the system `gcc`; pass `--compiler`
-to select this or another toolchain explicitly. The helper applies the
-selected compiler to both `CC` and `HOSTCC`; GCC 12 and newer can otherwise
-fail while building this Linux 5.11-rc2 tree's objtool. This does not replace
-the image-wide default compiler.
+Success ends with `case_36 kernel build is ready` and leaves nonempty
+`vmlinux` and `arch/x86/boot/bzImage` files. The helper refuses to overwrite an
+existing `/root/kernels/case_36`; move or preserve an earlier build explicitly.
+
+The unified image provides GCC 11.4 at `SYZPILOT_KERNEL_CC`, matching the
+retained local benchmark builds. The build helper applies it to both `CC` and
+`HOSTCC`; GCC 12 and newer can otherwise fail while building this Linux
+5.11-rc2 tree's objtool. This does not replace the image-wide default compiler.
 The compiler fields in the checked-in input config are historical benchmark
 metadata; `make olddefconfig` refreshes them for the selected compiler before
 the build.
 
+For a current source checkout outside the rebuilt image, the equivalent
+toolchain setup on Ubuntu 24.04 is:
+
+```bash
+sudo apt-get update
+sudo apt-get install \
+  gcc-11=11.4.0-9ubuntu1 gcc-11-base=11.4.0-9ubuntu1 \
+  cpp-11=11.4.0-9ubuntu1 libgcc-11-dev=11.4.0-9ubuntu1 \
+  libasan6=11.4.0-9ubuntu1 libtsan0=11.4.0-9ubuntu1
+python experiments/compile_kernel.py ... \
+  --compiler /usr/bin/gcc-11
+```
+
+Installing GCC 11.4 from source with CVM is not recommended on a GCC 14 host:
+that host compiler rejects an incompatibility in the older GCC source tree.
+
 The unified image inherits a disposable Trixie guest template at
 `/root/images/image-template/{disk.img,disk.id_rsa}`. The generated manager
-configuration uses these paths. If the two roles are on different machines,
-place the exact same case-36 build at `/root/kernels/case_36` on both hosts.
+configuration uses these paths. The benchmark kernel is needed only on the
+Fuzzer host; the Brain consumes the report, labels, and programs over the
+documented interfaces.
 
 ## E1: Report-derived waypoints
 
-Run from the Brain host:
+Run from the Fuzzer host, where the freshly built kernel is already present:
 
 ```bash
-docker exec syzpilot-brain bash -lc '
-  mkdir -p /root/syzpilot-runs/case_36
+docker exec syzpilot-fuzzer bash -lc '
   cd /root/SyzPilot
-  python analyzer/waypoints_extractor.py \
-    -k /root/kernels/case_36 \
-    -t benchmark/configs/case_36.title \
-    -r benchmark/configs/case_36.report \
-    | tee /root/syzpilot-runs/case_36/waypoints.txt
+  scripts/artifact_eval.sh extract-case36
 '
 ```
 
 Success is an ordered, nonempty waypoint list followed by a
 `[For SyzPilot-fuzzer:]` JSON array. PCs must always be regenerated from the
-exact `vmlinux` used by the VM. Transfer `waypoints.txt` to the Fuzzer host if
-the two roles do not share the run directory.
+exact `vmlinux` used by the VM.
 
 Create the Fuzzer-local manager config. Replace both example addresses with
 mutually reachable private IPs:
@@ -164,13 +185,12 @@ export FUZZER_HOST=10.0.0.20
 docker exec -e BRAIN_HOST="$BRAIN_HOST" -e FUZZER_HOST="$FUZZER_HOST" \
   syzpilot-fuzzer bash -lc '
     cd /root/SyzPilot
-    python scripts/prepare_functional_config.py \
-      --case 36 \
-      --waypoints-output /root/syzpilot-runs/case_36/waypoints.txt \
-      --output /root/syzpilot-runs/case_36/manager.cfg \
-      --brain-host "$BRAIN_HOST" --fuzzer-host "$FUZZER_HOST"
+    scripts/artifact_eval.sh prepare-config
   '
 ```
+
+Success prints `Wrote N target PCs` with `N > 0` and creates
+`/root/syzpilot-runs/case_36/manager.cfg`.
 
 ## E2: Directed-fuzzing smoke test
 
@@ -178,41 +198,47 @@ Verify and start the Brain explicitly:
 
 ```bash
 docker exec syzpilot-brain bash -lc \
-  'cd /root/SyzPilot && scripts/verify_setup.sh brain'
+  'cd /root/SyzPilot && scripts/artifact_eval.sh verify-brain'
 
 docker exec -d syzpilot-brain bash -lc '
   cd /root/SyzPilot
-  export SYZPILOT_DIRECT_ONLY=true
-  export SYZPILOT_TRAINING_GPU_IDS=0
-  export SYZPILOT_INFERENCE_GPU_ID=1
-  export SYZPILOT_ATTRIBUTION_GPU_ID=1
-  exec python brain/controller.py --host 0.0.0.0 --port 48000 \
-    > /root/syzpilot-runs/brain.log 2>&1
+  scripts/artifact_eval.sh start-brain
 '
 ```
 
-On the Fuzzer host, verify connectivity and launch one 90-minute run:
+On the Fuzzer host, launch one 90-minute run. The helper waits up to 60 seconds
+for the Controller, which avoids a race with its background startup:
 
 ```bash
-curl -fsS "http://${BRAIN_HOST}:48000/health"
-RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
-docker exec -d syzpilot-fuzzer bash -lc "
-  taskset -c 0-1 /root/fuzzers/SyzPilot-fuzzer/bin/syz-manager \
-    -config /root/syzpilot-runs/case_36/manager.cfg \
-    -timeout 90m \
-    -bench /root/syzpilot-runs/case_36/case_36_${RUN_ID}.bench.log \
-    > /root/syzpilot-runs/case_36/fuzzer_${RUN_ID}.log 2>&1
-"
+docker exec -d -e BRAIN_HOST="$BRAIN_HOST" syzpilot-fuzzer bash -lc '
+  cd /root/SyzPilot
+  scripts/artifact_eval.sh start-fuzzer
+'
 ```
+
+Set `SYZPILOT_CPUSET` on `docker exec` when cores 0--1 are not available. This
+changes only the fuzzer process affinity, not the reusable container:
+
+```bash
+docker exec -d -e BRAIN_HOST="$BRAIN_HOST" -e SYZPILOT_CPUSET=8-9 \
+  syzpilot-fuzzer bash -lc \
+  'cd /root/SyzPilot && scripts/artifact_eval.sh start-fuzzer'
+```
+
+Only one manager may use a run root at a time. A later invocation with the
+default run root deliberately resumes its existing corpus with new log and
+bench filenames. For an independent fresh run, pass a new
+`SYZPILOT_RUN_ROOT` consistently to `extract-case36`, `prepare-config`, and
+`start-fuzzer`.
 
 Inspect progress:
 
 ```bash
 curl -fsS "http://${BRAIN_HOST}:48000/list_tasks" | python -m json.tool
+docker exec -e BRAIN_HOST="$BRAIN_HOST" syzpilot-brain bash -lc \
+  'cd /root/SyzPilot && scripts/artifact_eval.sh brain-status'
 docker exec syzpilot-fuzzer bash -lc \
-  'tail -n 60 /root/syzpilot-runs/case_36/fuzzer_*.log'
-docker exec syzpilot-brain bash -lc \
-  'tail -n 60 /root/syzpilot-runs/brain.log'
+  'cd /root/SyzPilot && scripts/artifact_eval.sh fuzzer-status'
 ```
 
 Functional observations are progressive:
@@ -221,6 +247,14 @@ Functional observations are progressive:
 2. report-derived guidance and labeled Receiver batches; and
 3. when sufficient positive samples arrive, Stage-1 training, model promotion,
    TorchServe notification, and successful prediction.
+
+| Check | Expected observation |
+| --- | --- |
+| Brain health | The `/health` request succeeds and `list_tasks` becomes nonempty after registration. |
+| Fuzzer runtime | The latest fuzzer log shows a running VM and increasing executions rather than an immediate `FATAL` exit. |
+| Static guidance | The task view reports a nonzero guidance version after report-derived guidance is accepted. |
+| Training data | New Receiver batch files appear under the mounted Brain state directory. |
+| Online ML, when data-ready | Brain logs show a promoted model version; the Fuzzer receives model-ready notification and prediction succeeds. |
 
 Stage 1 needs at least 1,000 samples including 100 positive examples. A short
 run may validate the CPU-side flow without satisfying this data-dependent

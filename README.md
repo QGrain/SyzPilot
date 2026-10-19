@@ -13,7 +13,8 @@
 > repository for the SyzPilot artifact. We may continue improving
 > documentation and portability during the evaluation period, while the
 > submitted functional workflow, versioned source package, and observable
-> success criteria remain stable and available.
+> success criteria remain stable and available. The current command-by-command
+> procedure is the [Functional artifact guide](artifact/README.md).
 
 > [!NOTE]
 > The name **SyzPilot** combines Syzkaller's conventional `Syz` prefix with
@@ -28,10 +29,9 @@ SyzPilot extracts waypoint targets, collects labeled syz-program executions,
 trains a reachability classifier online, and feeds model and attribution
 guidance back to a modified Syzkaller instance.
 
-This repository implements the paper **"SyzPilot: Steering Directed Kernel
-Fuzzing from Reachability Prediction to Attribution-Guided Scheduling"**
-(under review). The paper PDF will be added after the review process permits
-public release.
+This repository implements **"SyzPilot: Steering Directed Kernel Fuzzing from
+Reachability Prediction to Attribution-Guided Scheduling,"** accepted at
+NDSS 2027.
 
 ## 📰 News
 
@@ -93,14 +93,14 @@ The following wall-clock estimates describe a first-time functional
 evaluation. Hardware, network speed, and the target's positive-sample rate can
 change them substantially.
 
-| Step | Expected time | Functional observation |
-| --- | ---: | --- |
-| Pull/build the unified image | 10--30 min | Python, Go, Java, and SyzEncoder available |
-| Patch and build SyzPilot-Fuzzer | 5--20 min | Manager, executor, and execprog binaries |
-| Build the case-36 kernel | 1--3 h, one time | Matching `vmlinux` and `bzImage` |
-| E1: report-derived waypoint extraction | 5--15 min | Ordered waypoints and nonempty target PCs |
-| E2: directed-fuzzing smoke run | 90 min + 5--15 min inspection | Registration, executions, labeled batches, guidance, and model service if data-ready |
-| Preserve evidence and clean up | 5--10 min | Bench/log evidence retained; no orphan containers |
+| Step | Expected time | Required hardware | Functional observation |
+| --- | ---: | --- | --- |
+| Pull/build the unified image | 10--30 min | Docker, 30+ GiB disk | Python, Go, Java, and SyzEncoder available |
+| Patch and build SyzPilot-Fuzzer | 5--20 min | 8+ CPU cores | Manager, executor, and execprog binaries |
+| Build the case-36 kernel | 1--3 h, one time | 8+ CPU cores, 30 GiB disk | Matching `vmlinux` and `bzImage` |
+| E1: report-derived waypoint extraction | 5--15 min | CPU only after setup | Ordered waypoints and nonempty target PCs |
+| E2: directed-fuzzing smoke run | 90 min + 5--15 min inspection | KVM, 2 GPUs for full ML flow | Registration, executions, labeled batches, guidance, and model service if data-ready |
+| Preserve evidence and clean up | 5--10 min | None | Bench/log evidence retained; no orphan containers |
 
 E1/E2 validate functionality rather than the paper's long-running performance
 claims. A target-PC hit and an exact target crash are separate observations;
@@ -144,7 +144,6 @@ cd SyzPilot
 REVISION="$(git rev-parse HEAD)"
 docker build -f docker/Dockerfile \
   --build-arg SYZPILOT_REVISION="$REVISION" \
-  --build-arg OCI_REVISION="$REVISION" \
   -t qgrain/syzpilot:ndss27-ae .
 ```
 
@@ -171,8 +170,7 @@ mkdir -p /HOST/SYZPILOT-BRAIN-STATE/{receiver_data,logs,model_store}
 
 # GPU server
 docker run -d --init --name syzpilot-brain --network host \
-  --gpus 'device=0,1' \
-  -v /HOST/KERNELS:/root/kernels \
+  --gpus '"device=0,1"' \
   -v /HOST/SYZPILOT-RUNS:/root/syzpilot-runs \
   -v /HOST/SYZPILOT-BRAIN-STATE/receiver_data:/root/SyzPilot/brain/receiver_data \
   -v /HOST/SYZPILOT-BRAIN-STATE/logs:/root/SyzPilot/brain/logs \
@@ -186,6 +184,10 @@ docker run -d --init --name syzpilot-fuzzer --network host --device /dev/kvm \
   qgrain/syzpilot:ndss27-ae sleep infinity
 ```
 
+The Fuzzer container has no Docker CPU-set restriction. The functional command
+applies `taskset` only to the measured manager process. `--device /dev/kvm`
+exposes the device QEMU needs without the much broader `--privileged` mode.
+
 For persistent development experiments outside Docker, set
 `SYZPILOT_DATA_ROOT` to an experiment-specific directory, for example
 `$HOME/datasets/SyzPilot/receiver_runs/<RUN_ID>/brain/receiver_data`. The
@@ -196,7 +198,12 @@ form one tested snapshot. Use it unchanged for artifact evaluation:
 
 ```bash
 docker exec syzpilot-brain bash -lc \
-  'cd /root/SyzPilot && make -C brain'
+  'cd /root/SyzPilot && scripts/artifact_eval.sh image-info'
+
+docker exec syzpilot-fuzzer bash -lc '
+  cd /root/SyzPilot
+  scripts/artifact_eval.sh prepare-fuzzer
+'
 ```
 
 To use a newer public revision, rebuild the unified image so the source,
@@ -262,20 +269,12 @@ resolved from the exact `vmlinux` used by the corresponding fuzzing VM.
 
 ```bash
 docker exec syzpilot-brain bash -lc \
-  'cd /root/SyzPilot && scripts/verify_setup.sh brain'
+  'cd /root/SyzPilot && scripts/artifact_eval.sh verify-brain'
 
 docker exec -d syzpilot-brain bash -lc '
   cd /root/SyzPilot
-  export SYZPILOT_DIRECT_ONLY=true
-  export SYZPILOT_TRAINING_GPU_IDS=0
-  export SYZPILOT_INFERENCE_GPU_ID=1
-  export SYZPILOT_ATTRIBUTION_GPU_ID=1
-  exec python brain/controller.py --host 0.0.0.0 --port 48000 \
-    > /root/syzpilot-runs/brain.log 2>&1
+  scripts/artifact_eval.sh start-brain
 '
-
-curl -fsS http://BRAIN_HOST:48000/health
-curl -fsS http://BRAIN_HOST:48000/list_tasks
 ```
 
 Replace `BRAIN_HOST` with the GPU server's reachable private address. The
@@ -285,74 +284,35 @@ unified image defaults the model and tokenizer paths to its pinned
 ### 2.3 Run the Functional Mini-Benchmark
 
 [`mini-benchmark/README.md`](mini-benchmark/README.md) provides source-only
-metadata for cases 25, 21, and 36. It deliberately excludes compiled kernels,
-VM images, target PoCs, and fixed PC addresses. Start with case 25 for a short
-component exercise; use cases 21 or 36 for longer online-training or deeper
-target-reach checks.
+metadata for cases 21, 25, and 36. It deliberately excludes compiled kernels,
+VM images, target PoCs, and fixed PC addresses. Case 36 is the canonical
+Functional workflow below; cases 21 and 25 are additional target profiles for
+later evaluation.
 
-For the appendix's case-36 workflow, run the following from the Fuzzer host to
-compile the pinned kernel only into a new output directory:
+For the appendix's case-36 workflow, run the centralized helper on the Fuzzer
+host. It builds with GCC 11.4, extracts PCs from the exact `vmlinux`, writes a
+portable manager config, waits for the Brain, and assigns a unique bench log:
 
 ```bash
 docker exec syzpilot-fuzzer bash -lc '
   cd /root/SyzPilot
-  test ! -e /root/kernels/case_36
-  test -x "$SYZPILOT_KERNEL_CC"
-  python experiments/compile_kernel.py \
-    --workdir /root/kernels \
-    --linux-git-master /root/kernels/linux-git-master \
-    --config mini-benchmark/compile_case_36.csv \
-    --compiler "$SYZPILOT_KERNEL_CC" -j 8
+  scripts/artifact_eval.sh build-case36
+  scripts/artifact_eval.sh extract-case36
 '
 
-docker exec syzpilot-brain bash -lc '
-  mkdir -p /root/syzpilot-runs/case_36
-  cd /root/SyzPilot
-  python analyzer/waypoints_extractor.py \
-    -k /root/kernels/case_36 \
-    -t benchmark/configs/case_36.title \
-    -r benchmark/configs/case_36.report \
-    | tee /root/syzpilot-runs/case_36/waypoints.txt
-'
-```
-
-The recommended compiler for the supplied benchmark is GCC 11.4, exposed by
-the unified image as `SYZPILOT_KERNEL_CC` to match the retained local builds.
-`compile_kernel.py` otherwise defaults to the system `gcc`; pass `--compiler`
-to select this or another toolchain explicitly. The helper applies the
-selected compiler to both the kernel and host tools such as objtool without
-replacing the image-wide default compiler.
-The compiler fields in the checked-in input config are historical benchmark
-metadata; `make olddefconfig` refreshes them for the selected compiler before
-the build.
-
-Transfer `waypoints.txt` to the Fuzzer host when the roles do not share
-storage, then generate the manager config from those fresh PCs. The two host
-values must be mutually reachable private addresses.
-
-```bash
 export BRAIN_HOST=10.0.0.10
 export FUZZER_HOST=10.0.0.20
 docker exec -e BRAIN_HOST="$BRAIN_HOST" -e FUZZER_HOST="$FUZZER_HOST" \
-  syzpilot-fuzzer bash -lc '
-    cd /root/SyzPilot
-    python scripts/prepare_functional_config.py \
-      --case 36 \
-      --waypoints-output /root/syzpilot-runs/case_36/waypoints.txt \
-      --output /root/syzpilot-runs/case_36/manager.cfg \
-      --brain-host "$BRAIN_HOST" --fuzzer-host "$FUZZER_HOST"
-  '
+  syzpilot-fuzzer bash -lc \
+  'cd /root/SyzPilot && scripts/artifact_eval.sh prepare-config'
 
-curl -fsS "http://${BRAIN_HOST}:48000/health"
-RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
-docker exec syzpilot-fuzzer bash -lc "
-  taskset -c 0-1 /root/fuzzers/SyzPilot-fuzzer/bin/syz-manager \
-    -config /root/syzpilot-runs/case_36/manager.cfg \
-    -timeout 90m \
-    -bench /root/syzpilot-runs/case_36/case_36_${RUN_ID}.bench.log \
-    2>&1 | tee /root/syzpilot-runs/case_36/fuzzer_${RUN_ID}.log
-"
+docker exec -d -e BRAIN_HOST="$BRAIN_HOST" syzpilot-fuzzer bash -lc \
+  'cd /root/SyzPilot && scripts/artifact_eval.sh start-fuzzer'
 ```
+
+`compile_kernel.py` still defaults to the system `gcc` for general use; pass
+`--compiler` to select an explicit toolchain outside the unified image. The
+selected compiler is used for both the kernel and host tools such as objtool.
 
 The base image supplies the disposable guest paths used by the generated
 configuration. See [`artifact/README.md`](artifact/README.md) for kernel

@@ -2,6 +2,13 @@
 
 The supported artifact entry points are:
 
+- `artifact_eval.sh COMMAND` is the evaluator-facing wrapper for image
+  inspection, Fuzzer setup, case-36 kernel compilation, waypoint extraction,
+  manager-config generation, bounded Brain readiness, Brain/Fuzzer startup,
+  and status inspection. See
+  [`artifact/README.md`](../artifact/README.md) for the timed command sequence
+  and expected outputs.
+
 - `patch_fuzzers.sh SyzPilot` clones pinned upstream Syzkaller and applies the
   reviewed SyzPilot-Fuzzer patch. Set `SYZPILOT_FUZZER_DIR` only when the
   default `/root/fuzzers/SyzPilot-fuzzer` is unsuitable.

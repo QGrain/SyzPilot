@@ -6,7 +6,7 @@ published `qgrain/kernel-fuzz:2404_v1` image and adds:
 - the public `QGrain/SyzPilot` checkout at `/root/SyzPilot`;
 - a Python 3.11 Conda environment named `syzpilot`;
 - the Brain and Fuzzer-side Python dependencies;
-- Java 17 runtime support for TorchServe; and
+- Java 17 runtime support for TorchServe;
 - the pinned public SyzEncoder and tokenizer at `/root/models/SyzEncoder`; and
 - compiled Linux/amd64 Syzlang metadata plus matching descriptions under
   `/root/syzpilot-assets/syzlang` for cold-start guidance.
@@ -22,21 +22,20 @@ the optional SSH tunnel service or its privileged host helpers.
 
 ## Build
 
-Build from the repository root. `SYZPILOT_REVISION` and `OCI_REVISION` are
-required to be the same exact public commit. Record that revision and the
-resulting image digest for an evaluation.
+Build from the repository root. `SYZPILOT_REVISION` is the exact public commit
+copied into the image and is also written to the OCI revision label. Record
+that revision and the resulting image digest for an evaluation.
 
 ```bash
 REVISION="$(git rev-parse HEAD)"
 docker build -f docker/Dockerfile \
   --build-arg SYZPILOT_REVISION="$REVISION" \
-  --build-arg OCI_REVISION="$REVISION" \
   -t qgrain/syzpilot:ndss27-ae .
 
 docker image inspect qgrain/syzpilot:ndss27-ae \
-  --format '{{json .Config.Entrypoint}} {{json .Config.Cmd}}'
+  --format '{{index .Config.Labels "org.opencontainers.image.revision"}} {{json .Config.Entrypoint}} {{json .Config.Cmd}}'
 docker run --rm qgrain/syzpilot:ndss27-ae \
-  bash -lc 'python --version; go version; java -version; test -s /root/models/SyzEncoder/model.safetensors'
+  bash -lc 'cd /root/SyzPilot && scripts/artifact_eval.sh image-info'
 ```
 
 The default base is pinned to the multi-platform digest of
@@ -53,8 +52,7 @@ mounts for the evaluation machine.
 mkdir -p /HOST/SYZPILOT-BRAIN-STATE/{receiver_data,logs,model_store}
 
 docker run -d --init --name syzpilot-brain --network host \
-  --gpus 'device=0,1' \
-  -v /HOST/KERNELS:/root/kernels \
+  --gpus '"device=0,1"' \
   -v /HOST/SYZPILOT-RUNS:/root/syzpilot-runs \
   -v /HOST/SYZPILOT-BRAIN-STATE/receiver_data:/root/SyzPilot/brain/receiver_data \
   -v /HOST/SYZPILOT-BRAIN-STATE/logs:/root/SyzPilot/brain/logs \
@@ -101,12 +99,14 @@ docker run -d --init --name syzpilot-fuzzer --network host --device /dev/kvm \
 
 docker exec syzpilot-fuzzer bash -lc '
   cd /root/SyzPilot
-  scripts/patch_fuzzers.sh SyzPilot
-  cd /root/fuzzers/SyzPilot-fuzzer
-  make -j$(nproc)
-  /root/SyzPilot/scripts/verify_setup.sh fuzzer
+  scripts/artifact_eval.sh prepare-fuzzer
 '
 ```
+
+Do not assign a Docker CPU set when creating the reusable Fuzzer container.
+The functional command applies `taskset` only to the measured `syz-manager`
+process. `--device /dev/kvm` grants QEMU the required KVM device and is the
+least-privilege choice for this configuration; `--privileged` is not required.
 
 `patch_fuzzers.sh` fetches exact upstream Syzkaller commit
 `6e83b42dcfcd13c3b8e0d5c803cdcc424c0fbff9` over HTTPS and applies the
@@ -123,11 +123,12 @@ the manager configuration with the two hosts' mutually reachable private
 addresses. Keep HTTP, Receiver, and manager callback ports firewalled to those
 hosts.
 
-## Publishing
+## Maintainer publishing note
 
-Pushing a rebuilt image to an existing Docker Hub tag atomically replaces the
-tag reference; deleting the old tag first is unnecessary and creates an
-avoidable availability gap. Record the new digest after pushing:
+Evaluators do not need to publish an image. Project maintainers publish a
+reviewed build by pushing the existing release tag; deleting the old tag first
+is unnecessary and creates an avoidable availability gap. The maintainer then
+records the remote digest:
 
 ```bash
 docker push qgrain/syzpilot:ndss27-ae
