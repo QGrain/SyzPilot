@@ -88,9 +88,12 @@ and the same VM resources for every comparison arm.
 
 ## Functional observations
 
-For a CPU-side smoke check, confirm Controller registration, a running QEMU
-guest, increasing execution counts, accepted report-derived guidance, and
-labeled Receiver batches. With two suitable GPUs, additionally check Stage-1
-training, model hot deployment, and successful inference after enough positive
-samples arrive. Retain useful bench, Receiver, target-hit, and crash evidence;
-remove only containers and work directories created by the current run.
+For the bounded 90-minute data-path smoke, confirm Controller registration, a
+running QEMU guest, increasing execution counts, accepted report-derived
+guidance, and labeled Receiver batches. This profile still starts the
+GPU-validated Brain, so both E2 profiles require two suitable GPUs. Choose
+either this short profile or the four-hour complete-ML profile documented in
+`artifact/README.md`; the latter requires Stage-1 training, model hot
+deployment, and successful inference before that hard timeout. Retain useful
+bench, Receiver, target-hit, and crash evidence; remove only containers and
+work directories created by the current run.

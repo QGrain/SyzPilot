@@ -99,12 +99,13 @@ change them substantially.
 | Patch and build SyzPilot-Fuzzer | 5--20 min | 8+ CPU cores | Manager, executor, and execprog binaries |
 | Build the case-36 kernel | 1--3 h, one time | 8+ CPU cores, 30 GiB disk | Matching `vmlinux` and `bzImage` |
 | E1: report-derived waypoint extraction | 5--15 min | CPU only after setup | Ordered waypoints and nonempty target PCs |
-| E2: directed-fuzzing smoke run | 90 min + 5--15 min inspection | KVM, 2 GPUs for full ML flow | Registration, executions, labeled batches, guidance, and model service if data-ready |
+| E2: short data-path smoke | 90 min + 5--15 min inspection | KVM and 2 GPUs | Registration, executions, labeled batches, and guidance |
+| E2: complete online-ML validation | up to 4 h + 5--15 min inspection | KVM and 2 GPUs | First promoted model, model-ready notification, and inference |
 | Preserve evidence and clean up | 5--10 min | None | Bench/log evidence retained; no orphan containers |
 
 E1/E2 validate functionality rather than the paper's long-running performance
 claims. A target-PC hit and an exact target crash are separate observations;
-neither is required during the 90-minute smoke run.
+neither is required by either functional profile.
 
 ### 1.1 Hardware and Software Requirements
 
@@ -114,7 +115,7 @@ For the CPU-only waypoint extraction exercise:
 - 8 or more CPU cores, 16 GiB RAM, and approximately 30 GiB free disk space;
 - a local Linux checkout and the ability to compile a target kernel.
 
-For the complete online fuzzing and ML workflow:
+For either E2 fuzzing profile:
 
 - KVM access and QEMU; run vulnerable kernels only inside isolated VMs;
 - two CUDA-capable NVIDIA GPUs so training and serving can be isolated;
@@ -323,9 +324,9 @@ Functional observations are separated into three levels:
 
 1. **Component flow:** registration, VM execution, report-derived guidance,
    labeled Receiver batches, and clean shutdown.
-2. **Online ML flow:** Stage-1 training, model promotion, TorchServe
-   notification, and a successful inference request when sufficient positive
-   data and GPU resources are available.
+2. **Online ML flow:** use the four-hour profile in the Functional guide and
+   require Stage-1 training, model promotion, TorchServe notification, and a
+   successful inference request before its hard timeout.
 3. **Directed outcome:** first target-PC hit, number of target-reaching
    executions, and exact target crash title. A short smoke test is not
    expected to guarantee the third level.

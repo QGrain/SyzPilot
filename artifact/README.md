@@ -22,7 +22,8 @@ repeatable in-container steps; each section also states the expected output.
 | Patch and build SyzPilot-Fuzzer | 5--20 min |
 | First case-36 kernel build | 1--3 h |
 | E1 waypoint extraction | 5--15 min |
-| E2 directed-fuzzing smoke run | 90 min |
+| E2 short data-path smoke run | 90 min |
+| E2 complete online-ML validation | up to 4 h |
 | Inspect evidence and clean up | 5--15 min |
 
 The kernel build is reusable when its source, config, compiler, `vmlinux`, and
@@ -34,7 +35,8 @@ the estimates.
 - Linux x86-64, Docker, and at least 8 CPU cores.
 - A Fuzzer host with KVM. The smoke configuration uses one 2-vCPU, 4-GiB guest
   and `procs=8`.
-- A Brain host with two visible NVIDIA GPUs for complete ML validation:
+- For either E2 profile, a Brain host with the NVIDIA container runtime and two
+  visible NVIDIA GPUs:
   approximately 24 GiB free VRAM for training and 12 GiB for serving/IG.
 - Private two-way connectivity between the Brain and Fuzzer. The Fuzzer must
   reach Brain TCP 48000, 31001--31999, and 37030--37034. The Brain must reach
@@ -210,7 +212,7 @@ docker exec -e BRAIN_HOST="$BRAIN_HOST" -e FUZZER_HOST="$FUZZER_HOST" \
 Success prints `Wrote N target PCs` with `N > 0` and creates
 `/root/syzpilot-runs/case_36/manager.cfg`.
 
-## E2: Directed-fuzzing smoke test
+## E2: Directed-fuzzing functional test
 
 Verify and start the Brain explicitly:
 
@@ -224,14 +226,25 @@ docker exec -d syzpilot-brain bash -lc '
 '
 ```
 
-On the Fuzzer host, launch one 90-minute run. The helper waits up to 60 seconds
-for the Controller, which avoids a race with its background startup:
+On the Fuzzer host, choose one of the following profiles for a fresh run. The
+default command launches a bounded 90-minute data-path smoke. Both profiles
+start the GPU-validated Brain. The helper waits up to 60 seconds for the
+Controller, which avoids a race with its background startup:
 
 ```bash
 docker exec -d -e BRAIN_HOST="$BRAIN_HOST" syzpilot-fuzzer bash -lc '
   cd /root/SyzPilot
   scripts/artifact_eval.sh start-fuzzer
 '
+```
+
+Alternatively, use the bounded four-hour profile instead of the command above
+to validate the complete C2 model lifecycle:
+
+```bash
+docker exec -d -e BRAIN_HOST="$BRAIN_HOST" -e SYZPILOT_DURATION=4h \
+  syzpilot-fuzzer bash -lc \
+  'cd /root/SyzPilot && scripts/artifact_eval.sh start-fuzzer'
 ```
 
 Set `SYZPILOT_CPUSET` on `docker exec` when cores 0--1 are not available. This
@@ -263,8 +276,8 @@ Functional observations are progressive:
 
 1. registration, a running QEMU guest, and increasing execution counts;
 2. report-derived guidance and labeled Receiver batches; and
-3. when sufficient positive samples arrive, Stage-1 training, model promotion,
-   TorchServe notification, and successful prediction.
+3. Stage-1 training, model promotion, TorchServe notification, and successful
+   prediction during the four-hour complete-ML profile.
 
 | Check | Expected observation |
 | --- | --- |
@@ -272,11 +285,14 @@ Functional observations are progressive:
 | Fuzzer runtime | The latest fuzzer log shows a running VM and increasing executions rather than an immediate `FATAL` exit. |
 | Static guidance | The task view reports a nonzero guidance version after report-derived guidance is accepted. |
 | Training data | New Receiver batch files appear under the mounted Brain state directory. |
-| Online ML, when data-ready | Brain logs show a promoted model version; the Fuzzer receives model-ready notification and prediction succeeds. |
+| Online ML | Before the four-hour timeout, Brain logs show a promoted model version; the Fuzzer receives model-ready notification and prediction succeeds. |
 
-Stage 1 needs at least 1,000 samples including 100 positive examples. A short
-run may validate the CPU-side flow without satisfying this data-dependent
-trigger. No target crash in the smoke test is not a functional failure.
+Stage 1 needs at least 1,000 samples including 100 positive examples. The
+90-minute profile may validate the early data path without satisfying this
+data-dependent trigger. A complete GPU-side E2 pass requires the Online ML
+observation before the four-hour hard timeout; otherwise preserve the evidence
+and report that part as incomplete rather than waiting without a bound. A
+target crash is not required for this functional experiment.
 
 ## Evidence and cleanup
 
