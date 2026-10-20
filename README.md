@@ -99,13 +99,18 @@ change them substantially.
 | Patch and build SyzPilot-Fuzzer | 5--20 min | 8+ CPU cores | Manager, executor, and execprog binaries |
 | Build the case-36 kernel | 1--3 h, one time | 8+ CPU cores, 30 GiB disk | Matching `vmlinux` and `bzImage` |
 | E1: report-derived waypoint extraction | 5--15 min | CPU only after setup | Ordered waypoints and nonempty target PCs |
-| E2: short data-path smoke | 90 min + 5--15 min inspection | KVM and 2 GPUs | Registration, executions, labeled batches, and guidance |
-| E2: complete online-ML validation | up to 4 h + 5--15 min inspection | KVM and 2 GPUs | First promoted model, model-ready notification, and inference |
+| E2-A: Fuzzer-side functional test | 10 min + 5 min inspection | KVM, no GPU | Guest boot, program execution, KCOV, and target-PC observation |
+| E2-B: online training and inference test | up to 4 h + 5--15 min inspection | KVM and 2 GPUs | Brain registration, labeled batches, guidance, model promotion, and inference |
+| E3: bounded result reproduction | about 13 h | KVM, 2 exclusive GPUs, 16 CPU cores | Paired Blank/Full evidence on cases 21 and 36 |
 | Preserve evidence and clean up | 5--10 min | None | Bench/log evidence retained; no orphan containers |
 
 E1/E2 validate functionality rather than the paper's long-running performance
 claims. A target-PC hit and an exact target crash are separate observations;
 neither is required by either functional profile.
+
+E3 is a separate, optional result-reproduction protocol with frozen controls,
+three paired repetitions, and explicit claim gates. See
+[`artifact/E3_REPRODUCTION.md`](artifact/E3_REPRODUCTION.md).
 
 ### 1.1 Hardware and Software Requirements
 
@@ -115,7 +120,12 @@ For the CPU-only waypoint extraction exercise:
 - 8 or more CPU cores, 16 GiB RAM, and approximately 30 GiB free disk space;
 - a local Linux checkout and the ability to compile a target kernel.
 
-For either E2 fuzzing profile:
+For E2-A:
+
+- KVM access and QEMU; run vulnerable kernels only inside isolated VMs;
+- no NVIDIA GPU or Brain container is required.
+
+For E2-B:
 
 - KVM access and QEMU; run vulnerable kernels only inside isolated VMs;
 - two CUDA-capable NVIDIA GPUs so training and serving can be isolated;
@@ -155,7 +165,7 @@ The complete artifact procedure is documented in
 2. compiling the pinned example kernel;
 3. creating Brain/Fuzzer containers from the unified image;
 4. extracting report-derived waypoint PCs;
-5. running the component-level directed-fuzzing smoke test; and
+5. running either the Fuzzer-side test or the online training and inference test; and
 6. checking observable outputs and safely cleaning owned containers.
 
 The image does not embed target kernels, target PoCs, or experiment logs. The
@@ -225,6 +235,11 @@ bash requirements/required_packages.sh
 make -C brain
 ```
 
+`analyzer/get_targets.py` uses `tree-sitter` and `tree-sitter-c` for
+`function@file:line` resolution. Both are installed by
+`requirements/requirements-brain.txt`; install that file before running the
+analyzer outside Docker.
+
 Build the Fuzzer from the exact upstream Syzkaller revision and reviewed patch:
 
 ```bash
@@ -266,23 +281,14 @@ Success is an ordered, nonempty waypoint list followed by a
 `[For SyzPilot-fuzzer:]` JSON array of target PCs. PC values must always be
 resolved from the exact `vmlinux` used by the corresponding fuzzing VM.
 
-### 2.2 Start the Brain
+### 2.2 Choose an E2 Profile
 
-```bash
-docker exec syzpilot-brain bash -lc \
-  'cd /root/SyzPilot && scripts/artifact_eval.sh verify-brain'
+E2-A is the ten-minute Fuzzer-side functional test. It does not start the
+Brain or require a GPU. E2-B tests online training and inference and requires
+the two-GPU Brain. Both use the same case-36 kernel and freshly extracted target
+PCs; the commands are shown below.
 
-docker exec -d syzpilot-brain bash -lc '
-  cd /root/SyzPilot
-  scripts/artifact_eval.sh start-brain
-'
-```
-
-Replace `BRAIN_HOST` with the GPU server's reachable private address. The
-unified image defaults the model and tokenizer paths to its pinned
-`/root/models/SyzEncoder` snapshot.
-
-### 2.3 Run the Functional Mini-Benchmark
+### 2.3 Run the Complete Functional Mini-Benchmark
 
 [`mini-benchmark/README.md`](mini-benchmark/README.md) provides source-only
 metadata for cases 21, 25, and 36. It deliberately excludes compiled kernels,
@@ -290,15 +296,40 @@ VM images, target PoCs, and fixed PC addresses. Case 36 is the canonical
 Functional workflow below; cases 21 and 25 are additional target profiles for
 later evaluation.
 
-For the appendix's case-36 workflow, run the centralized helper on the Fuzzer
-host. It builds with GCC 11.4, extracts PCs from the exact `vmlinux`, writes a
-portable manager config, waits for the Brain, and assigns a unique bench log:
+First run the centralized helper on the Fuzzer host. It builds with GCC 11.4
+and extracts PCs from the exact `vmlinux`:
 
 ```bash
 docker exec syzpilot-fuzzer bash -lc '
   cd /root/SyzPilot
   scripts/artifact_eval.sh build-case36
   scripts/artifact_eval.sh extract-case36
+'
+```
+
+For E2-A, generate and run the standalone Fuzzer configuration:
+
+```bash
+docker exec syzpilot-fuzzer bash -lc '
+  cd /root/SyzPilot
+  scripts/artifact_eval.sh prepare-fuzzer-only-config
+'
+docker exec -d syzpilot-fuzzer bash -lc '
+  cd /root/SyzPilot
+  scripts/artifact_eval.sh start-fuzzer-only
+'
+```
+
+For E2-B, start the Brain and then generate and run the distributed
+configuration. Replace `BRAIN_HOST` and `FUZZER_HOST` with mutually reachable
+private addresses:
+
+```bash
+docker exec syzpilot-brain bash -lc \
+  'cd /root/SyzPilot && scripts/artifact_eval.sh verify-brain'
+docker exec -d syzpilot-brain bash -lc '
+  cd /root/SyzPilot
+  scripts/artifact_eval.sh start-brain
 '
 
 export BRAIN_HOST=10.0.0.10
@@ -307,7 +338,8 @@ docker exec -e BRAIN_HOST="$BRAIN_HOST" -e FUZZER_HOST="$FUZZER_HOST" \
   syzpilot-fuzzer bash -lc \
   'cd /root/SyzPilot && scripts/artifact_eval.sh prepare-config'
 
-docker exec -d -e BRAIN_HOST="$BRAIN_HOST" syzpilot-fuzzer bash -lc \
+docker exec -d -e BRAIN_HOST="$BRAIN_HOST" -e SYZPILOT_DURATION=4h \
+  syzpilot-fuzzer bash -lc \
   'cd /root/SyzPilot && scripts/artifact_eval.sh start-fuzzer'
 ```
 
@@ -322,14 +354,15 @@ observations, and safe cleanup.
 
 Functional observations are separated into three levels:
 
-1. **Component flow:** registration, VM execution, report-derived guidance,
-   labeled Receiver batches, and clean shutdown.
-2. **Online ML flow:** use the four-hour profile in the Functional guide and
-   require Stage-1 training, model promotion, TorchServe notification, and a
-   successful inference request before its hard timeout.
+1. **Fuzzer execution flow (E2-A):** VM boot, program execution, KCOV, target-PC
+   observation, and clean shutdown without a GPU.
+2. **Online training and inference (E2-B):** registration, report-derived guidance,
+   labeled Receiver batches, Stage-1 training, model promotion, TorchServe
+   notification, and a successful inference request before the four-hour hard
+   timeout.
 3. **Directed outcome:** first target-PC hit, number of target-reaching
-   executions, and exact target crash title. A short smoke test is not
-   expected to guarantee the third level.
+   executions, and exact target crash title. Neither functional check is
+   expected to guarantee this outcome.
 
 Always use a new `-bench` filename for each manager launch, retain useful
 evidence, and remove only resources created by that run.

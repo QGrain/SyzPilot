@@ -55,12 +55,17 @@ The Controller independently enforces the same physical-index identity
 contract even when launched directly: it rejects `CUDA_VISIBLE_DEVICES`, sets
 an absent `CUDA_DEVICE_ORDER` to `PCI_BUS_ID` (and rejects any other explicit
 value), then compares every CUDA ordinal with the corresponding `nvidia-smi`
-PCI bus ID before TorchServe starts. This validation checks identity, not
-current capacity; use the optional launcher when startup load admission is
-required.
+PCI bus ID before TorchServe starts. This validation fails closed because a
+missing or mismatched physical device could place training or serving on the
+wrong GPU. E2-A intentionally does not start the Brain and therefore does not
+need this check.
 
 The Controller still rechecks the selected training GPU at every training
-request and defers a busy run through the Receiver's durable retry path.
+request and defers a run that lacks the configured sampled free-memory budget
+through the Receiver's retry path. A direct launch accepts any utilization
+level by default so a shared GPU with sufficient sampled free-memory headroom
+remains usable; set
+`SYZPILOT_TRAINING_MAX_GPU_UTILIZATION` to impose a workload-specific limit.
 The default FIFO waiter lease exceeds the Receiver's maximum retry backoff, so
 multiple live tasks retain their order while one training slot is occupied.
 TorchServe stays on the selected serving GPU for the Controller lifetime;
@@ -81,7 +86,8 @@ requires its Java process to own all five configured listening ports; an
 inherited `TS_CONFIG_FILE` cannot override the checked configuration. This
 prevents a competing server's `/models` response from being accepted as our
 own. Direct Controller launches use the same ownership checks but retain
-their fixed GPU configuration and 20% training-utilization default.
+their fixed GPU configuration. Formal comparisons should use isolated GPUs
+and the experiment runner's stricter resource checks.
 
 Historical-model inference-only mode is separate and is not implemented by
 this launcher. A pre-trained target-specific model must never silently

@@ -2,8 +2,10 @@
 
 This artifact accompanies *SyzPilot: Steering Directed Kernel Fuzzing from
 Reachability Prediction to Attribution-Guided Scheduling*. The evaluation
-targets the **Available** and **Functional** badges. It does not attempt to
-repeat the paper's multi-target, multi-run performance evaluation.
+primarily targets the **Available** and **Functional** badges through E1/E2.
+The optional E3 protocol provides bounded evidence for considering Results
+Reproduced without claiming to repeat the paper's full multi-target,
+multi-run performance evaluation.
 
 The normal functional workflow accepts a public bug report and matching kernel
 build. It never uses the target PoC or reproducer as a fuzzing seed or guidance
@@ -22,8 +24,9 @@ repeatable in-container steps; each section also states the expected output.
 | Patch and build SyzPilot-Fuzzer | 5--20 min |
 | First case-36 kernel build | 1--3 h |
 | E1 waypoint extraction | 5--15 min |
-| E2 short data-path smoke run | 90 min |
-| E2 complete online-ML validation | up to 4 h |
+| E2-A Fuzzer-side functional test | 10 min |
+| E2-B online training and inference test | up to 4 h |
+| E3 bounded result reproduction (optional) | about 13 h |
 | Inspect evidence and clean up | 5--15 min |
 
 The kernel build is reusable when its source, config, compiler, `vmlinux`, and
@@ -35,25 +38,29 @@ the estimates.
 - Linux x86-64, Docker, and at least 8 CPU cores.
 - A Fuzzer host with KVM. The smoke configuration uses one 2-vCPU, 4-GiB guest
   and `procs=8`.
-- For either E2 profile, a Brain host with the NVIDIA container runtime and two
+- E2-A needs only the KVM-capable Fuzzer host; it does not start the Brain or
+  require an NVIDIA GPU.
+- E2-B additionally needs a Brain host with the NVIDIA container runtime and two
   visible NVIDIA GPUs:
   approximately 24 GiB free VRAM for training and 12 GiB for serving/IG.
-- Private two-way connectivity between the Brain and Fuzzer. The Fuzzer must
-  reach Brain TCP 48000, 31001--31999, and 37030--37034. The Brain must reach
-  the configured manager callback port.
+- For E2-B only, private two-way connectivity between the Brain and Fuzzer.
+  The Fuzzer must reach Brain TCP 48000, 31001--31999, and 37030--37034. The
+  Brain must reach the configured manager callback port.
 - Approximately 30 GiB of free workspace beyond the container image.
 
 Run vulnerable kernels only inside isolated VMs. Do not expose Controller,
 Receiver, TorchServe, or manager callback ports to the public Internet.
 
-Evaluators without NVIDIA GPUs can still complete A1, A2, and E1 in the
-Fuzzer container. They cannot validate online training, deployment, or
-inference in E2; this is a hardware limitation rather than a CPU fallback
-mode.
+Evaluators without NVIDIA GPUs can complete A1, A2, E1, and E2-A in the
+Fuzzer container. E2-A validates the patched Fuzzer's VM, execution, KCOV, and
+target-observation path; it does not claim to validate online training,
+deployment, inference, or Brain-to-Fuzzer communication. E2-B covers those
+GPU-dependent functions.
 
 ## A0: Create the two roles
 
-The same image is used on both hosts. It deliberately starts no service by
+The same image is used on both hosts. E2-A needs only the Fuzzer container;
+E2-B uses both containers. The image deliberately starts no service by
 default. Its environment selects direct-only Brain networking and supplies
 the Linux/amd64 Syzlang manifest and descriptions matched to the pinned
 Fuzzer patch.
@@ -196,8 +203,51 @@ Success is an ordered, nonempty waypoint list followed by a
 `[For SyzPilot-fuzzer:]` JSON array. PCs must always be regenerated from the
 exact `vmlinux` used by the VM.
 
-Create the Fuzzer-local manager config. Replace both example addresses with
-mutually reachable private IPs:
+For a source installation outside Docker, install
+`requirements/requirements-brain.txt` first. It includes the pinned
+`tree-sitter` and `tree-sitter-c` packages used by `get_targets.py`.
+
+The two E2 profiles below generate their own manager configurations from this
+same waypoint output.
+
+## E2: Directed-fuzzing functional checks
+
+### E2-A: Fuzzer-side functional test
+
+Generate a standalone manager configuration from the PCs produced by E1. This
+profile disables Brain registration and ML guidance, but keeps target-PC
+observation enabled:
+
+```bash
+docker exec syzpilot-fuzzer bash -lc '
+  cd /root/SyzPilot
+  scripts/artifact_eval.sh prepare-fuzzer-only-config
+'
+
+docker exec -d syzpilot-fuzzer bash -lc '
+  cd /root/SyzPilot
+  scripts/artifact_eval.sh start-fuzzer-only
+'
+```
+
+During or after the ten-minute run, inspect the Fuzzer log with:
+
+```bash
+docker exec syzpilot-fuzzer bash -lc \
+  'cd /root/SyzPilot && scripts/artifact_eval.sh fuzzer-status'
+```
+
+The log should show a booted guest and increasing execution counts without an
+immediate `FATAL` exit. The command also prints the latest bench values for
+`exec total`, `coverage`, `executor target observations`, and `executor target
+hits`. E2-A passes when the first three values are greater than zero; target
+hits may remain zero because this bounded functional check does not require
+reaching the final PC. This check requires KVM, but no Brain container or GPU.
+
+### E2-B: Online training and inference test
+
+Create the distributed manager configuration. Replace both example addresses
+with mutually reachable private IPs:
 
 ```bash
 export BRAIN_HOST=10.0.0.10
@@ -208,11 +258,6 @@ docker exec -e BRAIN_HOST="$BRAIN_HOST" -e FUZZER_HOST="$FUZZER_HOST" \
     scripts/artifact_eval.sh prepare-config
   '
 ```
-
-Success prints `Wrote N target PCs` with `N > 0` and creates
-`/root/syzpilot-runs/case_36/manager.cfg`.
-
-## E2: Directed-fuzzing functional test
 
 Verify and start the Brain explicitly:
 
@@ -226,20 +271,9 @@ docker exec -d syzpilot-brain bash -lc '
 '
 ```
 
-On the Fuzzer host, choose one of the following profiles for a fresh run. The
-default command launches a bounded 90-minute data-path smoke. Both profiles
-start the GPU-validated Brain. The helper waits up to 60 seconds for the
-Controller, which avoids a race with its background startup:
-
-```bash
-docker exec -d -e BRAIN_HOST="$BRAIN_HOST" syzpilot-fuzzer bash -lc '
-  cd /root/SyzPilot
-  scripts/artifact_eval.sh start-fuzzer
-'
-```
-
-Alternatively, use the bounded four-hour profile instead of the command above
-to validate the complete C2 model lifecycle:
+On the Fuzzer host, start the bounded four-hour E2-B path. The helper waits
+up to 60 seconds for the Controller, which avoids a race with its background
+startup:
 
 ```bash
 docker exec -d -e BRAIN_HOST="$BRAIN_HOST" -e SYZPILOT_DURATION=4h \
@@ -272,12 +306,12 @@ docker exec syzpilot-fuzzer bash -lc \
   'cd /root/SyzPilot && scripts/artifact_eval.sh fuzzer-status'
 ```
 
-Functional observations are progressive:
+E2-B observations are progressive:
 
 1. registration, a running QEMU guest, and increasing execution counts;
 2. report-derived guidance and labeled Receiver batches; and
 3. Stage-1 training, model promotion, TorchServe notification, and successful
-   prediction during the four-hour complete-ML profile.
+   prediction during the four-hour online training and inference test.
 
 | Check | Expected observation |
 | --- | --- |
@@ -287,20 +321,26 @@ Functional observations are progressive:
 | Training data | New Receiver batch files appear under the mounted Brain state directory. |
 | Online ML | Before the four-hour timeout, Brain logs show a promoted model version; the Fuzzer receives model-ready notification and prediction succeeds. |
 
-Stage 1 needs at least 1,000 samples including 100 positive examples. The
-90-minute profile may validate the early data path without satisfying this
-data-dependent trigger. A complete GPU-side E2 pass requires the Online ML
-observation before the four-hour hard timeout; otherwise preserve the evidence
-and report that part as incomplete rather than waiting without a bound. A
-target crash is not required for this functional experiment.
+Stage 1 needs at least 1,000 samples including 100 positive examples. A
+complete E2-B pass requires the Online ML observation before the four-hour hard
+timeout; otherwise preserve the evidence and report E2-B as incomplete rather
+than waiting without a bound. E2-A remains an independently useful GPU-free
+Fuzzer check, but it does not substitute for E2-B's Brain and online-ML
+observations. A target crash is not required for either functional check.
+
+E2 does not carry a Results Reproduced claim. The optional E3 protocol uses a
+separate paired Blank/Full experiment and predeclared evidence gates; see
+[`E3_REPRODUCTION.md`](E3_REPRODUCTION.md).
 
 ## Evidence and cleanup
 
-Retain the manager bench log, fuzzer log, Brain log, Receiver data, target-hit
-evidence, and any crash reports needed for evaluation. The bind mounts above
-persist run logs under `/HOST/SYZPILOT-RUNS` and Receiver/model state under
-`/HOST/SYZPILOT-BRAIN-STATE`, so removing a container does not discard them.
-Capture the final task view, then stop only the two named containers:
+For E2-A, retain the manager bench log, Fuzzer log, target observations, and
+any crash reports, then stop only `syzpilot-fuzzer`. For E2-B, additionally
+retain the Brain log, Receiver/model state, and final task view. The bind mounts
+above persist these files after container removal.
+
+E2-B only: capture the final task view before stopping the two named
+containers:
 
 ```bash
 curl -fsS "http://${BRAIN_HOST}:48000/list_tasks" \
@@ -309,6 +349,8 @@ curl -fsS "http://${BRAIN_HOST}:48000/list_tasks" \
 docker stop syzpilot-brain && docker rm syzpilot-brain
 docker stop syzpilot-fuzzer && docker rm syzpilot-fuzzer
 ```
+
+For E2-A, run only the final Fuzzer stop/remove command.
 
 Use a new bench filename on every restart because `syz-manager` refuses to
 overwrite an existing one. Do not delete shared kernels, guest templates, or

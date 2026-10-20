@@ -117,6 +117,29 @@ class PrepareFunctionalConfigTest(unittest.TestCase):
             "anchor_preserve_probability": 0.95,
         })
 
+    def test_fuzzer_only_config_needs_no_brain(self):
+        args = argparse.Namespace(
+            case=36,
+            template=PROJECT_ROOT / "artifact" / "case_36.manager.cfg",
+            manager_port=None,
+            run_dir=None,
+            kernel_dir=None,
+            image="/root/images/image-template/disk.img",
+            ssh_key="/root/images/image-template/disk.id_rsa",
+            syzkaller="/root/fuzzers/SyzPilot-fuzzer",
+            brain_host=None,
+            fuzzer_host=None,
+            report_path=None,
+        )
+        config = prepare_config.render_config(
+            args, ["0x81234567"], fuzzer_only=True
+        )
+        syzpilot = config["SyzPilot"]
+        self.assertTrue(syzpilot["observe_target_coverage"])
+        self.assertFalse(syzpilot["reach_filter"]["enable"])
+        self.assertEqual(syzpilot["reach_filter"]["controller"], "")
+        self.assertNotIn("directed_corpus", syzpilot)
+
     def test_rejects_duplicate_or_zero_pcs(self):
         for output in (
             '[For SyzPilot-fuzzer:]\n["0x81234567", "0x81234567"]\n',

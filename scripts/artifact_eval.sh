@@ -20,12 +20,16 @@ Commands:
   prepare-fuzzer   Patch, build, and verify SyzPilot-Fuzzer.
   build-case36     Fetch and build the case-36 kernel with GCC 11.4.
   extract-case36   Run report-derived waypoint extraction for case 36.
+  prepare-fuzzer-only-config
+                   Generate the GPU-free E2-A manager config.
   prepare-config   Generate the case-36 manager config. Requires
                    BRAIN_HOST and FUZZER_HOST.
   verify-brain     Verify the Brain environment and two visible GPUs.
   start-brain      Start the Controller in the foreground and log to RUN_ROOT.
   wait-brain       Wait up to 60 seconds for the Controller health endpoint.
-  start-fuzzer     Run the 90-minute fuzzer smoke test in the foreground.
+  start-fuzzer-only
+                   Run the 10-minute GPU-free E2-A check in the foreground.
+  start-fuzzer     Run the complete E2-B fuzzer in the foreground.
   brain-status     Show Controller health, tasks, and the latest Brain log.
   fuzzer-status    Show the latest fuzzer log.
   help             Show this message.
@@ -40,7 +44,7 @@ Useful overrides:
   SYZPILOT_INFERENCE_GPU_ID=1
   SYZPILOT_ATTRIBUTION_GPU_ID=1
   SYZPILOT_CPUSET=0-1
-  SYZPILOT_DURATION=90m
+  SYZPILOT_DURATION=4h
 EOF
 }
 
@@ -120,6 +124,18 @@ prepare_config() {
         --fuzzer-host "$FUZZER_HOST"
 }
 
+prepare_fuzzer_only_config() {
+    require_file "$RUN_ROOT/waypoints.txt"
+    python "$PROJECT_ROOT/scripts/prepare_functional_config.py" \
+        --case 36 \
+        --waypoints-output "$RUN_ROOT/waypoints.txt" \
+        --output "$RUN_ROOT/manager.fuzzer-only.cfg" \
+        --run-dir "$RUN_ROOT" \
+        --kernel-dir "$CASE_DIR" \
+        --syzkaller "$FUZZER_DIR" \
+        --fuzzer-only
+}
+
 verify_brain() {
     "$PROJECT_ROOT/scripts/verify_setup.sh" brain
 }
@@ -153,11 +169,12 @@ wait_brain() {
     exit 1
 }
 
-start_fuzzer() {
-    : "${BRAIN_HOST:?Set BRAIN_HOST to the Brain host private address.}"
+run_fuzzer() {
+    local profile="$1"
+    local config="$2"
+    local duration="$3"
     "$PROJECT_ROOT/scripts/verify_setup.sh" fuzzer
-    require_file "$RUN_ROOT/manager.cfg"
-    wait_brain
+    require_file "$config"
     mkdir -p "$RUN_ROOT"
     exec 9>"$RUN_ROOT/syz-manager.lock"
     flock -n 9 || {
@@ -166,21 +183,33 @@ start_fuzzer() {
     }
 
     local run_id="${SYZPILOT_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
-    local bench="$RUN_ROOT/case_36_${run_id}.bench.log"
-    local log="$RUN_ROOT/fuzzer_${run_id}.log"
+    local bench="$RUN_ROOT/case_36_${profile}_${run_id}.bench.log"
+    local log="$RUN_ROOT/fuzzer_${profile}_${run_id}.log"
     [[ ! -e "$bench" && ! -e "$log" ]] || {
         echo "Run files already exist for ID $run_id; choose a new SYZPILOT_RUN_ID." >&2
         exit 1
     }
     printf '%s\n' "$run_id" > "$RUN_ROOT/current_run_id"
+    printf '%s\n' "$log" > "$RUN_ROOT/current_fuzzer_log"
+    printf '%s\n' "$bench" > "$RUN_ROOT/current_bench_log"
     echo "Fuzzer log: $log"
     echo "Bench log: $bench"
     exec taskset -c "${SYZPILOT_CPUSET:-0-1}" \
         "$FUZZER_DIR/bin/syz-manager" \
-        -config "$RUN_ROOT/manager.cfg" \
-        -timeout "${SYZPILOT_DURATION:-90m}" \
+        -config "$config" \
+        -timeout "${SYZPILOT_DURATION:-$duration}" \
         -bench "$bench" \
         > "$log" 2>&1
+}
+
+start_fuzzer_only() {
+    run_fuzzer "fuzzer-only" "$RUN_ROOT/manager.fuzzer-only.cfg" "10m"
+}
+
+start_fuzzer() {
+    : "${BRAIN_HOST:?Set BRAIN_HOST to the Brain host private address.}"
+    wait_brain
+    run_fuzzer "full" "$RUN_ROOT/manager.cfg" "4h"
 }
 
 brain_status() {
@@ -192,11 +221,51 @@ brain_status() {
 }
 
 fuzzer_status() {
-    require_file "$RUN_ROOT/current_run_id"
-    local run_id
-    run_id="$(<"$RUN_ROOT/current_run_id")"
-    require_file "$RUN_ROOT/fuzzer_${run_id}.log"
-    tail -n 60 "$RUN_ROOT/fuzzer_${run_id}.log"
+    require_file "$RUN_ROOT/current_fuzzer_log"
+    require_file "$RUN_ROOT/current_bench_log"
+    local log
+    local bench
+    log="$(<"$RUN_ROOT/current_fuzzer_log")"
+    bench="$(<"$RUN_ROOT/current_bench_log")"
+    require_file "$log"
+    require_file "$bench"
+    tail -n 60 "$log"
+    python - "$bench" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+decoder = json.JSONDecoder()
+offset = 0
+latest = None
+while offset < len(text):
+    while offset < len(text) and text[offset].isspace():
+        offset += 1
+    if offset == len(text):
+        break
+    try:
+        latest, offset = decoder.raw_decode(text, offset)
+    except json.JSONDecodeError:
+        break
+if latest is None:
+    raise SystemExit("Bench log has no complete snapshot yet.")
+
+metrics = {
+    "exec total": int(latest.get("exec total", 0)),
+    "coverage": int(latest.get("coverage", 0)),
+    "executor target observations": int(
+        latest.get("executor target observations", 0)
+    ),
+    "executor target hits": int(latest.get("executor target hits", 0)),
+}
+print("Latest bench metrics:")
+for name, value in metrics.items():
+    print(f"  {name}: {value}")
+required = ("exec total", "coverage", "executor target observations")
+if any(metrics[name] <= 0 for name in required):
+    raise SystemExit("Fuzzer execution check is not ready; wait and retry.")
+PY
 }
 
 case "${1:-help}" in
@@ -204,10 +273,12 @@ case "${1:-help}" in
     prepare-fuzzer) prepare_fuzzer ;;
     build-case36) build_case36 ;;
     extract-case36) extract_case36 ;;
+    prepare-fuzzer-only-config) prepare_fuzzer_only_config ;;
     prepare-config) prepare_config ;;
     verify-brain) verify_brain ;;
     start-brain) start_brain ;;
     wait-brain) wait_brain ;;
+    start-fuzzer-only) start_fuzzer_only ;;
     start-fuzzer) start_fuzzer ;;
     brain-status) brain_status ;;
     fuzzer-status) fuzzer_status ;;

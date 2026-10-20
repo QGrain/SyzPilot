@@ -484,6 +484,7 @@ class TrainingStateTest(unittest.TestCase):
         )
         self.assertEqual(defaults.training_warmup_seconds, 0)
         self.assertEqual(defaults.model_rejection_cooldown_seconds, 1800)
+        self.assertEqual(defaults.training_max_gpu_utilization, 100)
         self.assertTrue(defaults.first_train_exit_on_promotion)
         self.assertEqual(
             (

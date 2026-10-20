@@ -6,7 +6,8 @@ usage() {
 Usage: verify_setup.sh brain|fuzzer
 
 Run this inside a container created from the unified SyzPilot image.
-The brain check expects two visible NVIDIA GPUs and the bundled SyzEncoder.
+The E2-B brain check expects two visible NVIDIA GPUs and the bundled
+SyzEncoder.
 The fuzzer check expects /dev/kvm and an already built SyzPilot-Fuzzer tree.
 EOF
 }

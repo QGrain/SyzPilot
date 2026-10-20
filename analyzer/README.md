@@ -45,6 +45,11 @@ KallGraph creates a timestamped subdirectory under `-OutputDir`; pass that
 subdirectory's `callgraph.csv` to SyzPilot's static analyzer. The Python
 bridge and report-derived fallback are documented in the main artifact.
 
+For a source installation outside Docker, install
+`requirements/requirements-brain.txt` before using `get_targets.py`.
+Its `function@file:line` resolver requires the pinned `tree-sitter` and
+`tree-sitter-c` packages from that requirements file.
+
 ## Optional graph-derived waypoint analysis
 
 For the Python utility, install `python-igraph` in the interpreter used to run

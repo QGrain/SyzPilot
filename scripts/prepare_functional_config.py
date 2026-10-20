@@ -35,7 +35,12 @@ def parse_target_pcs(output: str) -> list[str]:
     return pcs
 
 
-def render_config(args: argparse.Namespace, pcs: list[str]) -> dict:
+def render_config(
+    args: argparse.Namespace,
+    pcs: list[str],
+    *,
+    fuzzer_only: bool = False,
+) -> dict:
     """Populate portable runtime paths and distributed network addresses."""
     target_func, default_port = CASES[args.case]
     case_name = f"case_{args.case}"
@@ -56,13 +61,16 @@ def render_config(args: argparse.Namespace, pcs: list[str]) -> dict:
 
     syzpilot = config["SyzPilot"]
     syzpilot["task_name"] = f"{case_name}_artifact_functional"
-    syzpilot["callback_ip"] = args.fuzzer_host
+    syzpilot["callback_ip"] = args.fuzzer_host or "127.0.0.1"
     syzpilot["dump_dir"] = f"{run_dir}/target_evidence"
     syzpilot["report_path"] = report_path
     syzpilot["target_func"] = target_func
     syzpilot["target_pcs"] = pcs
-    syzpilot["observe_target_coverage"] = False
-    syzpilot["reach_filter"]["controller"] = f"{args.brain_host}:48000"
+    syzpilot["observe_target_coverage"] = fuzzer_only
+    syzpilot["reach_filter"]["enable"] = not fuzzer_only
+    syzpilot["reach_filter"]["controller"] = (
+        "" if fuzzer_only else f"{args.brain_host}:48000"
+    )
     for field in (
         "cold_start_seed_dir",
         "cold_start_seed_catalog",
@@ -70,13 +78,14 @@ def render_config(args: argparse.Namespace, pcs: list[str]) -> dict:
         "directed_corpus",
     ):
         syzpilot.pop(field, None)
-    syzpilot["directed_corpus"] = {
-        "enable": True,
-        "capacity": 256,
-        "mutation_probability": 0.20,
-        "anchor_preserve_probability": 0.95,
-    }
-    if args.case == 25:
+    if not fuzzer_only:
+        syzpilot["directed_corpus"] = {
+            "enable": True,
+            "capacity": 256,
+            "mutation_probability": 0.20,
+            "anchor_preserve_probability": 0.95,
+        }
+    if args.case == 25 and not fuzzer_only:
         syzpilot["cold_start_seed_dir"] = (
             "/root/fuzzers/SyzPilot-fuzzer/sys/linux/test"
         )
@@ -93,8 +102,13 @@ def main() -> None:
     parser.add_argument("--case", type=int, choices=sorted(CASES), default=36)
     parser.add_argument("--waypoints-output", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--brain-host", required=True)
-    parser.add_argument("--fuzzer-host", required=True)
+    parser.add_argument("--brain-host")
+    parser.add_argument("--fuzzer-host")
+    parser.add_argument(
+        "--fuzzer-only",
+        action="store_true",
+        help="disable Brain registration for the GPU-free Fuzzer check",
+    )
     parser.add_argument("--template", type=Path, default=DEFAULT_TEMPLATE)
     parser.add_argument("--manager-port", type=int)
     parser.add_argument("--kernel-dir")
@@ -109,9 +123,11 @@ def main() -> None:
         help="Brain-local path included in the registration payload",
     )
     args = parser.parse_args()
+    if not args.fuzzer_only and (not args.brain_host or not args.fuzzer_host):
+        parser.error("--brain-host and --fuzzer-host are required for full E2")
 
     pcs = parse_target_pcs(args.waypoints_output.read_text())
-    config = render_config(args, pcs)
+    config = render_config(args, pcs, fuzzer_only=args.fuzzer_only)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(config, indent=2) + "\n")
     print(f"Wrote {len(pcs)} target PCs to {args.output}")

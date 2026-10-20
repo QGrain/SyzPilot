@@ -175,7 +175,7 @@ class ControllerConfig:
         "SYZPILOT_TRAINING_MIN_FREE_MIB", "24000"
     ))
     training_max_gpu_utilization: int = int(os.getenv(
-        "SYZPILOT_TRAINING_MAX_GPU_UTILIZATION", "20"
+        "SYZPILOT_TRAINING_MAX_GPU_UTILIZATION", "100"
     ))
     training_gpu_probe_samples: int = int(os.getenv(
         "SYZPILOT_TRAINING_GPU_PROBE_SAMPLES", "3"

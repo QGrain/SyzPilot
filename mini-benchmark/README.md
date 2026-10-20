@@ -88,12 +88,11 @@ and the same VM resources for every comparison arm.
 
 ## Functional observations
 
-For the bounded 90-minute data-path smoke, confirm Controller registration, a
-running QEMU guest, increasing execution counts, accepted report-derived
-guidance, and labeled Receiver batches. This profile still starts the
-GPU-validated Brain, so both E2 profiles require two suitable GPUs. Choose
-either this short profile or the four-hour complete-ML profile documented in
-`artifact/README.md`; the latter requires Stage-1 training, model hot
-deployment, and successful inference before that hard timeout. Retain useful
-bench, Receiver, target-hit, and crash evidence; remove only containers and
-work directories created by the current run.
+E2-A is a ten-minute Fuzzer-side functional test. It confirms that the
+patched manager boots the QEMU guest, executes programs, obtains KCOV data, and
+runs the target-PC observation path. E2-B is the bounded four-hour online
+training and inference test documented in `artifact/README.md`;
+it additionally requires Controller registration, labeled Receiver batches,
+report-derived guidance, Stage-1 training, model hot deployment, and successful
+inference. Retain useful bench, Receiver, target-hit, and crash evidence;
+remove only containers and work directories created by the current run.
